@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const pool = require('../db');
 const { authenticate } = require('../middleware/auth');
-const { checkFileAccess } = require('../middleware/rbac');
+const { checkFileAccess, requireFileAccess } = require('../middleware/rbac');
 const excelService = require('../services/excelService');
 const auditService = require('../services/auditService');
 
@@ -32,7 +32,7 @@ const upload = multer({
 });
 
 // GET /files - Get files accessible to user
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireFileAccess, async (req, res) => {
   try {
     const department_id = req.query.department_id ? parseInt(req.query.department_id) : null;
     const page = parseInt(req.query.page) || 1;
@@ -134,7 +134,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // POST /files/upload - Upload Excel file
-router.post('/upload', authenticate, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticate, requireFileAccess, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({

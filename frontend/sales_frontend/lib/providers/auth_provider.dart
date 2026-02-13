@@ -23,7 +23,6 @@ class AuthProvider extends ChangeNotifier {
   /// Initialize auth state from stored token
   Future<void> initialize() async {
     _isLoading = true;
-    notifyListeners();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -73,45 +72,6 @@ class AuthProvider extends ChangeNotifier {
         return true;
       } else {
         _error = result.error ?? 'Login failed';
-        _isLoading = false;
-        notifyListeners();
-        return false;
-      }
-    } catch (e) {
-      _error = e.toString();
-      _isLoading = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  /// Register new user
-  Future<bool> register({
-    required String username,
-    required String email,
-    required String password,
-    String? fullName,
-    int? departmentId,
-  }) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      final result = await ApiService.register(
-        username: username,
-        email: email,
-        password: password,
-        fullName: fullName,
-        departmentId: departmentId,
-      );
-
-      if (result.success) {
-        _isLoading = false;
-        notifyListeners();
-        return true;
-      } else {
-        _error = result.error ?? 'Registration failed';
         _isLoading = false;
         notifyListeners();
         return false;

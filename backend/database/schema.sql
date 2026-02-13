@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS roles (
 -- Insert default roles
 INSERT INTO roles (name, description, permissions) VALUES 
     ('admin', 'Full system access', '{"all": true}'),
-    ('user', 'Standard user access', '{"read": true, "write": true, "delete": false}'),
+    ('user', 'Standard user with sheet access', '{"read": true, "write": true, "delete": false}'),
+    ('editor', 'Editor with full sheet edit access', '{"read": true, "write": true, "delete": true}'),
     ('viewer', 'Read-only access', '{"read": true, "write": false, "delete": false}')
 ON CONFLICT (name) DO NOTHING;
 
@@ -54,7 +55,10 @@ CREATE TABLE IF NOT EXISTS users (
     role_id INTEGER REFERENCES roles(id) DEFAULT 2,
     department_id INTEGER REFERENCES departments(id),
     is_active BOOLEAN DEFAULT TRUE,
+    deactivated_at TIMESTAMP WITH TIME ZONE,
+    deactivated_by INTEGER REFERENCES users(id),
     last_login TIMESTAMP WITH TIME ZONE,
+    created_by INTEGER REFERENCES users(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -266,8 +270,10 @@ CREATE TABLE IF NOT EXISTS sheets (
     name VARCHAR(255) NOT NULL,
     columns JSONB DEFAULT '["A", "B", "C", "D", "E"]',
     created_by INTEGER REFERENCES users(id),
+    last_edited_by INTEGER REFERENCES users(id),
     department_id INTEGER REFERENCES departments(id),
     is_shared BOOLEAN DEFAULT FALSE,
+    shown_to_viewers BOOLEAN DEFAULT FALSE, -- Admin can show sheet to viewers
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -275,6 +281,36 @@ CREATE TABLE IF NOT EXISTS sheets (
 
 CREATE INDEX IF NOT EXISTS idx_sheets_created_by ON sheets(created_by);
 CREATE INDEX IF NOT EXISTS idx_sheets_department ON sheets(department_id);
+
+-- =============================================================================
+-- SHEET LOCKS TABLE (For collaborative editing control)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS sheet_locks (
+    id SERIAL PRIMARY KEY,
+    sheet_id INTEGER REFERENCES sheets(id) ON DELETE CASCADE,
+    locked_by INTEGER REFERENCES users(id),
+    locked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 minutes'),
+    UNIQUE(sheet_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sheet_locks_sheet ON sheet_locks(sheet_id);
+CREATE INDEX IF NOT EXISTS idx_sheet_locks_user ON sheet_locks(locked_by);
+
+-- =============================================================================
+-- SHEET EDIT SESSIONS TABLE (Track active editors)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS sheet_edit_sessions (
+    id SERIAL PRIMARY KEY,
+    sheet_id INTEGER REFERENCES sheets(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id),
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_activity TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sheet_edit_sessions_sheet ON sheet_edit_sessions(sheet_id);
+CREATE INDEX IF NOT EXISTS idx_sheet_edit_sessions_user ON sheet_edit_sessions(user_id);
 
 -- =============================================================================
 -- SHEET DATA TABLE (Spreadsheet row data)
@@ -290,6 +326,25 @@ CREATE TABLE IF NOT EXISTS sheet_data (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sheet_data_sheet ON sheet_data(sheet_id);
+
+-- =============================================================================
+-- SHEET EDIT HISTORY TABLE (Track all edits to sheets)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS sheet_edit_history (
+    id SERIAL PRIMARY KEY,
+    sheet_id INTEGER REFERENCES sheets(id) ON DELETE CASCADE,
+    row_number INTEGER,
+    column_name VARCHAR(100),
+    old_value TEXT,
+    new_value TEXT,
+    edited_by INTEGER REFERENCES users(id),
+    edited_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    action VARCHAR(50) NOT NULL  -- INSERT, UPDATE, DELETE, RENAME_COLUMN, RENAME_ROW
+);
+
+CREATE INDEX IF NOT EXISTS idx_sheet_edit_history_sheet ON sheet_edit_history(sheet_id);
+CREATE INDEX IF NOT EXISTS idx_sheet_edit_history_user ON sheet_edit_history(edited_by);
+CREATE INDEX IF NOT EXISTS idx_sheet_edit_history_date ON sheet_edit_history(edited_at);
 
 -- =============================================================================
 -- HELPER FUNCTIONS

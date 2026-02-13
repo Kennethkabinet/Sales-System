@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticate } = require('../middleware/auth');
-const { requireRole } = require('../middleware/rbac');
+const { requireAdminAccess } = require('../middleware/rbac');
 
-// GET /audit - Get audit logs
-router.get('/', authenticate, async (req, res) => {
+// GET /audit - Get audit logs (Admin only)
+router.get('/', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { 
       file_id, user_id, action, entity_type,
@@ -111,7 +111,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // GET /audit/summary - Get audit summary statistics
-router.get('/summary', authenticate, async (req, res) => {
+router.get('/summary', authenticate, requireAdminAccess, async (req, res) => {
   try {
     let baseFilter = '';
     const params = [];
@@ -208,7 +208,7 @@ router.get('/summary', authenticate, async (req, res) => {
 });
 
 // GET /audit/file/:fileId - Get audit logs for specific file
-router.get('/file/:fileId', authenticate, async (req, res) => {
+router.get('/file/:fileId', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { fileId } = req.params;
     const { page = 1, limit = 50 } = req.query;
@@ -249,7 +249,7 @@ router.get('/file/:fileId', authenticate, async (req, res) => {
 });
 
 // GET /audit/user/:userId - Get audit logs for specific user (Admin only)
-router.get('/user/:userId', authenticate, requireRole('admin'), async (req, res) => {
+router.get('/user/:userId', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { userId } = req.params;
     const { page = 1, limit = 50 } = req.query;

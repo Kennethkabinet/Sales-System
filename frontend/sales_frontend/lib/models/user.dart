@@ -7,8 +7,11 @@ class User {
   final String role;
   final int? departmentId;
   final String? departmentName;
+  final bool isActive;
   final DateTime? lastLogin;
   final DateTime? createdAt;
+  final DateTime? deactivatedAt;
+  final String? createdByName;
 
   User({
     required this.id,
@@ -18,8 +21,11 @@ class User {
     required this.role,
     this.departmentId,
     this.departmentName,
+    this.isActive = true,
     this.lastLogin,
     this.createdAt,
+    this.deactivatedAt,
+    this.createdByName,
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -31,12 +37,17 @@ class User {
       role: json['role'] ?? 'user',
       departmentId: json['department_id'],
       departmentName: json['department_name'],
+      isActive: json['is_active'] ?? true,
       lastLogin: json['last_login'] != null 
           ? DateTime.parse(json['last_login']) 
           : null,
       createdAt: json['created_at'] != null 
           ? DateTime.parse(json['created_at']) 
           : null,
+      deactivatedAt: json['deactivated_at'] != null
+          ? DateTime.parse(json['deactivated_at'])
+          : null,
+      createdByName: json['created_by_name'],
     );
   }
 
@@ -49,6 +60,7 @@ class User {
       'role': role,
       'department_id': departmentId,
       'department_name': departmentName,
+      'is_active': isActive,
     };
   }
 

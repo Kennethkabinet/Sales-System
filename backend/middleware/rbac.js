@@ -21,6 +21,82 @@ const requireRole = (...allowedRoles) => {
   };
 };
 
+// Admin-only access (dashboard, user management, audit)
+const requireAdminAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication required' }
+    });
+  }
+  
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'Admin access required' }
+    });
+  }
+  
+  next();
+};
+
+// Sheet access (admin, editor, viewer, user)
+const requireSheetAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication required' }
+    });
+  }
+  
+  if (!['admin', 'editor', 'viewer', 'user'].includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'Sheet access denied' }
+    });
+  }
+  
+  next();
+};
+
+// Sheet edit access (admin, editor, user - NOT viewer)
+const requireSheetEditAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication required' }
+    });
+  }
+  
+  if (!['admin', 'editor', 'user'].includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'Permission to edit denied. Viewer role is read-only.' }
+    });
+  }
+  
+  next();
+};
+
+// File management access (admin, user - NOT editor or viewer)
+const requireFileAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication required' }
+    });
+  }
+  
+  if (!['admin', 'user'].includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'File access denied. Not available for editors or viewers.' }
+    });
+  }
+  
+  next();
+};
+
 // Check department access
 const requireDepartmentAccess = async (req, res, next) => {
   if (!req.user) {
@@ -148,4 +224,12 @@ const checkFileAccess = (requiredLevel = 'read') => {
   };
 };
 
-module.exports = { requireRole, requireDepartmentAccess, checkFileAccess };
+module.exports = { 
+  requireRole, 
+  requireAdminAccess,
+  requireSheetAccess,
+  requireSheetEditAccess,
+  requireFileAccess,
+  requireDepartmentAccess, 
+  checkFileAccess 
+};

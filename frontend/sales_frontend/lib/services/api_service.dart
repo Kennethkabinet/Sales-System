@@ -139,23 +139,6 @@ class ApiService {
     return AuthResult.fromJson(response);
   }
 
-  static Future<AuthResult> register({
-    required String username,
-    required String email,
-    required String password,
-    String? fullName,
-    int? departmentId,
-  }) async {
-    final response = await _post(ApiEndpoints.register, {
-      'username': username,
-      'email': email,
-      'password': password,
-      if (fullName != null) 'full_name': fullName,
-      if (departmentId != null) 'department_id': departmentId,
-    });
-    return AuthResult.fromJson(response);
-  }
-
   static Future<User> getCurrentUser() async {
     final response = await _get(ApiEndpoints.me);
     return User.fromJson(response['user']);
@@ -166,13 +149,59 @@ class ApiService {
     _authToken = null;
   }
 
-  // ============== Users ==============
+  // ============== Users (Admin Only) ==============
 
   static Future<List<User>> getUsers() async {
     final response = await _get(ApiEndpoints.users);
     return (response['users'] as List)
         .map((u) => User.fromJson(u))
         .toList();
+  }
+
+  static Future<User> createUser({
+    required String username,
+    required String email,
+    required String password,
+    required String fullName,
+    required String role,
+    int? departmentId,
+  }) async {
+    final response = await _post(ApiEndpoints.users, {
+      'username': username,
+      'email': email,
+      'password': password,
+      'full_name': fullName,
+      'role': role,
+      if (departmentId != null) 'department_id': departmentId,
+    });
+    return User.fromJson(response['user']);
+  }
+
+  static Future<void> updateUser({
+    required int userId,
+    String? username,
+    String? email,
+    String? password,
+    String? fullName,
+    String? role,
+    int? departmentId,
+  }) async {
+    await _put('${ApiEndpoints.users}/$userId', {
+      if (username != null) 'username': username,
+      if (email != null) 'email': email,
+      if (password != null) 'password': password,
+      if (fullName != null) 'full_name': fullName,
+      if (role != null) 'role': role,
+      if (departmentId != null) 'department_id': departmentId,
+    });
+  }
+
+  static Future<void> deactivateUser(int userId) async {
+    await _delete('${ApiEndpoints.users}/$userId');
+  }
+
+  static Future<void> reactivateUser(int userId) async {
+    await _put('${ApiEndpoints.users}/$userId/reactivate', {});
   }
 
   static Future<void> updateUserRole(int userId, String role) async {
@@ -357,6 +386,72 @@ class ApiService {
 
   static Future<void> deleteSheet(int sheetId) async {
     await _delete('${ApiEndpoints.sheets}/$sheetId');
+  }
+
+  static Future<List<int>> exportSheet(int sheetId, {String format = 'xlsx'}) async {
+    if (_authToken == null) throw Exception('Not authenticated');
+
+    final url = Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.sheets}/$sheetId/export?format=$format');
+    final response = await http.get(
+      url,
+      headers: _headers,
+    ).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    } else {
+      final data = jsonDecode(response.body);
+      throw ApiException(
+        code: data['error']?['code'] ?? 'ERROR',
+        message: data['error']?['message'] ?? 'Export failed',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  static Future<Map<String, dynamic>> importSheet(
+    int sheetId, 
+    List<List<dynamic>> data
+  ) async {
+    return await _post('${ApiEndpoints.sheets}/$sheetId/import', {
+      'data': data,
+    });
+  }
+
+  // Enhanced sheet features for collaborative editing
+
+  /// Toggle sheet visibility to viewers (Admin only)
+  static Future<Map<String, dynamic>> toggleSheetVisibility(
+    int sheetId, 
+    bool showToViewers
+  ) async {
+    return await _put('${ApiEndpoints.sheets}/$sheetId/visibility', {
+      'shown_to_viewers': showToViewers,
+    });
+  }
+
+  /// Lock sheet for editing
+  static Future<Map<String, dynamic>> lockSheet(int sheetId) async {
+    return await _post('${ApiEndpoints.sheets}/$sheetId/lock', {});
+  }
+
+  /// Unlock sheet
+  static Future<Map<String, dynamic>> unlockSheet(int sheetId) async {
+    return await _delete('${ApiEndpoints.sheets}/$sheetId/lock');
+  }
+
+  /// Start or update edit session
+  static Future<Map<String, dynamic>> startEditSession(int sheetId) async {
+    return await _post('${ApiEndpoints.sheets}/$sheetId/edit-session', {});
+  }
+
+  /// Get current sheet status (locks, active editors)
+  static Future<Map<String, dynamic>> getSheetStatus(int sheetId) async {
+    return await _get('${ApiEndpoints.sheets}/$sheetId/status');
+  }
+
+  static Future<Map<String, dynamic>> getSheetHistory(int sheetId, {int page = 1, int limit = 50}) async {
+    return await _get('${ApiEndpoints.sheets}/$sheetId/history?page=$page&limit=$limit');
   }
 }
 

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import 'dashboard_screen.dart';
+import '../main.dart'; // For AuthWrapper
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -42,8 +42,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
 
     if (success && mounted) {
+      // Navigate to main app - AuthWrapper will handle role-based routing
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const AuthWrapper()),
       );
     }
   }

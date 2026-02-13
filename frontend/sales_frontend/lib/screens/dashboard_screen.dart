@@ -5,9 +5,9 @@ import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
-import 'formula_list_screen.dart';
 import 'audit_history_screen.dart';
 import 'sheet_screen.dart';
+import 'user_management_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -16,130 +16,455 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with TickerProviderStateMixin {
   int _selectedIndex = 0;
+  bool _isSidebarOpen = false;
+  late AnimationController _sidebarController;
+  late Animation<double> _sidebarAnimation;
+  GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
+    
+    // Initialize sidebar animation
+    _sidebarController = AnimationController(
+      duration: const Duration(milliseconds: 250),
+      vsync: this,
+    );
+    _sidebarAnimation = CurvedAnimation(
+      parent: _sidebarController,
+      curve: Curves.easeInOut,
+    );
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<DataProvider>().loadDashboard();
     });
   }
 
   @override
+  void dispose() {
+    _sidebarController.dispose();
+    super.dispose();
+  }
+
+  void _toggleSidebar() {
+    setState(() {
+      _isSidebarOpen = !_isSidebarOpen;
+      if (_isSidebarOpen) {
+        _sidebarController.forward();
+      } else {
+        _sidebarController.reverse();
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final auth = Provider.of<AuthProvider>(context);
+    final isAdmin = auth.user?.role == 'admin';
+
     final pages = [
       const _DashboardContent(),
       const SheetScreen(),
       const FileListScreen(),
-      const FormulaListScreen(),
       const AuditHistoryScreen(),
+      if (isAdmin) const UserManagementScreen(),
     ];
 
     return Scaffold(
-      body: Row(
+      key: _scaffoldKey,
+      body: Stack(
         children: [
-          // Sidebar
-          NavigationRail(
-            extended: true,
-            minExtendedWidth: 200,
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (index) {
-              setState(() => _selectedIndex = index);
-            },
-            leading: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.inventory_2, color: Theme.of(context).primaryColor, size: 32),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Sales System',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-            trailing: Consumer<AuthProvider>(
-              builder: (context, auth, _) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Divider(),
-                      CircleAvatar(
-                        child: Text(
-                          (auth.user?.fullName ?? 'U').substring(0, 1).toUpperCase(),
-                        ),
+          // Main content with header
+          Column(
+            children: [
+              // Custom header with hamburger button
+              Container(
+                height: 64,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      offset: const Offset(0, 2),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    // Hamburger menu button
+                    IconButton(
+                      icon: AnimatedIcon(
+                        icon: AnimatedIcons.menu_close,
+                        progress: _sidebarAnimation,
+                        size: 28,
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        auth.user?.fullName ?? 'User',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        overflow: TextOverflow.ellipsis,
+                      onPressed: _toggleSidebar,
+                      tooltip: 'Toggle Menu',
+                    ),
+                    // App title
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.inventory_2,
+                            color: Theme.of(context).primaryColor,
+                            size: 32,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Sales System - Admin Dashboard',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        auth.user?.role ?? '',
-                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton.icon(
-                        onPressed: () async {
-                          await auth.logout();
-                          if (context.mounted) {
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(builder: (_) => const LoginScreen()),
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.logout, size: 18),
-                        label: const Text('Logout'),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: Text('Dashboard'),
+                    ),
+                    // User info in header
+                    Consumer<AuthProvider>(
+                      builder: (context, auth, _) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                                child: Text(
+                                  (auth.user?.fullName ?? 'A')[0].toUpperCase(),
+                                  style: TextStyle(
+                                    color: Theme.of(context).primaryColor,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    auth.user?.fullName ?? 'Admin',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Administrator',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Theme.of(context).colorScheme.secondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
               ),
-              NavigationRailDestination(
-                icon: Icon(Icons.grid_on_outlined),
-                selectedIcon: Icon(Icons.grid_on),
-                label: Text('Sheet'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.folder_outlined),
-                selectedIcon: Icon(Icons.folder),
-                label: Text('Files'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.functions_outlined),
-                selectedIcon: Icon(Icons.functions),
-                label: Text('Formulas'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.history_outlined),
-                selectedIcon: Icon(Icons.history),
-                label: Text('Audit Log'),
+              // Main content
+              Expanded(
+                child: pages[_selectedIndex],
               ),
             ],
           ),
-          const VerticalDivider(thickness: 1, width: 1),
-          // Main content
-          Expanded(
-            child: pages[_selectedIndex],
+          // Animated sidebar overlay
+          AnimatedBuilder(
+            animation: _sidebarAnimation,
+            builder: (context, child) {
+              return Stack(
+                children: [
+                  // Semi-transparent overlay
+                  if (_sidebarAnimation.value > 0)
+                    GestureDetector(
+                      onTap: _toggleSidebar,
+                      child: Container(
+                        color: Colors.black.withOpacity(0.3 * _sidebarAnimation.value),
+                      ),
+                    ),
+                  // Sidebar
+                  Transform.translate(
+                    offset: Offset(-280 * (1 - _sidebarAnimation.value), 0),
+                    child: Container(
+                      width: 280,
+                      height: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.15),
+                            offset: const Offset(2, 0),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      child: _buildSidebarContent(auth, isAdmin),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),
     );
   }
+
+  Widget _buildSidebarContent(AuthProvider auth, bool isAdmin) {
+    final menuItems = [
+      _SidebarItem(
+        icon: Icons.dashboard_outlined,
+        selectedIcon: Icons.dashboard,
+        label: 'Dashboard',
+        index: 0,
+      ),
+      _SidebarItem(
+        icon: Icons.grid_on_outlined,
+        selectedIcon: Icons.grid_on,
+        label: 'Sheet',
+        index: 1,
+      ),
+      _SidebarItem(
+        icon: Icons.folder_outlined,
+        selectedIcon: Icons.folder,
+        label: 'Files',
+        index: 2,
+      ),
+      _SidebarItem(
+        icon: Icons.history_outlined,
+        selectedIcon: Icons.history,
+        label: 'Audit Log',
+        index: 3,
+      ),
+      if (isAdmin)
+        _SidebarItem(
+          icon: Icons.people_outlined,
+          selectedIcon: Icons.people,
+          label: 'Users',
+          index: 4,
+        ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Sidebar header
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Theme.of(context).primaryColor,
+                Theme.of(context).primaryColor.withOpacity(0.8),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.inventory_2,
+                    color: Colors.white,
+                    size: 32,
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Sales System',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Administration Panel',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Menu items
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              const SizedBox(height: 8),
+              ...menuItems.map((item) => _buildSidebarMenuItem(item)),
+              const SizedBox(height: 16),
+              const Divider(),
+            ],
+          ),
+        ),
+        // Profile and logout section
+        Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              // Profile section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 24,
+                      backgroundColor: Theme.of(context).primaryColor,
+                      child: Text(
+                        (auth.user?.fullName ?? 'A')[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            auth.user?.fullName ?? 'Administrator',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            auth.user?.role?.toUpperCase() ?? 'ADMIN',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.secondary,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Logout button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Logout'),
+                        content: const Text('Are you sure you want to logout?'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Cancel'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Logout'),
+                          ),
+                        ],
+                      ),
+                    );
+                    
+                    if (confirmed == true) {
+                      await auth.logout();
+                      if (context.mounted) {
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(builder: (_) => const LoginScreen()),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Logout'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red.withOpacity(0.1),
+                    foregroundColor: Colors.red,
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSidebarMenuItem(_SidebarItem item) {
+    final isSelected = _selectedIndex == item.index;
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: ListTile(
+        leading: Icon(
+          isSelected ? item.selectedIcon : item.icon,
+          color: isSelected 
+              ? Theme.of(context).primaryColor 
+              : Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+        ),
+        title: Text(
+          item.label,
+          style: TextStyle(
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+            color: isSelected 
+                ? Theme.of(context).primaryColor 
+                : Theme.of(context).colorScheme.onSurface,
+          ),
+        ),
+        selected: isSelected,
+        selectedTileColor: Theme.of(context).primaryColor.withOpacity(0.1),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+        onTap: () {
+          setState(() {
+            _selectedIndex = item.index;
+          });
+          _toggleSidebar(); // Close sidebar after selection
+        },
+      ),
+    );
+  }
+}
+
+class _SidebarItem {
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  final int index;
+
+  _SidebarItem({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    required this.index,
+  });
 }
 
 class _DashboardContent extends StatelessWidget {
@@ -168,7 +493,7 @@ class _DashboardContent extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Dashboard',
+                      'Dashboard Overview',
                       style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -176,7 +501,7 @@ class _DashboardContent extends StatelessWidget {
                     IconButton(
                       onPressed: () => data.loadDashboard(),
                       icon: const Icon(Icons.refresh),
-                      tooltip: 'Refresh',
+                      tooltip: 'Refresh Data',
                     ),
                   ],
                 ),

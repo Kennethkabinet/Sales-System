@@ -205,10 +205,19 @@ class CollaborationHandler {
   }
 
   /**
-   * Handle row lock request
+   * Handle row lock request (Edit permissions required)
    */
   async handleLockRow(socket, { file_id, row_id }) {
     try {
+      // Check if user has edit permissions
+      if (!['admin', 'editor', 'user'].includes(socket.user.role)) {
+        socket.emit('error', {
+          code: 'PERMISSION_DENIED',
+          message: 'Viewer role cannot lock rows for editing'
+        });
+        return;
+      }
+
       const lockKey = `${file_id}-${row_id}`;
       
       // Check if row is already locked by another user
@@ -246,7 +255,7 @@ class CollaborationHandler {
         user.currentRow = row_id;
       }
       
-      // Broadcast to room
+      // Broadcast to room - ALL users can see who's editing
       this.io.to(`file-${file_id}`).emit('row_locked', {
         file_id,
         row_id,
@@ -261,10 +270,19 @@ class CollaborationHandler {
   }
 
   /**
-   * Handle row unlock
+   * Handle row unlock (Edit permissions required)
    */
   async handleUnlockRow(socket, { file_id, row_id }) {
     try {
+      // Check if user has edit permissions
+      if (!['admin', 'editor', 'user'].includes(socket.user.role)) {
+        socket.emit('error', {
+          code: 'PERMISSION_DENIED',
+          message: 'Viewer role cannot unlock rows'
+        });
+        return;
+      }
+
       // Only the owner can unlock
       await pool.query(`
         DELETE FROM row_locks
@@ -281,7 +299,7 @@ class CollaborationHandler {
         user.currentRow = null;
       }
       
-      // Broadcast to room
+      // Broadcast to room - ALL users can see when editing stops
       this.io.to(`file-${file_id}`).emit('row_unlocked', {
         file_id,
         row_id
@@ -293,16 +311,27 @@ class CollaborationHandler {
   }
 
   /**
-   * Handle row update broadcast
+   * Handle row update broadcast (Edit permissions required for sender, all users receive)
    */
   async handleUpdateRow(socket, { file_id, row_id, values }) {
     try {
-      // Broadcast update to other users in the file
+      // Check if user has edit permissions to make updates
+      if (!['admin', 'editor', 'user'].includes(socket.user.role)) {
+        socket.emit('error', {
+          code: 'PERMISSION_DENIED',
+          message: 'Viewer role cannot make changes to sheets'
+        });
+        return;
+      }
+
+      // Broadcast update to ALL other users in the file (including viewers)
+      // This ensures viewers see real-time changes made by editors
       socket.to(`file-${file_id}`).emit('row_updated', {
         file_id,
         row_id,
         values,
-        updated_by: socket.user.username
+        updated_by: socket.user.username,
+        editor_role: socket.user.role
       });
       
     } catch (error) {

@@ -7,85 +7,10 @@ const { authenticate, generateToken } = require('../middleware/auth');
 const auditService = require('../services/auditService');
 
 // Validation rules
-const registerValidation = [
-  body('username').trim().isLength({ min: 3, max: 50 }).withMessage('Username must be 3-50 characters'),
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('full_name').optional().trim().isLength({ max: 100 }),
-  body('department_id').optional().isInt()
-];
-
 const loginValidation = [
   body('username').trim().notEmpty().withMessage('Username required'),
   body('password').notEmpty().withMessage('Password required')
 ];
-
-// POST /auth/register
-router.post('/register', registerValidation, async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Invalid input', details: errors.array() }
-      });
-    }
-
-    const { username, email, password, full_name, department_id } = req.body;
-
-    // Check if user exists
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
-      [username, email]
-    );
-
-    if (existingUser.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Username or email already exists' }
-      });
-    }
-
-    // Hash password
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    // Insert user (default role: user)
-    const result = await pool.query(`
-      INSERT INTO users (username, email, password_hash, full_name, department_id, role_id)
-      VALUES ($1, $2, $3, $4, $5, 2)
-      RETURNING id, username, email, full_name
-    `, [username, email, passwordHash, full_name || null, department_id || null]);
-
-    const user = result.rows[0];
-
-    // Log registration
-    await auditService.log({
-      userId: user.id,
-      action: 'CREATE',
-      entityType: 'users',
-      entityId: user.id,
-      metadata: { username: user.username }
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: 'user'
-      }
-    });
-
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({
-      success: false,
-      error: { code: 'SERVER_ERROR', message: 'Registration failed' }
-    });
-  }
-});
 
 // POST /auth/login
 router.post('/login', loginValidation, async (req, res) => {
@@ -144,6 +69,72 @@ router.post('/login', loginValidation, async (req, res) => {
       userAgent: req.get('User-Agent')
     });
 
+    // Role-based module assignment
+    let moduleAccess = {};
+    let redirectPath = '/';
+    
+    switch (user.role) {
+      case 'admin':
+        moduleAccess = {
+          dashboard: true,
+          sheets: true,
+          settings: true,
+          userManagement: true,
+          audit: true,
+          files: true,
+          formulas: true
+        };
+        redirectPath = '/dashboard';
+        break;
+      case 'editor':
+        moduleAccess = {
+          dashboard: false,
+          sheets: true,
+          settings: true,
+          userManagement: false,
+          audit: false,
+          files: false,
+          formulas: false
+        };
+        redirectPath = '/sheets';
+        break;
+      case 'viewer':
+        moduleAccess = {
+          dashboard: false,
+          sheets: true,
+          settings: true,
+          userManagement: false,
+          audit: false,
+          files: false,
+          formulas: false
+        };
+        redirectPath = '/sheets';
+        break;
+      case 'user':
+        moduleAccess = {
+          dashboard: false,
+          sheets: true,
+          settings: true,
+          userManagement: false,
+          audit: false,
+          files: true,
+          formulas: true
+        };
+        redirectPath = '/sheets';
+        break;
+      default:
+        moduleAccess = {
+          dashboard: false,
+          sheets: false,
+          settings: false,
+          userManagement: false,
+          audit: false,
+          files: false,
+          formulas: false
+        };
+        redirectPath = '/login';
+    }
+
     res.json({
       success: true,
       token,
@@ -155,7 +146,9 @@ router.post('/login', loginValidation, async (req, res) => {
         role: user.role,
         department_id: user.department_id,
         department_name: user.department_name
-      }
+      },
+      moduleAccess,
+      redirectPath
     });
 
   } catch (error) {

@@ -2,12 +2,12 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticate } = require('../middleware/auth');
-const { checkFileAccess } = require('../middleware/rbac');
+const { checkFileAccess, requireFileAccess } = require('../middleware/rbac');
 const formulaEngine = require('../services/formulaEngine');
 const auditService = require('../services/auditService');
 
-// GET /formulas - Get all formulas accessible to user
-router.get('/', authenticate, async (req, res) => {
+// GET /formulas - Get all formulas accessible to user (Admin and User only)
+router.get('/', authenticate, requireFileAccess, async (req, res) => {
   try {
     let query = `
       SELECT f.id, f.uuid, f.name, f.description, f.expression,
@@ -45,7 +45,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // GET /formulas/:id - Get specific formula
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -80,7 +80,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // POST /formulas - Create new formula
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { name, description, expression, input_columns, output_column, is_shared } = req.body;
 
@@ -145,7 +145,7 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 // PUT /formulas/:id - Update formula
-router.put('/:id', authenticate, async (req, res) => {
+router.put('/:id', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, expression, input_columns, output_column, is_shared } = req.body;
@@ -229,7 +229,7 @@ router.put('/:id', authenticate, async (req, res) => {
 });
 
 // POST /formulas/:id/apply - Apply formula to file
-router.post('/:id/apply', authenticate, async (req, res) => {
+router.post('/:id/apply', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { file_id, column_mapping } = req.body;
@@ -348,7 +348,7 @@ router.post('/:id/apply', authenticate, async (req, res) => {
 });
 
 // POST /formulas/preview - Preview formula result
-router.post('/preview', authenticate, async (req, res) => {
+router.post('/preview', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { expression, test_values } = req.body;
 
@@ -380,7 +380,7 @@ router.post('/preview', authenticate, async (req, res) => {
 });
 
 // DELETE /formulas/:id - Delete formula
-router.delete('/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { id } = req.params;
 

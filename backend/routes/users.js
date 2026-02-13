@@ -1,20 +1,110 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcrypt');
+const { body, validationResult } = require('express-validator');
 const pool = require('../db');
 const { authenticate } = require('../middleware/auth');
-const { requireRole } = require('../middleware/rbac');
+const { requireAdminAccess } = require('../middleware/rbac');
 const auditService = require('../services/auditService');
 
+// Validation rules for user creation
+const createUserValidation = [
+  body('username').trim().isLength({ min: 3, max: 50 }).withMessage('Username must be 3-50 characters'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('full_name').trim().notEmpty().withMessage('Full name is required'),
+  body('role').isIn(['viewer', 'editor']).withMessage('Role must be viewer or editor'),
+  body('department_id').optional().isInt()
+];
+
+// POST /users - Create new user (Admin only)
+router.post('/', authenticate, requireAdminAccess, createUserValidation, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid input', details: errors.array() }
+      });
+    }
+
+    const { username, email, password, full_name, role, department_id } = req.body;
+
+    // Check if user exists
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2',
+      [username, email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Username or email already exists' }
+      });
+    }
+
+    // Get role id
+    const roleResult = await pool.query('SELECT id FROM roles WHERE name = $1', [role]);
+    if (roleResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid role' }
+      });
+    }
+
+    const roleId = roleResult.rows[0].id;
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Insert user
+    const result = await pool.query(`
+      INSERT INTO users (username, email, password_hash, full_name, department_id, role_id, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, username, email, full_name, is_active, created_at
+    `, [username, email, passwordHash, full_name, department_id || null, roleId, req.user.id]);
+
+    const user = result.rows[0];
+
+    // Audit log
+    await auditService.log({
+      userId: req.user.id,
+      action: 'CREATE',
+      entityType: 'users',
+      entityId: user.id,
+      metadata: { username: user.username, role, created_by: req.user.username }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      user: {
+        ...user,
+        role
+      }
+    });
+
+  } catch (error) {
+    console.error('Create user error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to create user' }
+    });
+  }
+});
+
 // GET /users - Get all users (Admin only)
-router.get('/', authenticate, requireRole('admin'), async (req, res) => {
+router.get('/', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT u.id, u.username, u.email, u.full_name, 
              r.name as role, d.name as department_name,
-             u.is_active, u.last_login, u.created_at
+             u.is_active, u.last_login, u.created_at, u.deactivated_at,
+             creator.username as created_by_name
       FROM users u
       LEFT JOIN roles r ON u.role_id = r.id
       LEFT JOIN departments d ON u.department_id = d.id
+      LEFT JOIN users creator ON u.created_by = creator.id
       ORDER BY u.created_at DESC
     `);
 
@@ -27,6 +117,119 @@ router.get('/', authenticate, requireRole('admin'), async (req, res) => {
     res.status(500).json({
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to get users' }
+    });
+  }
+});
+
+// PUT /users/:id - Update user (Admin only)
+router.put('/:id', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, email, full_name, role, department_id, password } = req.body;
+
+    // Prevent updating own role if admin
+    if (parseInt(id) === req.user.id && role && role !== 'admin') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Cannot change your own role' }
+      });
+    }
+
+    // Check if username or email already used by another user
+    if (username || email) {
+      const existingUser = await pool.query(
+        'SELECT id FROM users WHERE (username = $1 OR email = $2) AND id != $3',
+        [username || '', email || '', id]
+      );
+
+      if (existingUser.rows.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Username or email already exists' }
+        });
+      }
+    }
+
+    // Get current user data for audit
+    const currentUser = await pool.query(
+      'SELECT username, email, full_name, role_id, department_id FROM users WHERE id = $1',
+      [id]
+    );
+
+    if (currentUser.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      });
+    }
+
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (username) {
+      updates.push(`username = $${paramCount++}`);
+      values.push(username);
+    }
+    if (email) {
+      updates.push(`email = $${paramCount++}`);
+      values.push(email);
+    }
+    if (full_name) {
+      updates.push(`full_name = $${paramCount++}`);
+      values.push(full_name);
+    }
+    if (department_id !== undefined) {
+      updates.push(`department_id = $${paramCount++}`);
+      values.push(department_id);
+    }
+    if (password) {
+      const passwordHash = await bcrypt.hash(password, 10);
+      updates.push(`password_hash = $${paramCount++}`);
+      values.push(passwordHash);
+    }
+    if (role) {
+      const roleResult = await pool.query('SELECT id FROM roles WHERE name = $1', [role]);
+      if (roleResult.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Invalid role' }
+        });
+      }
+      updates.push(`role_id = $${paramCount++}`);
+      values.push(roleResult.rows[0].id);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'No fields to update' }
+      });
+    }
+
+    values.push(id);
+    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`;
+    await pool.query(query, values);
+
+    // Audit log
+    await auditService.log({
+      userId: req.user.id,
+      action: 'UPDATE',
+      entityType: 'users',
+      entityId: parseInt(id),
+      metadata: { updated_by: req.user.username, fields: Object.keys(req.body) }
+    });
+
+    res.json({
+      success: true,
+      message: 'User updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to update user' }
     });
   }
 });
@@ -75,7 +278,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // PUT /users/:id/role - Update user role (Admin only)
-router.put('/:id/role', authenticate, requireRole('admin'), async (req, res) => {
+router.put('/:id/role', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
@@ -135,7 +338,7 @@ router.put('/:id/role', authenticate, requireRole('admin'), async (req, res) => 
 });
 
 // PUT /users/:id/department - Update user department (Admin only)
-router.put('/:id/department', authenticate, requireRole('admin'), async (req, res) => {
+router.put('/:id/department', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { id } = req.params;
     const { department_id } = req.body;
@@ -185,7 +388,7 @@ router.put('/:id/department', authenticate, requireRole('admin'), async (req, re
 });
 
 // DELETE /users/:id - Deactivate user (Admin only)
-router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
+router.delete('/:id', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -193,28 +396,88 @@ router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
     if (req.user.id === parseInt(id)) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Cannot delete your own account' }
+        error: { code: 'VALIDATION_ERROR', message: 'Cannot deactivate your own account' }
       });
     }
 
-    await pool.query('UPDATE users SET is_active = FALSE WHERE id = $1', [id]);
+    // Check if user exists
+    const userCheck = await pool.query('SELECT id, username FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      });
+    }
+
+    await pool.query(
+      'UPDATE users SET is_active = FALSE, deactivated_at = CURRENT_TIMESTAMP, deactivated_by = $1 WHERE id = $2',
+      [req.user.id, id]
+    );
 
     await auditService.log({
       userId: req.user.id,
-      action: 'DELETE',
+      action: 'DEACTIVATE',
       entityType: 'users',
-      entityId: parseInt(id)
+      entityId: parseInt(id),
+      metadata: { deactivated_by: req.user.username }
     });
 
     res.json({
       success: true,
-      message: 'User deactivated'
+      message: 'User deactivated successfully'
     });
   } catch (error) {
-    console.error('Delete user error:', error);
+    console.error('Deactivate user error:', error);
     res.status(500).json({
       success: false,
-      error: { code: 'SERVER_ERROR', message: 'Failed to delete user' }
+      error: { code: 'SERVER_ERROR', message: 'Failed to deactivate user' }
+    });
+  }
+});
+
+// PUT /users/:id/reactivate - Reactivate user (Admin only)
+router.put('/:id/reactivate', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if user exists
+    const userCheck = await pool.query('SELECT id, username, is_active FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      });
+    }
+
+    if (userCheck.rows[0].is_active) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'User is already active' }
+      });
+    }
+
+    await pool.query(
+      'UPDATE users SET is_active = TRUE, deactivated_at = NULL, deactivated_by = NULL WHERE id = $1',
+      [id]
+    );
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'REACTIVATE',
+      entityType: 'users',
+      entityId: parseInt(id),
+      metadata: { reactivated_by: req.user.username }
+    });
+
+    res.json({
+      success: true,
+      message: 'User reactivated successfully'
+    });
+  } catch (error) {
+    console.error('Reactivate user error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to reactivate user' }
     });
   }
 });

@@ -4,6 +4,8 @@ import 'providers/auth_provider.dart';
 import 'providers/data_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/editor_dashboard.dart';
+import 'screens/viewer_dashboard.dart';
 import 'config/constants.dart';
 
 void main() {
@@ -13,6 +15,9 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
+  // Global key to help with hot restart
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +35,7 @@ class MyApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
+        navigatorKey: navigatorKey,
         title: AppConfig.appName,
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
@@ -85,12 +91,17 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   void initState() {
     super.initState();
-    _initAuth();
+    // Use addPostFrameCallback to avoid calling setState during build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initAuth();
+    });
   }
 
   Future<void> _initAuth() async {
     await context.read<AuthProvider>().initialize();
-    setState(() => _initialized = true);
+    if (mounted) {
+      setState(() => _initialized = true);
+    }
   }
 
   @override
@@ -113,7 +124,21 @@ class _AuthWrapperState extends State<AuthWrapper> {
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
         if (auth.isAuthenticated) {
-          return const DashboardScreen();
+          // Role-based dashboard routing
+          final userRole = auth.user?.role ?? '';
+          
+          switch (userRole) {
+            case 'admin':
+              return const DashboardScreen(); // Full admin dashboard
+            case 'editor':
+              return const EditorDashboard(); // Editor module - can edit sheets
+            case 'viewer':
+              return const ViewerDashboard(); // Viewer module - read-only
+            case 'user':
+              return const EditorDashboard(); // User also gets editor access
+            default:
+              return const LoginScreen(); // Unknown role, logout
+          }
         }
         return const LoginScreen();
       },
