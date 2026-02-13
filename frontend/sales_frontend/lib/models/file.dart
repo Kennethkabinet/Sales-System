@@ -1,3 +1,37 @@
+/// Folder model for file organization
+class FolderModel {
+  final int id;
+  final String name;
+  final int? parentId;
+  final String? createdBy;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  FolderModel({
+    required this.id,
+    required this.name,
+    this.parentId,
+    this.createdBy,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  factory FolderModel.fromJson(Map<String, dynamic> json) {
+    return FolderModel(
+      id: json['id'],
+      name: json['name'] ?? '',
+      parentId: json['parent_id'],
+      createdBy: json['created_by'],
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'])
+          : null,
+      updatedAt: json['updated_at'] != null
+          ? DateTime.parse(json['updated_at'])
+          : null,
+    );
+  }
+}
+
 /// File model for Excel files
 class FileModel {
   final int id;
@@ -12,6 +46,8 @@ class FileModel {
   final List<String> columns;
   final int? rowCount;
   final int activeUsers;
+  final int? folderId;
+  final int? sourceSheetId;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -31,6 +67,8 @@ class FileModel {
     this.columns = const [],
     this.rowCount,
     this.activeUsers = 0,
+    this.folderId,
+    this.sourceSheetId,
     this.createdAt,
     this.updatedAt,
   });
@@ -51,6 +89,8 @@ class FileModel {
           : [],
       rowCount: json['row_count'],
       activeUsers: json['active_users'] ?? 0,
+      folderId: json['folder_id'],
+      sourceSheetId: json['source_sheet_id'],
       createdAt: json['created_at'] != null 
           ? DateTime.parse(json['created_at']) 
           : null,

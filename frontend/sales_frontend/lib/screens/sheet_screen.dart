@@ -90,6 +90,7 @@ class _SheetScreenState extends State<SheetScreen> {
   String? _lockedByUser;
   bool _isEditingSession = false;
   List<String> _activeEditors = [];
+  String? _lastShownLockUser; // Track which lock user we already notified about
   
   // Spreadsheet state
   List<String> _columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -135,8 +136,8 @@ class _SheetScreenState extends State<SheetScreen> {
     _initializeSheet();
     _loadSheets();
     
-    // Set up periodic status refresh (every 30 seconds)
-    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    // Set up periodic status refresh (every 10 seconds)
+    _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _refreshSheetStatus();
     });
   }
@@ -280,6 +281,7 @@ class _SheetScreenState extends State<SheetScreen> {
       final response = await ApiService.getSheetStatus(_currentSheet!.id);
       final status = response['status'];
       
+      final wasLockedByOther = _lockedByUser;
       setState(() {
         _isLocked = status['is_locked'] ?? false;
         _lockedByUser = status['locked_by'];
@@ -287,6 +289,26 @@ class _SheetScreenState extends State<SheetScreen> {
             ?.map((e) => e['username'] as String)
             .toList() ?? [];
       });
+
+      // Show one-time snackbar when a different user locks the sheet
+      if (mounted && _isLocked && _lockedByUser != null) {
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        final currentUsername = authProvider.user?.username ?? '';
+        if (_lockedByUser != currentUsername && _lastShownLockUser != _lockedByUser) {
+          _lastShownLockUser = _lockedByUser;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$_lockedByUser is currently editing this sheet'),
+              backgroundColor: Colors.orange[700],
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+      // Reset when lock is released
+      if (!_isLocked) {
+        _lastShownLockUser = null;
+      }
     } catch (e) {
       print('Failed to refresh sheet status: $e');
     }
@@ -457,6 +479,18 @@ class _SheetScreenState extends State<SheetScreen> {
       return;
     }
 
+    // Check if sheet is locked by another user
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (_isLocked && _lockedByUser != null && _lockedByUser != authProvider.user?.username && authProvider.user?.role != 'admin') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot save: $_lockedByUser is currently editing this sheet'),
+          backgroundColor: Colors.orange[700],
+        ),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     try {
@@ -583,6 +617,78 @@ class _SheetScreenState extends State<SheetScreen> {
         backgroundColor: Colors.green,
       ),
     );
+  }
+
+  Future<void> _renameSheet(SheetModel sheet) async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final userRole = authProvider.user?.role ?? '';
+
+    // Check permissions - only admin and editor can rename
+    if (userRole != 'admin' && userRole != 'editor') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You do not have permission to rename sheets'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final newName = await _showNameDialog(
+      'Rename Sheet',
+      'Enter new sheet name',
+      initialValue: sheet.name,
+    );
+
+    if (newName == null || newName.trim().isEmpty || newName.trim() == sheet.name) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      await ApiService.renameSheet(sheet.id, newName.trim());
+
+      // Update sheet name in the local list
+      final index = _sheets.indexWhere((s) => s.id == sheet.id);
+      if (index != -1) {
+        _sheets[index] = SheetModel(
+          id: sheet.id,
+          name: newName.trim(),
+          columns: sheet.columns,
+          rows: sheet.rows,
+          createdAt: sheet.createdAt,
+          updatedAt: DateTime.now(),
+          shownToViewers: sheet.shownToViewers,
+          lockedBy: sheet.lockedBy,
+          lockedByName: sheet.lockedByName,
+          lockedAt: sheet.lockedAt,
+          editingUserId: sheet.editingUserId,
+          editingUserName: sheet.editingUserName,
+        );
+      }
+
+      // Update current sheet if it's the one being renamed
+      if (_currentSheet?.id == sheet.id) {
+        _currentSheet = _sheets[index];
+      }
+
+      setState(() => _isLoading = false);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sheet renamed to "$newName"'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to rename sheet: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Future<void> _confirmDeleteSheet(SheetModel sheet) async {
@@ -929,8 +1035,21 @@ class _SheetScreenState extends State<SheetScreen> {
   void _startEditing(int row, int col) {
     // Prevent editing in read-only mode or for viewers
     if (widget.readOnly) return;
-    final role = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final role = authProvider.user?.role ?? '';
     if (role == 'viewer') return;
+    
+    // Prevent editing if sheet is locked by another user
+    if (_isLocked && _lockedByUser != null && _lockedByUser != authProvider.user?.username) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$_lockedByUser is currently editing this sheet'),
+          backgroundColor: Colors.orange[700],
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     
     setState(() {
       _editingRow = row;
@@ -1028,11 +1147,21 @@ class _SheetScreenState extends State<SheetScreen> {
     }
   }
 
+  /// Check if current user can edit the sheet (not locked by another user)
+  bool _canEditSheet() {
+    if (widget.readOnly) return false;
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final role = authProvider.user?.role ?? '';
+    if (role == 'viewer') return false;
+    if (_isLocked && _lockedByUser != null && _lockedByUser != authProvider.user?.username && role != 'admin') {
+      return false;
+    }
+    return true;
+  }
+
   /// Clear selection of all selected cells (Delete key)
   void _clearSelectedCells() {
-    if (widget.readOnly) return;
-    final role = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-    if (role == 'viewer') return;
+    if (!_canEditSheet()) return;
     
     final bounds = _getSelectionBounds();
     setState(() {
@@ -1308,6 +1437,19 @@ class _SheetScreenState extends State<SheetScreen> {
                     maxLines: 1,
                   ),
                 ),
+                if (_currentSheet != null && !widget.readOnly && (() {
+                  final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+                  return r == 'admin' || r == 'editor';
+                }())) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: Icon(Icons.edit, size: 16, color: Colors.blue[600]),
+                    tooltip: 'Rename sheet',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _renameSheet(_currentSheet!),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1344,7 +1486,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     _buildCompactButton(
                       icon: Icons.upload,
                       label: 'Import',
-                      onPressed: _importSheet,
+                      onPressed: _canEditSheet() ? _importSheet : null,
                       color: Colors.green[700]!,
                     ),
                     
@@ -1359,14 +1501,14 @@ class _SheetScreenState extends State<SheetScreen> {
                     _buildCompactButton(
                       icon: Icons.view_column,
                       label: '+Col',
-                      onPressed: _addColumn,
+                      onPressed: _canEditSheet() ? _addColumn : null,
                       color: Colors.indigo,
                     ),
                     const SizedBox(width: 4),
                     _buildCompactButton(
                       icon: Icons.remove,
                       label: '-Col',
-                      onPressed: _deleteColumn,
+                      onPressed: _canEditSheet() ? _deleteColumn : null,
                       color: Colors.red,
                     ),
                     
@@ -1376,14 +1518,14 @@ class _SheetScreenState extends State<SheetScreen> {
                     _buildCompactButton(
                       icon: Icons.table_rows,
                       label: '+Row',
-                      onPressed: _addRow,
+                      onPressed: _canEditSheet() ? _addRow : null,
                       color: Colors.indigo,
                     ),
                     const SizedBox(width: 4),
                     _buildCompactButton(
                       icon: Icons.remove,
                       label: '-Row',
-                      onPressed: _deleteRow,
+                      onPressed: _canEditSheet() ? _deleteRow : null,
                       color: Colors.red,
                     ),
                     
@@ -1391,11 +1533,11 @@ class _SheetScreenState extends State<SheetScreen> {
                     
                     // Save Button
                     ElevatedButton.icon(
-                      onPressed: _saveSheet,
+                      onPressed: _canEditSheet() ? _saveSheet : null,
                       icon: const Icon(Icons.save, size: 16),
                       label: const Text('Save', style: TextStyle(fontSize: 13)),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue[600],
+                        backgroundColor: _canEditSheet() ? Colors.blue[600] : Colors.grey[400],
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         elevation: 1,
@@ -1511,66 +1653,28 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildStatusBar() {
     if (_currentSheet == null) return const SizedBox();
 
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final currentUsername = authProvider.user?.username ?? '';
     final hasLock = _isLocked && _lockedByUser != null && _lockedByUser!.isNotEmpty;
-    final hasActiveEditors = _activeEditors.isNotEmpty;
+    final isLockedByMe = hasLock && _lockedByUser == currentUsername;
 
-    List<Widget> statusItems = [];
-
-    // Lock status
-    if (hasLock) {
-      statusItems.add(
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.lock,
-              size: 16,
-              color: Colors.red[600],
-            ),
-            const SizedBox(width: 4),
-            Text(
-              'Locked by $_lockedByUser',
-              style: TextStyle(
-                color: Colors.red[600],
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Active editors status
-    if (hasActiveEditors) {
-      if (statusItems.isNotEmpty) {
-        statusItems.add(
-          Container(
-            height: 12,
-            width: 1,
-            color: Colors.grey[400],
-            margin: const EdgeInsets.symmetric(horizontal: 12),
+    // Show editing indicator when locked by me
+    if (isLockedByMe) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.green[50],
+          border: Border(
+            bottom: BorderSide(color: Colors.green[300]!, width: 1),
           ),
-        );
-      }
-      
-      statusItems.add(
-        Row(
-          mainAxisSize: MainAxisSize.min,
+        ),
+        child: Row(
           children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: Colors.green[500],
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 6),
+            Icon(Icons.edit, size: 16, color: Colors.green[700]),
+            const SizedBox(width: 8),
             Text(
-              _activeEditors.length == 1 
-                  ? 'Currently being edited by ${_activeEditors.first}'
-                  : 'Currently being edited by ${_activeEditors.length} users',
+              'You are editing this sheet (locked)',
               style: TextStyle(
                 color: Colors.green[700],
                 fontSize: 12,
@@ -1582,32 +1686,7 @@ class _SheetScreenState extends State<SheetScreen> {
       );
     }
 
-    // If no status to show
-    if (statusItems.isEmpty) {
-      return const SizedBox();
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.blue[50],
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.info_outline,
-            size: 16,
-            color: Colors.blue[600],
-          ),
-          const SizedBox(width: 8),
-          ...statusItems,
-        ],
-      ),
-    );
+    return const SizedBox();
   }
 
   Widget _buildVerticalDivider() {
@@ -1774,13 +1853,44 @@ class _SheetScreenState extends State<SheetScreen> {
                             final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
                             return r == 'admin' || r == 'editor' || r == 'manager';
                           }())
-                            ? IconButton(
-                                icon: const Icon(Icons.delete_outline, size: 16),
-                                color: Colors.red[400],
-                                tooltip: 'Delete sheet',
+                            ? PopupMenuButton<String>(
+                                icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
                                 padding: EdgeInsets.zero,
                                 constraints: const BoxConstraints(),
-                                onPressed: () => _confirmDeleteSheet(sheet),
+                                tooltip: 'Sheet options',
+                                onSelected: (value) {
+                                  if (value == 'rename') {
+                                    _renameSheet(sheet);
+                                  } else if (value == 'delete') {
+                                    _confirmDeleteSheet(sheet);
+                                  }
+                                },
+                                itemBuilder: (context) {
+                                  final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+                                  return [
+                                    const PopupMenuItem<String>(
+                                      value: 'rename',
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.edit, size: 18, color: Colors.blue),
+                                          SizedBox(width: 8),
+                                          Text('Rename'),
+                                        ],
+                                      ),
+                                    ),
+                                    if (r == 'admin' || r == 'manager')
+                                      const PopupMenuItem<String>(
+                                        value: 'delete',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                            SizedBox(width: 8),
+                                            Text('Delete', style: TextStyle(color: Colors.red)),
+                                          ],
+                                        ),
+                                      ),
+                                  ];
+                                },
                               )
                             : null,
                           onTap: () => _loadSheetData(sheet.id),

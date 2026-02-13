@@ -56,6 +56,17 @@ class ApiService {
     return _handleResponse(response);
   }
 
+  static Future<Map<String, dynamic>> _patch(String endpoint, Map<String, dynamic> body) async {
+    final response = await http
+        .patch(
+          Uri.parse('${AppConfig.apiBaseUrl}$endpoint'),
+          headers: _headers,
+          body: jsonEncode(body),
+        )
+        .timeout(timeout);
+    return _handleResponse(response);
+  }
+
   static Future<Map<String, dynamic>> _delete(String endpoint) async {
     final response = await http
         .delete(Uri.parse('${AppConfig.apiBaseUrl}$endpoint'), headers: _headers)
@@ -200,6 +211,10 @@ class ApiService {
     await _delete('${ApiEndpoints.users}/$userId');
   }
 
+  static Future<void> deleteUserPermanently(int userId) async {
+    await _delete('${ApiEndpoints.users}/$userId/permanent');
+  }
+
   static Future<void> reactivateUser(int userId) async {
     await _put('${ApiEndpoints.users}/$userId/reactivate', {});
   }
@@ -224,11 +239,15 @@ class ApiService {
 
   // ============== Files ==============
 
-  static Future<FileListResult> getFiles({int page = 1, int limit = 20, int? departmentId}) async {
+  static Future<FileListResult> getFiles({int page = 1, int limit = 20, int? departmentId, int? folderId}) async {
     String endpoint = '${ApiEndpoints.files}?page=$page&limit=$limit';
     if (departmentId != null) endpoint += '&department_id=$departmentId';
+    if (folderId != null) {
+      endpoint += '&folder_id=$folderId';
+    } else {
+      endpoint += '&folder_id=root';
+    }
     final response = await _get(endpoint);
-    print('getFiles response: $response'); // Debug
     return FileListResult.fromJson(response);
   }
 
@@ -261,12 +280,57 @@ class ApiService {
     await _delete('${ApiEndpoints.files}/$fileId');
   }
 
-  static Future<FileModel> createFile(String name, {String? fileType}) async {
+  static Future<FileModel> createFile(String name, {String? fileType, int? folderId}) async {
     final response = await _post(ApiEndpoints.files, {
       'name': name,
       'file_type': fileType ?? 'xlsx',
+      if (folderId != null) 'folder_id': folderId,
     });
     return FileModel.fromJson(response['file']);
+  }
+
+  // ============== Folders ==============
+
+  static Future<FolderModel> createFolder(String name, {int? parentId}) async {
+    final response = await _post(ApiEndpoints.folders, {
+      'name': name,
+      if (parentId != null) 'parent_id': parentId,
+    });
+    return FolderModel.fromJson(response['folder']);
+  }
+
+  static Future<void> renameFolder(int folderId, String name) async {
+    await _patch('${ApiEndpoints.folders}/$folderId/rename', {'name': name});
+  }
+
+  static Future<void> deleteFolder(int folderId) async {
+    await _delete('${ApiEndpoints.folders}/$folderId');
+  }
+
+  static Future<void> renameFile(int fileId, String name) async {
+    await _patch('${ApiEndpoints.files}/$fileId/rename', {'name': name});
+  }
+
+  static Future<void> moveFile(int fileId, {int? folderId}) async {
+    await _patch('${ApiEndpoints.files}/$fileId/move', {
+      'folder_id': folderId,
+    });
+  }
+
+  static Future<List<int>> downloadFile(int fileId) async {
+    if (_authToken == null) throw Exception('Not authenticated');
+    final url = Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.files}/$fileId/download');
+    final response = await http.get(url, headers: _headers).timeout(timeout);
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    } else {
+      final data = jsonDecode(response.body);
+      throw ApiException(
+        code: data['error']?['code'] ?? 'ERROR',
+        message: data['error']?['message'] ?? 'Download failed',
+        statusCode: response.statusCode,
+      );
+    }
   }
 
   // ============== Formulas ==============
@@ -384,6 +448,12 @@ class ApiService {
     });
   }
 
+  static Future<Map<String, dynamic>> renameSheet(int sheetId, String name) async {
+    return await _patch('${ApiEndpoints.sheets}/$sheetId/rename', {
+      'name': name,
+    });
+  }
+
   static Future<void> deleteSheet(int sheetId) async {
     await _delete('${ApiEndpoints.sheets}/$sheetId');
   }
@@ -479,14 +549,16 @@ class AuthResult {
 
 class FileListResult {
   final List<FileModel> files;
+  final List<FolderModel> folders;
   final Pagination pagination;
 
-  FileListResult({required this.files, required this.pagination});
+  FileListResult({required this.files, required this.folders, required this.pagination});
 
   factory FileListResult.fromJson(Map<String, dynamic> json) {
     return FileListResult(
-      files: (json['files'] as List).map((f) => FileModel.fromJson(f)).toList(),
-      pagination: Pagination.fromJson(json['pagination']),
+      files: (json['files'] as List? ?? []).map((f) => FileModel.fromJson(f)).toList(),
+      folders: (json['folders'] as List? ?? []).map((f) => FolderModel.fromJson(f)).toList(),
+      pagination: Pagination.fromJson(json['pagination'] ?? {}),
     );
   }
 }
@@ -544,6 +616,35 @@ class Pagination {
   }
 }
 
+class DashboardActiveUser {
+  final int id;
+  final String username;
+  final String fullName;
+  final String email;
+  final String role;
+  final String? lastLogin;
+
+  DashboardActiveUser({
+    required this.id,
+    required this.username,
+    required this.fullName,
+    required this.email,
+    required this.role,
+    this.lastLogin,
+  });
+
+  factory DashboardActiveUser.fromJson(Map<String, dynamic> json) {
+    return DashboardActiveUser(
+      id: json['id'] ?? 0,
+      username: json['username'] ?? '',
+      fullName: json['full_name'] ?? '',
+      email: json['email'] ?? '',
+      role: json['role'] ?? 'user',
+      lastLogin: json['last_login']?.toString(),
+    );
+  }
+}
+
 class DashboardStats {
   final int totalFiles;
   final int totalRecords;
@@ -552,6 +653,7 @@ class DashboardStats {
   final List<Map<String, dynamic>> activityData;
   final List<Map<String, dynamic>> fileTypes;
   final List<Map<String, dynamic>> recentActivity;
+  final List<DashboardActiveUser> activeUsersList;
 
   DashboardStats({
     required this.totalFiles,
@@ -561,6 +663,7 @@ class DashboardStats {
     required this.activityData,
     required this.fileTypes,
     required this.recentActivity,
+    required this.activeUsersList,
   });
 
   factory DashboardStats.fromJson(Map<String, dynamic> json) {
@@ -578,6 +681,9 @@ class DashboardStats {
           .toList(),
       recentActivity: (json['recent_activity'] ?? [])
           .map<Map<String, dynamic>>((item) => Map<String, dynamic>.from(item))
+          .toList(),
+      activeUsersList: (json['active_users_list'] ?? [])
+          .map<DashboardActiveUser>((item) => DashboardActiveUser.fromJson(Map<String, dynamic>.from(item)))
           .toList(),
     );
   }

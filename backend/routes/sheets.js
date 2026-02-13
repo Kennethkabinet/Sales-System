@@ -231,6 +231,24 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
     const { id } = req.params;
     const { name, columns, rows } = req.body;
 
+    // Check if sheet is locked by another user
+    const lockCheck = await pool.query(`
+      SELECT sl.locked_by, u.username 
+      FROM sheet_locks sl
+      LEFT JOIN users u ON sl.locked_by = u.id
+      WHERE sl.sheet_id = $1 AND sl.expires_at > CURRENT_TIMESTAMP
+    `, [id]);
+
+    if (lockCheck.rows.length > 0 && lockCheck.rows[0].locked_by !== req.user.id && req.user.role !== 'admin') {
+      return res.status(409).json({
+        success: false,
+        error: { 
+          code: 'SHEET_LOCKED', 
+          message: `Sheet is currently being edited by ${lockCheck.rows[0].username}` 
+        }
+      });
+    }
+
     // Check sheet exists and get old data for comparison
     const sheetCheck = await pool.query(
       'SELECT id, created_by, name, columns FROM sheets WHERE id = $1 AND is_active = TRUE',
@@ -303,6 +321,52 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
       metadata: { name, rowCount: rows?.length || 0, edited_by: req.user.username }
     });
 
+    // Auto-save to Files module
+    try {
+      const existingFile = await pool.query(
+        'SELECT id FROM files WHERE source_sheet_id = $1 AND is_active = TRUE',
+        [id]
+      );
+
+      if (existingFile.rows.length > 0) {
+        // Update existing linked file
+        const fileId = existingFile.rows[0].id;
+        await pool.query(
+          `UPDATE files SET name = $1, columns = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+          [name, JSON.stringify(columns), fileId]
+        );
+        // Replace file_data
+        await pool.query('DELETE FROM file_data WHERE file_id = $1', [fileId]);
+        if (rows && rows.length > 0) {
+          for (let i = 0; i < rows.length; i++) {
+            await pool.query(
+              'INSERT INTO file_data (file_id, row_number, data) VALUES ($1, $2, $3)',
+              [fileId, i + 1, JSON.stringify(rows[i])]
+            );
+          }
+        }
+      } else {
+        // Create new linked file
+        const newFile = await pool.query(
+          `INSERT INTO files (name, file_type, department_id, created_by, columns, source_sheet_id)
+           VALUES ($1, 'xlsx', $2, $3, $4, $5) RETURNING id`,
+          [name, req.user.department_id, req.user.id, JSON.stringify(columns), id]
+        );
+        const fileId = newFile.rows[0].id;
+        if (rows && rows.length > 0) {
+          for (let i = 0; i < rows.length; i++) {
+            await pool.query(
+              'INSERT INTO file_data (file_id, row_number, data) VALUES ($1, $2, $3)',
+              [fileId, i + 1, JSON.stringify(rows[i])]
+            );
+          }
+        }
+      }
+    } catch (fileSaveError) {
+      console.error('Auto-save to files error (non-blocking):', fileSaveError);
+      // Don't fail the sheet save if file auto-save fails
+    }
+
     res.json({
       success: true,
       message: 'Sheet updated successfully'
@@ -345,6 +409,64 @@ router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
     res.status(500).json({
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to delete sheet' }
+    });
+  }
+});
+
+// PATCH /sheets/:id/rename - Rename a sheet (Admin, Editor only)
+router.patch('/:id/rename', authenticate, requireSheetEditAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Sheet name is required' }
+      });
+    }
+
+    // Check if sheet exists
+    const existingSheet = await pool.query(
+      'SELECT id, name FROM sheets WHERE id = $1 AND is_active = TRUE',
+      [id]
+    );
+
+    if (existingSheet.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Sheet not found' }
+      });
+    }
+
+    const oldName = existingSheet.rows[0].name;
+
+    // Update the sheet name
+    const result = await pool.query(
+      `UPDATE sheets SET name = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND is_active = TRUE
+       RETURNING id, name, columns, created_by, created_at, updated_at`,
+      [name.trim(), id]
+    );
+
+    // Audit log
+    await auditService.log({
+      userId: req.user.id,
+      action: 'RENAME',
+      entityType: 'sheets',
+      entityId: parseInt(id),
+      metadata: { old_name: oldName, new_name: name.trim() }
+    });
+
+    res.json({
+      success: true,
+      sheet: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Rename sheet error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to rename sheet' }
     });
   }
 });

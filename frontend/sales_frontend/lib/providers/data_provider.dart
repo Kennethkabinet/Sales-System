@@ -13,6 +13,9 @@ class DataProvider extends ChangeNotifier {
 
   // Files
   List<FileModel> _files = [];
+  List<FolderModel> _folders = [];
+  int? _currentFolderId;
+  List<Map<String, dynamic>> _folderBreadcrumbs = []; // [{id, name}]
   FileModel? _currentFile;
   List<Map<String, dynamic>> _fileData = [];
   List<String> _fileColumns = [];
@@ -39,6 +42,9 @@ class DataProvider extends ChangeNotifier {
 
   // Getters
   List<FileModel> get files => _files;
+  List<FolderModel> get folders => _folders;
+  int? get currentFolderId => _currentFolderId;
+  List<Map<String, dynamic>> get folderBreadcrumbs => _folderBreadcrumbs;
   FileModel? get currentFile => _currentFile;
   int? get currentFileId => _currentFile?.id;
   List<Map<String, dynamic>> get fileData => _fileData;
@@ -124,22 +130,102 @@ class DataProvider extends ChangeNotifier {
 
   // ============== Files ==============
 
-  Future<void> loadFiles({int page = 1, int? departmentId}) async {
+  Future<void> loadFiles({int page = 1, int? departmentId, int? folderId}) async {
     _isLoading = true;
     _error = null;
+    _currentFolderId = folderId;
     notifyListeners();
 
     try {
-      final result = await ApiService.getFiles(page: page, departmentId: departmentId);
+      final result = await ApiService.getFiles(page: page, departmentId: departmentId, folderId: folderId);
       _files = result.files;
+      _folders = result.folders;
       _filePagination = result.pagination;
-      print('loadFiles: Loaded ${_files.length} files'); // Debug
     } catch (e) {
       _error = e.toString();
-      print('loadFiles error: $_error'); // Debug
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  void navigateToFolder(int folderId, String folderName) {
+    _folderBreadcrumbs.add({'id': folderId, 'name': folderName});
+    loadFiles(folderId: folderId);
+  }
+
+  void navigateToRoot() {
+    _folderBreadcrumbs.clear();
+    loadFiles();
+  }
+
+  void navigateToBreadcrumb(int index) {
+    if (index < 0) {
+      navigateToRoot();
+      return;
+    }
+    final target = _folderBreadcrumbs[index];
+    _folderBreadcrumbs = _folderBreadcrumbs.sublist(0, index + 1);
+    loadFiles(folderId: target['id'] as int);
+  }
+
+  Future<bool> createFolder(String name) async {
+    try {
+      await ApiService.createFolder(name, parentId: _currentFolderId);
+      await loadFiles(folderId: _currentFolderId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> renameFolder(int folderId, String name) async {
+    try {
+      await ApiService.renameFolder(folderId, name);
+      await loadFiles(folderId: _currentFolderId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> deleteFolderItem(int folderId) async {
+    try {
+      await ApiService.deleteFolder(folderId);
+      await loadFiles(folderId: _currentFolderId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> renameFileItem(int fileId, String name) async {
+    try {
+      await ApiService.renameFile(fileId, name);
+      await loadFiles(folderId: _currentFolderId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> moveFileToFolder(int fileId, {int? folderId}) async {
+    try {
+      await ApiService.moveFile(fileId, folderId: folderId);
+      await loadFiles(folderId: _currentFolderId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
     }
   }
 
@@ -179,7 +265,7 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final newFile = await ApiService.createFile(name);
+      final newFile = await ApiService.createFile(name, folderId: _currentFolderId);
       _files.insert(0, newFile);
     } catch (e) {
       _error = e.toString();

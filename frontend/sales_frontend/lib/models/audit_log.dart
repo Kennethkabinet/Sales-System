@@ -6,6 +6,7 @@ class AuditLog {
   final String action;
   final String entityType;
   final String? entityId;
+  final String? entityName;
   final String? fileName;
   final int? rowNumber;
   final String? fieldName;
@@ -26,6 +27,7 @@ class AuditLog {
     required this.action,
     required this.entityType,
     this.entityId,
+    this.entityName,
     this.fileName,
     this.rowNumber,
     this.fieldName,
@@ -45,6 +47,7 @@ class AuditLog {
       action: json['action'] ?? '',
       entityType: json['entity_type'] ?? '',
       entityId: json['entity_id']?.toString(),
+      entityName: json['entity_name'],
       fileName: json['file_name'],
       rowNumber: json['row_number'],
       fieldName: json['field_name'],

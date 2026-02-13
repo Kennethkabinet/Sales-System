@@ -15,60 +15,75 @@ router.get('/', authenticate, requireAdminAccess, async (req, res) => {
     
     const offset = (page - 1) * limit;
     
-    let query = `
-      SELECT al.id, al.action, al.entity_type, al.entity_id,
-             u.username, f.name as file_name,
-             al.row_number, al.field_name, al.old_value, al.new_value,
-             al.metadata, al.created_at
-      FROM audit_logs al
-      LEFT JOIN users u ON al.user_id = u.id
-      LEFT JOIN files f ON al.file_id = f.id
-      WHERE 1=1
-    `;
-    
+    // Build WHERE clause separately for count query
+    let whereClause = ' WHERE 1=1';
     const params = [];
     
     // Non-admins can only see their own logs or their department logs
     if (req.user.role !== 'admin') {
       params.push(req.user.id, req.user.department_id);
-      query += ` AND (al.user_id = $${params.length - 1} OR f.department_id = $${params.length})`;
+      whereClause += ` AND (al.user_id = $${params.length - 1} OR f.department_id = $${params.length})`;
     }
     
     // Apply filters
     if (file_id) {
       params.push(file_id);
-      query += ` AND al.file_id = $${params.length}`;
+      whereClause += ` AND al.file_id = $${params.length}`;
     }
     
     if (user_id && req.user.role === 'admin') {
       params.push(user_id);
-      query += ` AND al.user_id = $${params.length}`;
+      whereClause += ` AND al.user_id = $${params.length}`;
     }
     
     if (action) {
       params.push(action);
-      query += ` AND al.action = $${params.length}`;
+      whereClause += ` AND al.action = $${params.length}`;
     }
     
     if (entity_type) {
       params.push(entity_type);
-      query += ` AND al.entity_type = $${params.length}`;
+      whereClause += ` AND al.entity_type = $${params.length}`;
     }
     
     if (start_date) {
       params.push(start_date);
-      query += ` AND al.created_at >= $${params.length}`;
+      whereClause += ` AND al.created_at >= $${params.length}`;
     }
     
     if (end_date) {
       params.push(end_date);
-      query += ` AND al.created_at <= $${params.length}`;
+      whereClause += ` AND al.created_at <= $${params.length}`;
     }
     
     // Get total count
-    const countQuery = query.replace(/SELECT[\s\S]*?FROM/, 'SELECT COUNT(*) as total FROM');
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      LEFT JOIN files f ON al.file_id = f.id
+      ${whereClause}
+    `;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0]?.total || 0);
+    
+    // Build full query with entity name resolution
+    let query = `
+      SELECT al.id, al.action, al.entity_type, al.entity_id,
+             al.user_id, u.username, f.name as file_name,
+             al.row_number, al.field_name, al.old_value, al.new_value,
+             al.metadata, al.created_at,
+             CASE 
+               WHEN al.entity_type = 'users' THEN (SELECT COALESCE(eu.full_name, eu.username) FROM users eu WHERE eu.id::text = al.entity_id::text)
+               WHEN al.entity_type = 'sheets' THEN (SELECT es.name FROM sheets es WHERE es.id::text = al.entity_id::text)
+               WHEN al.entity_type = 'files' THEN (SELECT ef.name FROM files ef WHERE ef.id::text = al.entity_id::text)
+               ELSE NULL
+             END as entity_name
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      LEFT JOIN files f ON al.file_id = f.id
+      ${whereClause}
+    `;
     
     // Add ordering and pagination
     query += ` ORDER BY al.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -85,6 +100,7 @@ router.get('/', authenticate, requireAdminAccess, async (req, res) => {
         action: log.action,
         entity_type: log.entity_type,
         entity_id: log.entity_id,
+        entity_name: log.entity_name,
         file_name: log.file_name,
         row_number: log.row_number,
         field_name: log.field_name,

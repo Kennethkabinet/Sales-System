@@ -35,87 +35,99 @@ const upload = multer({
 router.get('/', authenticate, requireFileAccess, async (req, res) => {
   try {
     const department_id = req.query.department_id ? parseInt(req.query.department_id) : null;
+    const folder_id = req.query.folder_id ? parseInt(req.query.folder_id) : null;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     
-    console.log('GET /files - user:', req.user.id, 'role:', req.user.role, 'dept:', req.user.department_id);
+    console.log('GET /files - user:', req.user.id, 'role:', req.user.role, 'dept:', req.user.department_id, 'folder:', folder_id);
     
-    // Build query based on role
-    let query;
-    let countQuery;
-    let params;
-    let countParams;
-    
-    if (req.user.role === 'admin') {
-      // Admin sees all files (optionally filtered by department)
-      if (department_id) {
-        query = `
-          SELECT f.id, f.uuid, f.name, f.original_filename, f.file_type,
-                 f.department_id, d.name as department_name,
-                 u.username as created_by, f.current_version,
-                 f.columns, f.created_at, f.updated_at,
-                 (SELECT COUNT(*) FROM file_data fd WHERE fd.file_id = f.id) as row_count
-          FROM files f
-          LEFT JOIN departments d ON f.department_id = d.id
-          LEFT JOIN users u ON f.created_by = u.id
-          WHERE f.is_active = TRUE AND f.department_id = $1
-          ORDER BY f.updated_at DESC
-          LIMIT $2 OFFSET $3
-        `;
-        countQuery = `SELECT COUNT(*) as total FROM files f WHERE f.is_active = TRUE AND f.department_id = $1`;
-        params = [department_id, limit, offset];
-        countParams = [department_id];
-      } else {
-        query = `
-          SELECT f.id, f.uuid, f.name, f.original_filename, f.file_type,
-                 f.department_id, d.name as department_name,
-                 u.username as created_by, f.current_version,
-                 f.columns, f.created_at, f.updated_at,
-                 (SELECT COUNT(*) FROM file_data fd WHERE fd.file_id = f.id) as row_count
-          FROM files f
-          LEFT JOIN departments d ON f.department_id = d.id
-          LEFT JOIN users u ON f.created_by = u.id
-          WHERE f.is_active = TRUE
-          ORDER BY f.updated_at DESC
-          LIMIT $1 OFFSET $2
-        `;
-        countQuery = `SELECT COUNT(*) as total FROM files f WHERE f.is_active = TRUE`;
-        params = [limit, offset];
-        countParams = [];
-      }
+    // Build WHERE conditions
+    let conditions = ['f.is_active = TRUE'];
+    let params = [];
+    let paramIndex = 1;
+
+    // Folder filter: null means root, otherwise specific folder
+    if (folder_id) {
+      conditions.push(`f.folder_id = $${paramIndex}`);
+      params.push(folder_id);
+      paramIndex++;
     } else {
-      // Non-admin sees files in their department or created by them
-      query = `
-        SELECT f.id, f.uuid, f.name, f.original_filename, f.file_type,
-               f.department_id, d.name as department_name,
-               u.username as created_by, f.current_version,
-               f.columns, f.created_at, f.updated_at,
-               (SELECT COUNT(*) FROM file_data fd WHERE fd.file_id = f.id) as row_count
-        FROM files f
-        LEFT JOIN departments d ON f.department_id = d.id
-        LEFT JOIN users u ON f.created_by = u.id
-        WHERE f.is_active = TRUE AND (f.department_id = $1 OR f.created_by = $2)
-        ORDER BY f.updated_at DESC
-        LIMIT $3 OFFSET $4
-      `;
-      countQuery = `SELECT COUNT(*) as total FROM files f WHERE f.is_active = TRUE AND (f.department_id = $1 OR f.created_by = $2)`;
-      params = [req.user.department_id, req.user.id, limit, offset];
-      countParams = [req.user.department_id, req.user.id];
+      conditions.push('f.folder_id IS NULL');
     }
-    
-    console.log('Files query params:', params);
-    
-    const countResult = await pool.query(countQuery, countParams);
+
+    // Department filter
+    if (department_id) {
+      conditions.push(`f.department_id = $${paramIndex}`);
+      params.push(department_id);
+      paramIndex++;
+    }
+
+    // Role-based access: non-admin see own dept or own files
+    if (req.user.role !== 'admin') {
+      conditions.push(`(f.department_id = $${paramIndex} OR f.created_by = $${paramIndex + 1})`);
+      params.push(req.user.department_id, req.user.id);
+      paramIndex += 2;
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    const countQuery = `SELECT COUNT(*) as total FROM files f WHERE ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0]?.total || 0);
+
+    const query = `
+      SELECT f.id, f.uuid, f.name, f.original_filename, f.file_type,
+             f.department_id, d.name as department_name,
+             u.username as created_by, f.current_version,
+             f.columns, f.created_at, f.updated_at,
+             f.folder_id, f.source_sheet_id,
+             (SELECT COUNT(*) FROM file_data fd WHERE fd.file_id = f.id) as row_count
+      FROM files f
+      LEFT JOIN departments d ON f.department_id = d.id
+      LEFT JOIN users u ON f.created_by = u.id
+      WHERE ${whereClause}
+      ORDER BY f.updated_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
     
-    const result = await pool.query(query, params);
+    const result = await pool.query(query, [...params, limit, offset]);
+
+    // Also get folders in this location
+    let folderConditions = ['fo.is_active = TRUE'];
+    let folderParams = [];
+    let fpIndex = 1;
+
+    if (folder_id) {
+      folderConditions.push(`fo.parent_id = $${fpIndex}`);
+      folderParams.push(folder_id);
+      fpIndex++;
+    } else {
+      folderConditions.push('fo.parent_id IS NULL');
+    }
+
+    if (req.user.role !== 'admin') {
+      folderConditions.push(`fo.created_by = $${fpIndex}`);
+      folderParams.push(req.user.id);
+      fpIndex++;
+    }
+
+    const foldersResult = await pool.query(
+      `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
+              (SELECT COUNT(*) FROM files f2 WHERE f2.folder_id = fo.id AND f2.is_active = TRUE) as file_count
+       FROM folders fo
+       LEFT JOIN users u ON fo.created_by = u.id
+       WHERE ${folderConditions.join(' AND ')}
+       ORDER BY fo.name ASC`,
+      folderParams
+    );
     
-    console.log('Files found:', result.rows.length);
+    console.log('Files found:', result.rows.length, 'Folders found:', foldersResult.rows.length);
     
     res.json({
       success: true,
       files: result.rows,
+      folders: foldersResult.rows,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -533,8 +545,231 @@ router.post('/:id/export', authenticate, checkFileAccess('read'), async (req, re
   }
 });
 
-// DELETE /files/:id - Delete file (soft delete)
-router.delete('/:id', authenticate, checkFileAccess('admin'), async (req, res) => {
+// POST /files - Create a new empty file
+router.post('/', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { name, file_type, folder_id } = req.body;
+
+    const result = await pool.query(
+      `INSERT INTO files (name, file_type, department_id, created_by, columns, folder_id)
+       VALUES ($1, $2, $3, $4, '[]', $5)
+       RETURNING id, uuid, name, file_type, folder_id, created_at, updated_at`,
+      [name, file_type || 'xlsx', req.user.department_id, req.user.id, folder_id || null]
+    );
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'CREATE',
+      entityType: 'files',
+      entityId: result.rows[0].id,
+      fileId: result.rows[0].id,
+      metadata: { name }
+    });
+
+    res.status(201).json({
+      success: true,
+      file: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Create file error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to create file' }
+    });
+  }
+});
+
+// PATCH /files/:id/rename - Rename a file
+router.patch('/:id/rename', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'File name is required' }
+      });
+    }
+
+    const oldFile = await pool.query('SELECT name FROM files WHERE id = $1 AND is_active = TRUE', [id]);
+    if (oldFile.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'File not found' } });
+    }
+
+    const result = await pool.query(
+      'UPDATE files SET name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = TRUE RETURNING id, name',
+      [name.trim(), id]
+    );
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'RENAME',
+      entityType: 'files',
+      entityId: parseInt(id),
+      fileId: parseInt(id),
+      metadata: { old_name: oldFile.rows[0].name, new_name: name.trim() }
+    });
+
+    res.json({ success: true, file: result.rows[0] });
+  } catch (error) {
+    console.error('Rename file error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to rename file' } });
+  }
+});
+
+// PATCH /files/:id/move - Move a file to a folder
+router.patch('/:id/move', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { folder_id } = req.body; // null = root
+
+    const result = await pool.query(
+      'UPDATE files SET folder_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = TRUE RETURNING id, name, folder_id',
+      [folder_id || null, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'File not found' } });
+    }
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'MOVE',
+      entityType: 'files',
+      entityId: parseInt(id),
+      fileId: parseInt(id),
+      metadata: { folder_id: folder_id || 'root' }
+    });
+
+    res.json({ success: true, file: result.rows[0] });
+  } catch (error) {
+    console.error('Move file error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to move file' } });
+  }
+});
+
+// ============== Folders ==============
+
+// POST /files/folders - Create a folder
+router.post('/folders', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { name, parent_id } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Folder name is required' }
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO folders (name, parent_id, created_by)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, parent_id, created_at, updated_at`,
+      [name.trim(), parent_id || null, req.user.id]
+    );
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'CREATE',
+      entityType: 'folders',
+      entityId: result.rows[0].id,
+      metadata: { name: name.trim(), parent_id: parent_id || null }
+    });
+
+    res.status(201).json({ success: true, folder: result.rows[0] });
+  } catch (error) {
+    console.error('Create folder error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to create folder' } });
+  }
+});
+
+// PATCH /files/folders/:id/rename - Rename a folder
+router.patch('/folders/:id/rename', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Folder name is required' }
+      });
+    }
+
+    const result = await pool.query(
+      'UPDATE folders SET name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = TRUE RETURNING id, name',
+      [name.trim(), id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Folder not found' } });
+    }
+
+    res.json({ success: true, folder: result.rows[0] });
+  } catch (error) {
+    console.error('Rename folder error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to rename folder' } });
+  }
+});
+
+// DELETE /files/folders/:id - Delete a folder
+router.delete('/folders/:id', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Move any files in this folder to root
+    await pool.query('UPDATE files SET folder_id = NULL WHERE folder_id = $1', [id]);
+    
+    // Soft delete
+    await pool.query('UPDATE folders SET is_active = FALSE WHERE id = $1', [id]);
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'DELETE',
+      entityType: 'folders',
+      entityId: parseInt(id),
+      metadata: { deleted_by: req.user.username }
+    });
+
+    res.json({ success: true, message: 'Folder deleted' });
+  } catch (error) {
+    console.error('Delete folder error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to delete folder' } });
+  }
+});
+
+// GET /files/:id/download - Download file as Excel
+router.get('/:id/download', authenticate, requireFileAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const fileResult = await pool.query('SELECT name, columns FROM files WHERE id = $1 AND is_active = TRUE', [id]);
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'File not found' } });
+    }
+
+    const dataResult = await pool.query(
+      'SELECT data FROM file_data WHERE file_id = $1 ORDER BY row_number',
+      [id]
+    );
+
+    const exportPath = await excelService.exportToExcel(
+      fileResult.rows[0].name,
+      fileResult.rows[0].columns || [],
+      dataResult.rows.map(r => r.data)
+    );
+
+    res.download(exportPath, fileResult.rows[0].name + '.xlsx');
+  } catch (error) {
+    console.error('Download file error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to download file' } });
+  }
+});
+
+// DELETE /files/:id - Delete file (soft delete) - Admin and Editor
+router.delete('/:id', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { id } = req.params;
 

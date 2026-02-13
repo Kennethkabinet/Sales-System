@@ -387,6 +387,82 @@ router.put('/:id/department', authenticate, requireAdminAccess, async (req, res)
   }
 });
 
+// DELETE /users/:id/permanent - Permanently delete user (Admin only)
+router.delete('/:id/permanent', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Prevent self-deletion
+    if (req.user.id === parseInt(id)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Cannot delete your own account' }
+      });
+    }
+
+    // Check if user exists
+    const userCheck = await pool.query(
+      'SELECT u.id, u.username, r.name as role FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = $1',
+      [id]
+    );
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User not found' }
+      });
+    }
+
+    // Prevent deleting other admins
+    if (userCheck.rows[0].role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Cannot delete an admin account' }
+      });
+    }
+
+    const deletedUser = userCheck.rows[0];
+
+    // Clean up related records before deleting user
+    // Tables with ON DELETE CASCADE are handled automatically (sheet_edit_sessions, sheet_locks, file_permissions)
+    // Nullify FK references in other tables
+    await pool.query('DELETE FROM sheet_edit_sessions WHERE user_id = $1', [id]);
+    await pool.query('UPDATE sheet_locks SET locked_by = NULL WHERE locked_by = $1', [id]);
+    await pool.query('UPDATE audit_logs SET user_id = NULL WHERE user_id = $1', [id]);
+    await pool.query('UPDATE users SET deactivated_by = NULL WHERE deactivated_by = $1', [id]);
+    await pool.query('UPDATE users SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('UPDATE files SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('UPDATE sheets SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('UPDATE formulas SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('UPDATE applied_formulas SET applied_by = NULL WHERE applied_by = $1', [id]);
+    await pool.query('UPDATE formula_versions SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('UPDATE file_versions SET created_by = NULL WHERE created_by = $1', [id]);
+    await pool.query('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+    await pool.query('DELETE FROM file_permissions WHERE user_id = $1', [id]);
+
+    // Delete the user permanently
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'DELETE',
+      entityType: 'users',
+      entityId: parseInt(id),
+      metadata: { deleted_username: deletedUser.username, deleted_by: req.user.username }
+    });
+
+    res.json({
+      success: true,
+      message: `User "${deletedUser.username}" permanently deleted`
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to delete user' }
+    });
+  }
+});
+
 // DELETE /users/:id - Deactivate user (Admin only)
 router.delete('/:id', authenticate, requireAdminAccess, async (req, res) => {
   try {

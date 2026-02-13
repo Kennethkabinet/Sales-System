@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
+import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
@@ -63,11 +64,12 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
     final isAdmin = auth.user?.role == 'admin';
+    final isViewer = auth.user?.role == 'viewer';
 
     final pages = [
       const _DashboardContent(),
       const SheetScreen(),
-      const FileListScreen(),
+      if (!isViewer) const FileListScreen(),
       const AuditHistoryScreen(),
       if (isAdmin) const UserManagementScreen(),
     ];
@@ -208,6 +210,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         ],
                       ),
                       child: _buildSidebarContent(auth, isAdmin),
+                      // isViewer is now handled inside _buildSidebarContent
                     ),
                   ),
                 ],
@@ -220,7 +223,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   Widget _buildSidebarContent(AuthProvider auth, bool isAdmin) {
-    final menuItems = [
+    final isViewer = auth.user?.role == 'viewer';
+    
+    // Build menu items with proper indices based on role
+    final menuItems = <_SidebarItem>[
       _SidebarItem(
         icon: Icons.dashboard_outlined,
         selectedIcon: Icons.dashboard,
@@ -233,26 +239,36 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         label: 'Sheet',
         index: 1,
       ),
-      _SidebarItem(
+    ];
+
+    int nextIndex = 2;
+
+    if (!isViewer) {
+      menuItems.add(_SidebarItem(
         icon: Icons.folder_outlined,
         selectedIcon: Icons.folder,
         label: 'Files',
-        index: 2,
-      ),
-      _SidebarItem(
-        icon: Icons.history_outlined,
-        selectedIcon: Icons.history,
-        label: 'Audit Log',
-        index: 3,
-      ),
-      if (isAdmin)
-        _SidebarItem(
-          icon: Icons.people_outlined,
-          selectedIcon: Icons.people,
-          label: 'Users',
-          index: 4,
-        ),
-    ];
+        index: nextIndex,
+      ));
+      nextIndex++;
+    }
+
+    menuItems.add(_SidebarItem(
+      icon: Icons.history_outlined,
+      selectedIcon: Icons.history,
+      label: 'Audit Log',
+      index: nextIndex,
+    ));
+    nextIndex++;
+
+    if (isAdmin) {
+      menuItems.add(_SidebarItem(
+        icon: Icons.people_outlined,
+        selectedIcon: Icons.people,
+        label: 'Users',
+        index: nextIndex,
+      ));
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -574,6 +590,18 @@ class _DashboardContent extends StatelessWidget {
                 ),
                 const SizedBox(height: 32),
 
+                // Active Users section
+                _ChartCard(
+                  title: 'Active Users',
+                  child: stats != null && stats.activeUsersList.isNotEmpty
+                      ? _ActiveUsersList(users: stats.activeUsersList)
+                      : const Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(child: Text('No active users')),
+                        ),
+                ),
+                const SizedBox(height: 32),
+
                 // Recent activity table
                 _ChartCard(
                   title: 'Recent Activity',
@@ -812,6 +840,118 @@ class _RecentActivityTable extends StatelessWidget {
       return '${diff.inDays}d ago';
     } catch (_) {
       return timestamp;
+    }
+  }
+}
+
+class _ActiveUsersList extends StatelessWidget {
+  final List<DashboardActiveUser> users;
+
+  const _ActiveUsersList({required this.users});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: users.map((user) {
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: _getRoleColor(user.role).withOpacity(0.15),
+            child: Text(
+              _getInitials(user.fullName.isNotEmpty ? user.fullName : user.username),
+              style: TextStyle(
+                color: _getRoleColor(user.role),
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          title: Text(
+            user.fullName.isNotEmpty ? user.fullName : user.username,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(user.email),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _getRoleColor(user.role).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  user.role.toUpperCase(),
+                  style: TextStyle(
+                    color: _getRoleColor(user.role),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.green.withOpacity(0.4),
+                      blurRadius: 4,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _formatLastLogin(user.lastLogin),
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  String _getInitials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  }
+
+  Color _getRoleColor(String role) {
+    switch (role.toLowerCase()) {
+      case 'admin':
+        return Colors.red;
+      case 'editor':
+        return Colors.blue;
+      case 'viewer':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _formatLastLogin(String? lastLogin) {
+    if (lastLogin == null) return 'N/A';
+    try {
+      final dt = DateTime.parse(lastLogin);
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${diff.inDays}d ago';
+    } catch (_) {
+      return 'N/A';
     }
   }
 }

@@ -40,6 +40,9 @@ class ApiEndpoints {
   static const String files = '/files';
   static const String uploadFile = '/files/upload';
   
+  // Folders
+  static const String folders = '/files/folders';
+  
   // Formulas
   static const String formulas = '/formulas';
   static const String formulaPreview = '/formulas/preview';

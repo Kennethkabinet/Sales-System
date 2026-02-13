@@ -26,7 +26,16 @@ router.get('/stats', authenticate, requireAdminAccess, async (req, res) => {
     // Get active users count
     const usersResult = await pool.query(`
       SELECT COUNT(*) as active_users FROM users 
-      WHERE is_active = TRUE AND last_login > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+      WHERE is_active = TRUE
+    `);
+    
+    // Get active users list with details
+    const activeUsersListResult = await pool.query(`
+      SELECT u.id, u.username, u.full_name, u.email, r.name as role, u.last_login
+      FROM users u
+      LEFT JOIN roles r ON u.role_id = r.id
+      WHERE u.is_active = TRUE
+      ORDER BY u.last_login DESC NULLS LAST
     `);
     
     // Get files count
@@ -84,6 +93,14 @@ router.get('/stats', authenticate, requireAdminAccess, async (req, res) => {
         files_count: parseInt(filesResult.rows[0]?.files_count || 0),
         formulas_count: parseInt(formulasResult.rows[0]?.formulas_count || 0)
       },
+      active_users_list: activeUsersListResult.rows.map(row => ({
+        id: row.id,
+        username: row.username,
+        full_name: row.full_name,
+        email: row.email,
+        role: row.role || 'user',
+        last_login: row.last_login
+      })),
       sales_trend: trendResult.rows.map(row => ({
         date: row.date,
         amount: parseInt(row.changes) * 1000 // Simulated amount for demo

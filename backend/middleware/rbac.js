@@ -78,7 +78,7 @@ const requireSheetEditAccess = (req, res, next) => {
   next();
 };
 
-// File management access (admin, user - NOT editor or viewer)
+// File management access (admin, editor, user - NOT viewer)
 const requireFileAccess = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({
@@ -87,10 +87,10 @@ const requireFileAccess = (req, res, next) => {
     });
   }
   
-  if (!['admin', 'user'].includes(req.user.role)) {
+  if (!['admin', 'editor', 'user'].includes(req.user.role)) {
     return res.status(403).json({
       success: false,
-      error: { code: 'FORBIDDEN', message: 'File access denied. Not available for editors or viewers.' }
+      error: { code: 'FORBIDDEN', message: 'File access denied. Not available for viewers.' }
     });
   }
   
@@ -203,8 +203,8 @@ const checkFileAccess = (requiredLevel = 'read') => {
           });
         }
         
-        // Regular users can write to department files
-        if (req.user.role === 'user' && requiredLevel === 'write') {
+        // Regular users and editors can write to department files
+        if ((req.user.role === 'user' || req.user.role === 'editor') && requiredLevel === 'write') {
           return next();
         }
       }

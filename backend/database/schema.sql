@@ -303,10 +303,11 @@ CREATE INDEX IF NOT EXISTS idx_sheet_locks_user ON sheet_locks(locked_by);
 CREATE TABLE IF NOT EXISTS sheet_edit_sessions (
     id SERIAL PRIMARY KEY,
     sheet_id INTEGER REFERENCES sheets(id) ON DELETE CASCADE,
-    user_id INTEGER REFERENCES users(id),
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     last_activity TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(sheet_id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sheet_edit_sessions_sheet ON sheet_edit_sessions(sheet_id);

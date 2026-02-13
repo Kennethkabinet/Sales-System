@@ -265,11 +265,13 @@ class _AuditLogCard extends StatelessWidget {
               log.entityType,
               style: const TextStyle(fontWeight: FontWeight.w500),
             ),
-            if (log.entityId != null) ...[
+            if (log.entityName != null || log.entityId != null) ...[
               const SizedBox(width: 4),
               Text(
-                '#${log.entityId!.length > 8 ? '${log.entityId!.substring(0, 8)}...' : log.entityId!}',
-                style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                log.entityName != null
+                    ? '- ${log.entityName}'
+                    : '#${log.entityId!.length > 8 ? '${log.entityId!.substring(0, 8)}...' : log.entityId!}',
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
               ),
             ],
           ],

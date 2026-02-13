@@ -411,6 +411,81 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
+  Future<void> _confirmDeleteUser(User user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete User Permanently'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Are you sure you want to permanently delete "${user.username}"?'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red[200]!),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.red, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This action cannot be undone. All data associated with this user will be permanently removed.',
+                      style: TextStyle(fontSize: 12, color: Colors.red),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await ApiService.deleteUserPermanently(user.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('User "${user.username}" permanently deleted'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          _loadData();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete user: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _reactivateUser(User user) async {
     try {
       await ApiService.reactivateUser(user.id);
@@ -651,6 +726,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                           case 'reactivate':
                                             _reactivateUser(user);
                                             break;
+                                          case 'delete':
+                                            _confirmDeleteUser(user);
+                                            break;
                                         }
                                       },
                                       itemBuilder: (context) => [
@@ -683,6 +761,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                                 Icon(Icons.check_circle, size: 18, color: Colors.green),
                                                 SizedBox(width: 8),
                                                 Text('Reactivate', style: TextStyle(color: Colors.green)),
+                                              ],
+                                            ),
+                                          ),
+                                        if (user.role != 'admin')
+                                          const PopupMenuItem(
+                                            value: 'delete',
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.delete_forever, size: 18, color: Colors.red),
+                                                SizedBox(width: 8),
+                                                Text('Delete', style: TextStyle(color: Colors.red)),
                                               ],
                                             ),
                                           ),
