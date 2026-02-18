@@ -4,8 +4,8 @@ class AppConfig {
   static const String appVersion = '1.0.0';
   
   // API Configuration
-  static const String apiBaseUrl = 'http://localhost:3001/api';
-  static const String wsBaseUrl = 'http://localhost:3001';
+  static const String apiBaseUrl = 'http://localhost:3000/api';
+  static const String wsBaseUrl = 'http://localhost:3000';
   
   // Timeouts
   static const Duration apiTimeout = Duration(seconds: 30);

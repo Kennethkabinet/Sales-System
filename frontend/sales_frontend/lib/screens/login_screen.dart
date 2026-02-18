@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../config/constants.dart';
 import '../main.dart'; // For AuthWrapper
 
 class LoginScreen extends StatefulWidget {
@@ -15,7 +14,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -34,7 +32,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     if (success && mounted) {
-      // Navigate to main app - AuthWrapper will handle role-based routing
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const AuthWrapper()),
       );
@@ -44,166 +41,236 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFFDF5F0), // Light cream background
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
-            child: Consumer<AuthProvider>(
-              builder: (context, auth, _) {
-                return Card(
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Logo/Title
-                          Icon(
-                            Icons.inventory_2,
-                            size: 64,
-                            color: Theme.of(context).primaryColor,
+          child: Consumer<AuthProvider>(
+            builder: (context, auth, _) {
+              return SizedBox(
+                width: 380,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Main card
+                    Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.topCenter,
+                      children: [
+                        // Red card body
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(top: 40),
+                          padding: const EdgeInsets.only(
+                            top: 60,
+                            left: 40,
+                            right: 40,
+                            bottom: 40,
                           ),
-                          const SizedBox(height: 16),
-                          Text(
-                            AppConfig.appName,
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFCD5C5C), // Indian red / coral
+                            borderRadius: BorderRadius.circular(20),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Sign in to continue',
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                          const SizedBox(height: 32),
+                          child: Form(
+                            key: _formKey,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(height: 20),
 
-                          // Error message
-                          if (auth.error != null) ...[
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.red[50],
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.red[200]!),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.error_outline, color: Colors.red[700]),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      auth.error!,
-                                      style: TextStyle(color: Colors.red[700]),
+                                // Error message
+                                if (auth.error != null) ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    margin: const EdgeInsets.only(bottom: 16),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red[100],
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: auth.clearError,
-                                    color: Colors.red[700],
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.error_outline,
+                                            color: Colors.red[900], size: 20),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            auth.error!,
+                                            style: TextStyle(
+                                              color: Colors.red[900],
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: auth.clearError,
+                                          child: Icon(Icons.close,
+                                              size: 16, color: Colors.red[900]),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
 
-                          // Username field
-                          TextFormField(
-                            controller: _usernameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Username',
-                              prefixIcon: Icon(Icons.person),
-                              border: OutlineInputBorder(),
-                            ),
-                            textInputAction: TextInputAction.next,
-                            validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Please enter your username';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-
-                          // Password field
-                          TextFormField(
-                            controller: _passwordController,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock),
-                              border: const OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscurePassword ? Icons.visibility : Icons.visibility_off,
-                                ),
-                                onPressed: () {
-                                  setState(() {
-                                    _obscurePassword = !_obscurePassword;
-                                  });
-                                },
-                              ),
-                            ),
-                            obscureText: _obscurePassword,
-                            textInputAction: TextInputAction.done,
-                            onFieldSubmitted: (_) => _handleLogin(),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter your password';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Login button
-                          SizedBox(
-                            width: double.infinity,
-                            height: 48,
-                            child: ElevatedButton(
-                              onPressed: auth.isLoading ? null : _handleLogin,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Theme.of(context).primaryColor,
-                                foregroundColor: Colors.white,
-                              ),
-                              child: auth.isLoading
-                                  ? const SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                                // Username field
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: TextFormField(
+                                    controller: _usernameController,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Username',
+                                      hintStyle: TextStyle(
+                                        color: Color(0xFF999999),
+                                        fontSize: 14,
                                       ),
-                                    )
-                                  : const Text(
-                                      'LOGIN',
-                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                      prefixIcon: Icon(
+                                        Icons.person,
+                                        color: Color(0xFF555555),
+                                        size: 20,
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 14,
+                                      ),
                                     ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
+                                    textInputAction: TextInputAction.next,
+                                    validator: (value) {
+                                      if (value == null ||
+                                          value.trim().isEmpty) {
+                                        return 'Please enter your username';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
 
-                          // Info text
-                          Text(
-                            'Contact your administrator for account access',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[600],
+                                // Password field
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: TextFormField(
+                                    controller: _passwordController,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Password',
+                                      hintStyle: TextStyle(
+                                        color: Color(0xFF999999),
+                                        fontSize: 14,
+                                      ),
+                                      prefixIcon: Icon(
+                                        Icons.lock,
+                                        color: Color(0xFF555555),
+                                        size: 20,
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 14,
+                                      ),
+                                    ),
+                                    obscureText: true,
+                                    textInputAction: TextInputAction.done,
+                                    onFieldSubmitted: (_) => _handleLogin(),
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Please enter your password';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 28),
+
+                                // Login button
+                                SizedBox(
+                                  width: 140,
+                                  height: 42,
+                                  child: ElevatedButton(
+                                    onPressed:
+                                        auth.isLoading ? null : _handleLogin,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          const Color(0xFF3B5998), // Blue
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(6),
+                                      ),
+                                      elevation: 2,
+                                    ),
+                                    child: auth.isLoading
+                                        ? const SizedBox(
+                                            width: 22,
+                                            height: 22,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor:
+                                                  AlwaysStoppedAnimation(
+                                                      Colors.white),
+                                            ),
+                                          )
+                                        : const Text(
+                                            'LOGIN',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1.2,
+                                            ),
+                                          ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            textAlign: TextAlign.center,
                           ),
-                        ],
-                      ),
+                        ),
+
+                        // Logo circle on top
+                        Positioned(
+                          top: 0,
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.15),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: ClipOval(
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Image.asset(
+                                  'assets/images/logo.png',
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    // Fallback icon if logo not found
+                                    return const Icon(
+                                      Icons.diamond,
+                                      size: 40,
+                                      color: Color(0xFFCD5C5C),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                );
-              },
-            ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),

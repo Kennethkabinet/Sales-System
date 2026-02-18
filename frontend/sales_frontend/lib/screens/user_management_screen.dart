@@ -4,6 +4,10 @@ import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../models/user.dart';
 
+// ── Colour constants ──
+const Color _kContentBg = Color(0xFFFDF5F0);
+const Color _kNavy = Color(0xFF1E3A6E);
+
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
 
@@ -13,9 +17,15 @@ class UserManagementScreen extends StatefulWidget {
 
 class _UserManagementScreenState extends State<UserManagementScreen> {
   List<User> _users = [];
+  List<User> _filteredUsers = [];
   List<Department> _departments = [];
   bool _isLoading = true;
   String? _error;
+  String _searchQuery = '';
+  String _roleFilter = 'All Users';
+  String _statusFilter = 'All Status';
+  String _sortMode = 'Sort by Name';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -38,6 +48,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         _departments = departments;
         _isLoading = false;
       });
+      _applyFilters();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -524,270 +535,520 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('User Management'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-          ),
-        ],
-      ),
+      backgroundColor: _kContentBg,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
+              ? _buildErrorState()
+              : Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.error, size: 48, color: Colors.red),
-                      const SizedBox(height: 16),
-                      Text('Error: $_error'),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _loadData,
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              : Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Total Users',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      '${_users.length}',
-                                      style: const TextStyle(
-                                        fontSize: 32,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Active Users',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      '${_users.where((u) => u.isActive).length}',
-                                      style: const TextStyle(
-                                        fontSize: 32,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Card(
-                        margin: const EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Row(
-                                children: [
-                                  const Text(
-                                    'User Accounts',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  ElevatedButton.icon(
-                                    onPressed: _showCreateUserDialog,
-                                    icon: const Icon(Icons.add),
-                                    label: const Text('Create User'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Divider(height: 1),
-                            Expanded(
-                              child: ListView.builder(
-                                itemCount: _users.length,
-                                itemBuilder: (context, index) {
-                                  final user = _users[index];
-                                  return ListTile(
-                                    leading: CircleAvatar(
-                                      backgroundColor: user.isActive
-                                          ? Colors.blue
-                                          : Colors.grey,
-                                      child: Text(
-                                        (user.fullName ?? user.username).substring(0, 1).toUpperCase(),
-                                        style: const TextStyle(color: Colors.white),
-                                      ),
-                                    ),
-                                    title: Text(
-                                      user.fullName ?? user.username,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: user.isActive ? null : Colors.grey,
-                                      ),
-                                    ),
-                                    subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text('@${user.username} • ${user.email}'),
-                                        const SizedBox(height: 4),
-                                        Row(
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 8,
-                                                vertical: 2,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: _getRoleColor(user.role),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                user.role.toUpperCase(),
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ),
-                                            if (!user.isActive) ...[
-                                              const SizedBox(width: 8),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 8,
-                                                  vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey,
-                                                  borderRadius: BorderRadius.circular(12),
-                                                ),
-                                                child: const Text(
-                                                  'INACTIVE',
-                                                  style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                    trailing: PopupMenuButton<String>(
-                                      onSelected: (value) {
-                                        switch (value) {
-                                          case 'edit':
-                                            _showEditUserDialog(user);
-                                            break;
-                                          case 'deactivate':
-                                            _confirmDeactivate(user);
-                                            break;
-                                          case 'reactivate':
-                                            _reactivateUser(user);
-                                            break;
-                                          case 'delete':
-                                            _confirmDeleteUser(user);
-                                            break;
-                                        }
-                                      },
-                                      itemBuilder: (context) => [
-                                        const PopupMenuItem(
-                                          value: 'edit',
-                                          child: Row(
-                                            children: [
-                                              Icon(Icons.edit, size: 18),
-                                              SizedBox(width: 8),
-                                              Text('Edit'),
-                                            ],
-                                          ),
-                                        ),
-                                        if (user.isActive)
-                                          const PopupMenuItem(
-                                            value: 'deactivate',
-                                            child: Row(
-                                              children: [
-                                                Icon(Icons.block, size: 18, color: Colors.red),
-                                                SizedBox(width: 8),
-                                                Text('Deactivate', style: TextStyle(color: Colors.red)),
-                                              ],
-                                            ),
-                                          )
-                                        else
-                                          const PopupMenuItem(
-                                            value: 'reactivate',
-                                            child: Row(
-                                              children: [
-                                                Icon(Icons.check_circle, size: 18, color: Colors.green),
-                                                SizedBox(width: 8),
-                                                Text('Reactivate', style: TextStyle(color: Colors.green)),
-                                              ],
-                                            ),
-                                          ),
-                                        if (user.role != 'admin')
-                                          const PopupMenuItem(
-                                            value: 'delete',
-                                            child: Row(
-                                              children: [
-                                                Icon(Icons.delete_forever, size: 18, color: Colors.red),
-                                                SizedBox(width: 8),
-                                                Text('Delete', style: TextStyle(color: Colors.red)),
-                                              ],
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
+                      // ── Title ──
+                      const Text(
+                        'USER MANAGEMENT',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          color: _kNavy,
+                          letterSpacing: 0.5,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 20),
+
+                      // ── Stat cards row ──
+                      _buildStatCards(),
+                      const SizedBox(height: 20),
+
+                      // ── Toolbar row ──
+                      _buildToolbar(),
+                      const SizedBox(height: 12),
+
+                      // ── Table header ──
+                      _buildTableHeader(),
+
+                      // ── User rows ──
+                      Expanded(child: _buildUserList()),
+                    ],
+                  ),
                 ),
     );
+  }
+
+  // ════════════════════════════════════════════
+  //  Error state
+  // ════════════════════════════════════════════
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error, size: 48, color: Colors.red),
+          const SizedBox(height: 16),
+          Text('Error: $_error'),
+          const SizedBox(height: 16),
+          ElevatedButton(onPressed: _loadData, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  Stat Cards
+  // ════════════════════════════════════════════
+  Widget _buildStatCards() {
+    final total = _users.length;
+    final active = _users.where((u) => u.isActive).length;
+    final suspended = _users.where((u) => !u.isActive).length;
+    final now = DateTime.now();
+    final newThisMonth = _users.where((u) {
+      if (u.createdAt == null) return false;
+      return u.createdAt!.year == now.year && u.createdAt!.month == now.month;
+    }).length;
+
+    return Row(
+      children: [
+        _statCard('$total', 'Total Users'),
+        const SizedBox(width: 16),
+        _statCard('$active', 'Total Users'),
+        const SizedBox(width: 16),
+        _statCard('$suspended', 'Suspended'),
+        const SizedBox(width: 16),
+        _statCard('$newThisMonth', 'New This Month'),
+      ],
+    );
+  }
+
+  Widget _statCard(String value, String label) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+        decoration: BoxDecoration(
+          color: Colors.grey[200],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: _kNavy,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  Toolbar (search + filters + add)
+  // ════════════════════════════════════════════
+  Widget _buildToolbar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          // Label
+          const Text(
+            'User Accounts',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _kNavy,
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Search field
+          Expanded(
+            child: Container(
+              height: 36,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: TextField(
+                controller: _searchController,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Search users...',
+                  hintStyle: TextStyle(fontSize: 13, color: Colors.grey[400]),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  isDense: true,
+                ),
+                onChanged: (v) {
+                  _searchQuery = v;
+                  _applyFilters();
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+
+          // Role filter
+          _toolbarButton(
+            _roleFilter,
+            items: ['All Users', 'Admin', 'Editor', 'Viewer'],
+            onSelected: (v) {
+              setState(() => _roleFilter = v);
+              _applyFilters();
+            },
+          ),
+          const SizedBox(width: 8),
+
+          // Status filter
+          _toolbarButton(
+            _statusFilter,
+            items: ['All Status', 'Active', 'Suspended'],
+            onSelected: (v) {
+              setState(() => _statusFilter = v);
+              _applyFilters();
+            },
+          ),
+          const SizedBox(width: 8),
+
+          // Sort button
+          _toolbarButton(
+            _sortMode,
+            items: ['Sort by Name', 'Sort by Role', 'Sort by Date'],
+            onSelected: (v) {
+              setState(() => _sortMode = v);
+              _applyFilters();
+            },
+          ),
+          const SizedBox(width: 8),
+
+          // Add User button
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: _showCreateUserDialog,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade400),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'Add User',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _kNavy,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarButton(
+    String label, {
+    required List<String> items,
+    required ValueChanged<String> onSelected,
+  }) {
+    return PopupMenuButton<String>(
+      onSelected: onSelected,
+      offset: const Offset(0, 40),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      itemBuilder: (_) => items
+          .map((e) => PopupMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13))))
+          .toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade400),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kNavy)),
+            const SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  Table header
+  // ════════════════════════════════════════════
+  Widget _buildTableHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      child: Row(
+        children: [
+          SizedBox(width: 50, child: Text('#', style: _headerStyle())),
+          Expanded(flex: 3, child: Text('User', style: _headerStyle())),
+          Expanded(flex: 3, child: Text('Email', style: _headerStyle())),
+          Expanded(flex: 2, child: Text('Role', style: _headerStyle())),
+          Expanded(flex: 2, child: Text('Status', style: _headerStyle())),
+          const SizedBox(width: 48), // action column
+        ],
+      ),
+    );
+  }
+
+  TextStyle _headerStyle() {
+    return TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600]);
+  }
+
+  // ════════════════════════════════════════════
+  //  User list
+  // ════════════════════════════════════════════
+  Widget _buildUserList() {
+    if (_filteredUsers.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.people_outline, size: 56, color: Colors.grey[300]),
+            const SizedBox(height: 12),
+            Text('No users found', style: TextStyle(fontSize: 15, color: Colors.grey[500])),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: _filteredUsers.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (context, index) {
+        final user = _filteredUsers[index];
+        return _buildUserRow(index + 1, user);
+      },
+    );
+  }
+
+  Widget _buildUserRow(int rowNum, User user) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 50,
+            child: Text(
+              '$rowNum',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kNavy),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              user.fullName ?? user.username,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: user.isActive ? _kNavy : Colors.grey,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              user.email,
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _getRoleColor(user.role).withAlpha(30),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _getRoleColor(user.role).withAlpha(100)),
+                  ),
+                  child: Text(
+                    user.role.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: _getRoleColor(user.role),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: user.isActive ? Colors.green.withAlpha(30) : Colors.red.withAlpha(30),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: user.isActive ? Colors.green.withAlpha(100) : Colors.red.withAlpha(100),
+                    ),
+                  ),
+                  child: Text(
+                    user.isActive ? 'ACTIVE' : 'SUSPENDED',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: user.isActive ? Colors.green[700] : Colors.red[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 48,
+            child: PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    _showEditUserDialog(user);
+                    break;
+                  case 'deactivate':
+                    _confirmDeactivate(user);
+                    break;
+                  case 'reactivate':
+                    _reactivateUser(user);
+                    break;
+                  case 'delete':
+                    _confirmDeleteUser(user);
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit, size: 18),
+                      SizedBox(width: 8),
+                      Text('Edit'),
+                    ],
+                  ),
+                ),
+                if (user.isActive)
+                  const PopupMenuItem(
+                    value: 'deactivate',
+                    child: Row(
+                      children: [
+                        Icon(Icons.block, size: 18, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Deactivate', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
+                  )
+                else
+                  const PopupMenuItem(
+                    value: 'reactivate',
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle, size: 18, color: Colors.green),
+                        SizedBox(width: 8),
+                        Text('Reactivate', style: TextStyle(color: Colors.green)),
+                      ],
+                    ),
+                  ),
+                if (user.role != 'admin')
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_forever, size: 18, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Delete', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  Filtering / Sorting
+  // ════════════════════════════════════════════
+  void _applyFilters() {
+    List<User> result = List.from(_users);
+
+    // Search
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      result = result.where((u) {
+        return (u.fullName ?? '').toLowerCase().contains(q) ||
+            u.username.toLowerCase().contains(q) ||
+            u.email.toLowerCase().contains(q);
+      }).toList();
+    }
+
+    // Role
+    switch (_roleFilter) {
+      case 'Admin':
+        result = result.where((u) => u.role == 'admin').toList();
+        break;
+      case 'Editor':
+        result = result.where((u) => u.role == 'editor').toList();
+        break;
+      case 'Viewer':
+        result = result.where((u) => u.role == 'viewer').toList();
+        break;
+    }
+
+    // Status
+    switch (_statusFilter) {
+      case 'Active':
+        result = result.where((u) => u.isActive).toList();
+        break;
+      case 'Suspended':
+        result = result.where((u) => !u.isActive).toList();
+        break;
+    }
+
+    // Sort
+    switch (_sortMode) {
+      case 'Sort by Name':
+        result.sort((a, b) => (a.fullName ?? a.username).compareTo(b.fullName ?? b.username));
+        break;
+      case 'Sort by Role':
+        result.sort((a, b) => a.role.compareTo(b.role));
+        break;
+      case 'Sort by Date':
+        result.sort((a, b) => (b.createdAt ?? DateTime(2000)).compareTo(a.createdAt ?? DateTime(2000)));
+        break;
+    }
+
+    setState(() => _filteredUsers = result);
   }
 
   Color _getRoleColor(String role) {

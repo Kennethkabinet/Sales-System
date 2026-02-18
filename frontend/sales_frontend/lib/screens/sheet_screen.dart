@@ -127,6 +127,16 @@ class _SheetScreenState extends State<SheetScreen> {
   final _horizontalScrollController = ScrollController();
   final _verticalScrollController = ScrollController();
   
+  // Ribbon toolbar state
+  String _selectedRibbonTab = 'Edit';
+
+  // Cell formatting state – key is "row,col"
+  final Map<String, Set<String>> _cellFormats = {}; // e.g. {'bold','italic','underline'}
+  final Map<String, double> _cellFontSizes = {};    // custom font size
+  final Map<String, TextAlign> _cellAlignments = {}; // custom alignment
+  double _currentFontSize = 13.0;
+  static const List<double> _fontSizeOptions = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32];
+  
   // Timer for periodic status updates
   Timer? _statusTimer;
 
@@ -1355,234 +1365,854 @@ class _SheetScreenState extends State<SheetScreen> {
     super.dispose();
   }
 
+  // ─── Theme colors (match dashboard) ───
+  static const Color _kSidebarBg = Color(0xFFCD5C5C);
+  static const Color _kContentBg = Color(0xFFFDF5F0);
+  static const Color _kNavy = Color(0xFF1E3A6E);
+  static const Color _kBlue = Color(0xFF3B5998);
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Consumer<AuthProvider>(
-        builder: (context, auth, _) {
-          // Determine role-based access
-          final role = auth.user?.role ?? '';
-          final isViewer = role == 'viewer';
-          final isReadOnly = widget.readOnly || isViewer;
+    return Consumer<AuthProvider>(
+      builder: (context, auth, _) {
+        final role = auth.user?.role ?? '';
+        final isViewer = role == 'viewer';
 
-          return Column(
-            children: [
-              // Toolbar
-              _buildToolbar(),
-              const Divider(height: 1),
-              // Content
-              Expanded(
-                child: Row(
-                  children: [
-                    // Sheet list sidebar
-                    _buildSheetList(),
-                    const VerticalDivider(width: 1),
-                    // Spreadsheet with status bar
-                    Expanded(
-                      child: Column(
+        // If a sheet is opened, show the spreadsheet editor
+        if (_currentSheet != null) {
+          return Scaffold(
+            backgroundColor: _kContentBg,
+            body: Column(
+              children: [
+                // ── Red header bar ──
+                _buildRedHeader(),
+                // ── Sheet name + Save bar ──
+                _buildSheetNameBar(),
+                // ── Ribbon toolbar ──
+                _buildRibbonToolbar(),
+                // ── Formula bar ──
+                _buildFormulaBar(),
+                // ── Status bar for lock info ──
+                if (_currentSheet != null) _buildStatusBar(),
+                // ── Spreadsheet grid ──
+                Expanded(
+                  child: _isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : _buildSpreadsheetGrid2(),
+                ),
+                // ── Selection info bar ──
+                _buildSelectionInfoBar(),
+                // ── Sheet tabs at bottom ──
+                _buildSheetTabs(),
+              ],
+            ),
+          );
+        }
+
+        // Otherwise show the Work Sheets landing page
+        return Scaffold(
+          backgroundColor: _kContentBg,
+          body: _isLoading && _sheets.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : _buildSheetListView(auth, isViewer),
+        );
+      },
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Work Sheets Landing View (matches screenshot)
+  // ═══════════════════════════════════════════════════════
+  Widget _buildSheetListView(AuthProvider auth, bool isViewer) {
+    // Sort sheets by updated date for "recent"
+    final sortedSheets = List<SheetModel>.from(_sheets)
+      ..sort((a, b) {
+        final aDate = a.updatedAt ?? a.createdAt ?? DateTime(2000);
+        final bDate = b.updatedAt ?? b.createdAt ?? DateTime(2000);
+        return bDate.compareTo(aDate);
+      });
+    final recentSheets = sortedSheets.take(5).toList();
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Title ──
+          const Text(
+            'WORK SHEETS',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+              color: _kNavy,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Action buttons row ──
+          if (!isViewer)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                _buildOutlinedBtn(
+                  icon: Icons.create_new_folder_outlined,
+                  label: 'New Folder',
+                  onPressed: () {}, // placeholder
+                ),
+                const SizedBox(width: 10),
+                _buildOutlinedBtn(
+                  icon: Icons.upload_file,
+                  label: 'Import Excel',
+                  onPressed: _importSheet,
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton.icon(
+                  onPressed: _createNewSheet,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('New Sheet'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _kNavy,
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              ],
+            ),
+
+          const SizedBox(height: 20),
+
+          // ── Recent Sheets ──
+          if (recentSheets.isNotEmpty) ...[
+            const Text(
+              'Recent Sheets',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: _kSidebarBg,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 125,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: recentSheets.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 14),
+                itemBuilder: (context, index) {
+                  final sheet = recentSheets[index];
+                  return _buildRecentCard(sheet);
+                },
+              ),
+            ),
+            const SizedBox(height: 28),
+          ],
+
+          // ── All Sheets table ──
+          const Text(
+            'All Sheets',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              color: _kBlue,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          if (_sheets.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                children: [
+                  Icon(Icons.description_outlined,
+                      size: 48, color: Colors.grey[300]),
+                  const SizedBox(height: 12),
+                  Text(
+                    isViewer
+                        ? 'No sheets shared with you yet'
+                        : 'No sheets yet — create one!',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 14),
+                  ),
+                ],
+              ),
+            )
+          else
+            _buildAllSheetsTable(auth),
+        ],
+      ),
+    );
+  }
+
+  // ── Recent sheet card ──
+  Widget _buildRecentCard(SheetModel sheet) {
+    final timeAgo = _timeAgo(sheet.updatedAt ?? sheet.createdAt);
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _loadSheetData(sheet.id),
+      child: Container(
+        width: 160,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.green[600],
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child:
+                  const Icon(Icons.description, color: Colors.white, size: 20),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              sheet.name,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              timeAgo,
+              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── All Sheets data table ──
+  Widget _buildAllSheetsTable(AuthProvider auth) {
+    final role = auth.user?.role ?? '';
+    final canManage = role == 'admin' || role == 'editor' || role == 'manager';
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade100),
+      ),
+      child: DataTable(
+        headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
+        headingTextStyle: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          color: Colors.grey[700],
+        ),
+        dataRowMinHeight: 48,
+        dataRowMaxHeight: 56,
+        columnSpacing: 24,
+        columns: const [
+          DataColumn(label: Text('Name')),
+          DataColumn(label: Text('Owner')),
+          DataColumn(label: Text('Rows'), numeric: true),
+          DataColumn(label: Text('Created')),
+          DataColumn(label: Text('Last Modified')),
+          DataColumn(label: Text('Actions')),
+        ],
+        rows: _sheets.map((sheet) {
+          return DataRow(
+            cells: [
+              // Name
+              DataCell(
+                InkWell(
+                  onTap: () => _loadSheetData(sheet.id),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: Colors.green[600],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Icon(Icons.description,
+                            color: Colors.white, size: 16),
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Status Bar
-                          if (_currentSheet != null) _buildStatusBar(),
-                          // Main content
-                          Expanded(
-                            child: _isLoading
-                                ? const Center(child: CircularProgressIndicator())
-                                : _currentSheet == null
-                                    ? _buildEmptyState()
-                                    : _buildSpreadsheet(),
+                          Text(
+                            sheet.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            '${sheet.rows.length} rows',
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[400]),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+              ),
+              // Owner
+              DataCell(Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 12,
+                    backgroundColor: Colors.grey[300],
+                    child: Icon(Icons.person, size: 14, color: Colors.grey[600]),
+                  ),
+                  const SizedBox(width: 6),
+                  Text('admin', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                ],
+              )),
+              // Rows
+              DataCell(Text(
+                '${sheet.rows.length}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              )),
+              // Created
+              DataCell(Text(
+                _formatDate(sheet.createdAt),
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              )),
+              // Last Modified
+              DataCell(Text(
+                _formatDate(sheet.updatedAt ?? sheet.createdAt),
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              )),
+              // Actions
+              DataCell(
+                canManage
+                    ? PopupMenuButton<String>(
+                        icon: Icon(Icons.more_vert,
+                            size: 18, color: Colors.grey[500]),
+                        padding: EdgeInsets.zero,
+                        onSelected: (value) {
+                          if (value == 'open') _loadSheetData(sheet.id);
+                          if (value == 'rename') _renameSheet(sheet);
+                          if (value == 'delete') _confirmDeleteSheet(sheet);
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                              value: 'open', child: Text('Open')),
+                          const PopupMenuItem(
+                              value: 'rename', child: Text('Rename')),
+                          if (role == 'admin' || role == 'manager')
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Delete',
+                                  style: TextStyle(color: Colors.red)),
+                            ),
+                        ],
+                      )
+                    : const SizedBox(),
               ),
             ],
           );
-        },
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildToolbar() {
+  // ── Outlined action button ──
+  Widget _buildOutlinedBtn({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18, color: _kNavy),
+      label: Text(label, style: const TextStyle(color: _kNavy, fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: _kNavy),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  // ── Date formatter ──
+  String _formatDate(DateTime? dt) {
+    if (dt == null) return '-';
+    return '${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')}/${dt.year}';
+  }
+
+  String _timeAgo(DateTime? dt) {
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return _formatDate(dt);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Red Header Bar
+  // ═══════════════════════════════════════════════════════
+  Widget _buildRedHeader() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
+      height: 48,
+      color: _kSidebarBg,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.menu, color: Colors.white, size: 22),
+            tooltip: 'Back to Work Sheets',
+            onPressed: () {
+              setState(() {
+                _currentSheet = null;
+                _selectedRow = null;
+                _selectedCol = null;
+                _selectionEndRow = null;
+                _selectionEndCol = null;
+                _editingRow = null;
+                _editingCol = null;
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'WORK SHEETS',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+              letterSpacing: 0.5,
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Sheet Name + Save Bar
+  // ═══════════════════════════════════════════════════════
+  Widget _buildSheetNameBar() {
+    final isViewer = (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') == 'viewer';
+    return Container(
+      height: 40,
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          // Sheet Name - Flexible to prevent overflow
+          Icon(Icons.description, size: 18, color: Colors.green[700]),
+          const SizedBox(width: 8),
           Expanded(
+            child: Text(
+              _currentSheet?.name ?? 'Untitled',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[800],
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (!widget.readOnly && !isViewer)
+            ElevatedButton.icon(
+              onPressed: _canEditSheet() ? _saveSheet : null,
+              icon: const Icon(Icons.save, size: 16),
+              label: const Text('Save', style: TextStyle(fontSize: 13)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _canEditSheet() ? _kBlue : Colors.grey[400],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                elevation: 0,
+                minimumSize: const Size(0, 30),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Ribbon Toolbar (File / Edit / Structure tabs)
+  // ═══════════════════════════════════════════════════════
+  Widget _buildRibbonToolbar() {
+    final isViewer = (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') == 'viewer';
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        border: Border(
+          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Tab headers
+          Container(
+            height: 32,
+            color: Colors.white,
             child: Row(
               children: [
-                Icon(Icons.table_chart, color: Colors.blue[700], size: 20),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    _currentSheet?.name ?? 'No Sheet Selected',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                ),
-                if (_currentSheet != null && !widget.readOnly && (() {
-                  final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-                  return r == 'admin' || r == 'editor';
-                }())) ...[
-                  const SizedBox(width: 4),
-                  IconButton(
-                    icon: Icon(Icons.edit, size: 16, color: Colors.blue[600]),
-                    tooltip: 'Rename sheet',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: () => _renameSheet(_currentSheet!),
-                  ),
-                ],
+                _buildRibbonTab('File'),
+                _buildRibbonTab('Edit'),
+                _buildRibbonTab('Structure'),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          
-          // Compact buttons in a scrollable row
-          Expanded(
-            flex: 2,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  // Export button (always visible)
-                  _buildCompactButton(
-                    icon: Icons.download,
-                    label: 'Export',
-                    onPressed: _showExportMenu,
-                    color: Colors.green[700]!,
-                  ),
-                  
-                  // Edit mode buttons (hidden in read-only mode or for viewers)
-                  if (!widget.readOnly && Provider.of<AuthProvider>(context, listen: false).user?.role != 'viewer') ...[
-                    const SizedBox(width: 4),
-                    // New Sheet
-                    _buildCompactButton(
-                      icon: Icons.add,
-                      label: 'New',
-                      onPressed: _createNewSheet,
-                      color: Colors.blue,
-                    ),
-                    const SizedBox(width: 4),
-                    
-                    // Import
-                    _buildCompactButton(
-                      icon: Icons.upload,
-                      label: 'Import',
-                      onPressed: _canEditSheet() ? _importSheet : null,
-                      color: Colors.green[700]!,
-                    ),
-                    
-                    _buildVerticalDivider(),
-                    
-                    // Collaborative editing controls
-                    ..._buildCollaborativeControls(),
-                    
-                    _buildVerticalDivider(),
-                    
-                    // Columns
-                    _buildCompactButton(
-                      icon: Icons.view_column,
-                      label: '+Col',
-                      onPressed: _canEditSheet() ? _addColumn : null,
-                      color: Colors.indigo,
-                    ),
-                    const SizedBox(width: 4),
-                    _buildCompactButton(
-                      icon: Icons.remove,
-                      label: '-Col',
-                      onPressed: _canEditSheet() ? _deleteColumn : null,
-                      color: Colors.red,
-                    ),
-                    
-                    _buildVerticalDivider(),
-                    
-                    // Rows
-                    _buildCompactButton(
-                      icon: Icons.table_rows,
-                      label: '+Row',
-                      onPressed: _canEditSheet() ? _addRow : null,
-                      color: Colors.indigo,
-                    ),
-                    const SizedBox(width: 4),
-                    _buildCompactButton(
-                      icon: Icons.remove,
-                      label: '-Row',
-                      onPressed: _canEditSheet() ? _deleteRow : null,
-                      color: Colors.red,
-                    ),
-                    
-                    _buildVerticalDivider(),
-                    
-                    // Save Button
-                    ElevatedButton.icon(
-                      onPressed: _canEditSheet() ? _saveSheet : null,
-                      icon: const Icon(Icons.save, size: 16),
-                      label: const Text('Save', style: TextStyle(fontSize: 13)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _canEditSheet() ? Colors.blue[600] : Colors.grey[400],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        elevation: 1,
-                        minimumSize: const Size(0, 32),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+          // Tab content
+          Container(
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.white,
+            child: _buildRibbonContent(isViewer),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCompactButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-    required Color color,
-  }) {
+  Widget _buildRibbonTab(String label) {
+    final isSelected = _selectedRibbonTab == label;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedRibbonTab = label),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: isSelected ? _kSidebarBg : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+            color: isSelected ? _kSidebarBg : Colors.grey[600],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRibbonContent(bool isViewer) {
+    switch (_selectedRibbonTab) {
+      case 'File':
+        return _buildFileRibbon(isViewer);
+      case 'Edit':
+        return _buildEditRibbon(isViewer);
+      case 'Structure':
+        return _buildStructureRibbon(isViewer);
+      default:
+        return const SizedBox();
+    }
+  }
+
+  // ── File ribbon: Import, Export, New ──
+  Widget _buildFileRibbon(bool isViewer) {
+    return Row(
+      children: [
+        if (!isViewer && !widget.readOnly) ...[
+          _buildRibbonButton(Icons.upload_file, 'Import', _canEditSheet() ? _importSheet : null),
+          const SizedBox(width: 6),
+        ],
+        _buildRibbonButton(Icons.download, 'Export', _showExportMenu),
+        if (!isViewer && !widget.readOnly) ...[
+          const SizedBox(width: 6),
+          _buildRibbonButton(Icons.add_circle_outline, 'New', _createNewSheet),
+        ],
+      ],
+    );
+  }
+
+  // ── Edit ribbon: B, I, U, font, align, Edit/Lock, Show ──
+  Widget _buildEditRibbon(bool isViewer) {
+    if (isViewer || widget.readOnly) {
+      return Row(
+        children: [
+          Text('View-only mode', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+        ],
+      );
+    }
+
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final userRole = authProvider.user?.role ?? '';
+    final canCollab = userRole == 'admin' || userRole == 'editor' || userRole == 'user';
+    final isLockedByMe = _isLocked && _lockedByUser != null &&
+        (_lockedByUser == authProvider.user?.username || userRole == 'admin');
+
+    // Current selection formatting state
+    final key = (_selectedRow != null && _selectedCol != null)
+        ? '${_selectedRow!},${_selectedCol!}'
+        : null;
+    final formats = key != null ? (_cellFormats[key] ?? <String>{}) : <String>{};
+    final isBold = formats.contains('bold');
+    final isItalic = formats.contains('italic');
+    final isUnderline = formats.contains('underline');
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          // ── Text formatting icons ──
+          _buildFormatToggle(Icons.format_bold, 'Bold', isBold, () => _toggleFormat('bold')),
+          _buildFormatToggle(Icons.format_italic, 'Italic', isItalic, () => _toggleFormat('italic')),
+          _buildFormatToggle(Icons.format_underlined, 'Underline', isUnderline, () => _toggleFormat('underline')),
+          _buildRibbonDivider(),
+          _buildFontSizeButton(),
+          const SizedBox(width: 4),
+          _buildAlignmentButton(),
+          _buildRibbonDivider(),
+
+          // ── Edit button ──
+          if (canCollab)
+            _buildRibbonButton(
+              Icons.edit,
+              _isLocked && isLockedByMe ? 'Editing' : 'Edit',
+              _isLocked
+                  ? (isLockedByMe ? null : null)
+                  : _lockSheet,
+            ),
+          if (canCollab) const SizedBox(width: 6),
+
+          // ── Lock / Unlock button ──
+          if (canCollab)
+            _buildRibbonButton(
+              _isLocked ? Icons.lock : Icons.lock_outline,
+              _isLocked ? 'Unlock' : 'Lock',
+              _isLocked
+                  ? (isLockedByMe ? _unlockSheet : null)
+                  : _lockSheet,
+            ),
+          if (canCollab) const SizedBox(width: 6),
+
+          // ── Show / Hide button (admin only) ──
+          if (userRole == 'admin' && _currentSheet != null)
+            _buildRibbonButton(
+              _currentSheet!.shownToViewers ? Icons.visibility : Icons.visibility_off,
+              _currentSheet!.shownToViewers ? 'Hide' : 'Show',
+              () => _toggleSheetVisibility(
+                _currentSheet!.id,
+                !_currentSheet!.shownToViewers,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ── Formatting helpers ──
+  String _cellKey(int row, int col) => '$row,$col';
+
+  void _toggleFormat(String fmt) {
+    if (_selectedRow == null || _selectedCol == null) return;
+    final bounds = _getSelectionBounds();
+    setState(() {
+      for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
+        for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
+          final k = _cellKey(r, c);
+          _cellFormats.putIfAbsent(k, () => <String>{});
+          if (_cellFormats[k]!.contains(fmt)) {
+            _cellFormats[k]!.remove(fmt);
+          } else {
+            _cellFormats[k]!.add(fmt);
+          }
+        }
+      }
+    });
+  }
+
+  void _setFontSize(double size) {
+    if (_selectedRow == null || _selectedCol == null) return;
+    final bounds = _getSelectionBounds();
+    setState(() {
+      _currentFontSize = size;
+      for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
+        for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
+          _cellFontSizes[_cellKey(r, c)] = size;
+        }
+      }
+    });
+  }
+
+  void _setAlignment(TextAlign align) {
+    if (_selectedRow == null || _selectedCol == null) return;
+    final bounds = _getSelectionBounds();
+    setState(() {
+      for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
+        for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
+          _cellAlignments[_cellKey(r, c)] = align;
+        }
+      }
+    });
+  }
+
+  Widget _buildFormatToggle(IconData icon, String tooltip, bool active, VoidCallback onPressed) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? _kNavy.withOpacity(0.12) : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+            border: active ? Border.all(color: _kNavy.withOpacity(0.3)) : null,
+          ),
+          child: Icon(icon, size: 18, color: _kNavy),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFontSizeButton() {
+    return PopupMenuButton<double>(
+      tooltip: 'Font Size',
+      onSelected: _setFontSize,
+      offset: const Offset(0, 36),
+      child: Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.text_fields, size: 16, color: _kNavy),
+            const SizedBox(width: 4),
+            Text(
+              '${_currentFontSize.toInt()}',
+              style: TextStyle(fontSize: 12, color: _kNavy, fontWeight: FontWeight.w500),
+            ),
+            Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+      itemBuilder: (_) => _fontSizeOptions.map((s) {
+        return PopupMenuItem<double>(
+          value: s,
+          child: Text('${s.toInt()} px', style: TextStyle(
+            fontSize: s.clamp(11, 18),
+            fontWeight: s == _currentFontSize ? FontWeight.bold : FontWeight.normal,
+          )),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildAlignmentButton() {
+    // Determine current alignment icon
+    IconData alignIcon = Icons.format_align_left;
+    if (_selectedRow != null && _selectedCol != null) {
+      final a = _cellAlignments[_cellKey(_selectedRow!, _selectedCol!)];
+      if (a == TextAlign.center) alignIcon = Icons.format_align_center;
+      if (a == TextAlign.right) alignIcon = Icons.format_align_right;
+    }
+    return PopupMenuButton<TextAlign>(
+      tooltip: 'Alignment',
+      onSelected: _setAlignment,
+      offset: const Offset(0, 36),
+      child: Container(
+        width: 32,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(alignIcon, size: 18, color: _kNavy),
+      ),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: TextAlign.left, child: Row(children: [
+          Icon(Icons.format_align_left, size: 18), SizedBox(width: 8), Text('Left'),
+        ])),
+        const PopupMenuItem(value: TextAlign.center, child: Row(children: [
+          Icon(Icons.format_align_center, size: 18), SizedBox(width: 8), Text('Center'),
+        ])),
+        const PopupMenuItem(value: TextAlign.right, child: Row(children: [
+          Icon(Icons.format_align_right, size: 18), SizedBox(width: 8), Text('Right'),
+        ])),
+      ],
+    );
+  }
+
+  // ── Structure ribbon: +Column, +Row, -Column, -Row ──
+  Widget _buildStructureRibbon(bool isViewer) {
+    if (isViewer || widget.readOnly) {
+      return Row(
+        children: [
+          Text('View-only mode', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        _buildRibbonButton(Icons.view_column_outlined, '+ Column', _canEditSheet() ? _addColumn : null),
+        const SizedBox(width: 6),
+        _buildRibbonButton(Icons.table_rows_outlined, '+ Row', _canEditSheet() ? _addRow : null),
+        const SizedBox(width: 6),
+        _buildRibbonButton(Icons.remove_circle_outline, '- Column', _canEditSheet() ? _deleteColumn : null),
+        const SizedBox(width: 6),
+        _buildRibbonButton(Icons.remove_circle_outline, '- Row', _canEditSheet() ? _deleteRow : null),
+      ],
+    );
+  }
+
+  // ── Ribbon sub-widgets ──
+  Widget _buildRibbonButton(IconData icon, String label, VoidCallback? onPressed) {
+    final enabled = onPressed != null;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            border: Border.all(color: color.withOpacity(0.3)),
+            border: Border.all(color: enabled ? Colors.grey[300]! : Colors.grey[200]!),
             borderRadius: BorderRadius.circular(6),
-            color: color.withOpacity(0.05),
+            color: enabled ? Colors.white : Colors.grey[100],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 4),
+              Icon(icon, size: 16, color: enabled ? _kNavy : Colors.grey[400]),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
-                  color: color,
+                  color: enabled ? _kNavy : Colors.grey[400],
                 ),
               ),
             ],
@@ -1592,63 +2222,16 @@ class _SheetScreenState extends State<SheetScreen> {
     );
   }
 
-  /// Build collaborative editing controls for toolbar
-  List<Widget> _buildCollaborativeControls() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final userRole = authProvider.user?.role ?? '';
-    final currentUserId = authProvider.user?.id ?? 0;
-    final controls = <Widget>[];
-    
-    if (_currentSheet == null) return controls;
-    
-    // Show/Hide button for admin only
-    if (userRole == 'admin') {
-      controls.add(_buildCompactButton(
-        icon: _currentSheet!.shownToViewers ? Icons.visibility : Icons.visibility_off,
-        label: _currentSheet!.shownToViewers ? 'Hide' : 'Show',
-        onPressed: () => _toggleSheetVisibility(
-          _currentSheet!.id, 
-          !_currentSheet!.shownToViewers
-        ),
-        color: _currentSheet!.shownToViewers ? Colors.orange : Colors.blue,
-      ));
-      controls.add(const SizedBox(width: 4));
-    }
-    
-    // Lock/Unlock controls for editors and admins
-    if (userRole == 'admin' || userRole == 'editor' || userRole == 'user') {
-      if (_isLocked) {
-        if (_lockedByUser != null && (_lockedByUser == authProvider.user?.username || userRole == 'admin')) {
-          // Show unlock button for sheet owner or admin
-          controls.add(_buildCompactButton(
-            icon: Icons.lock_open,
-            label: 'Unlock',
-            onPressed: _unlockSheet,
-            color: Colors.green,
-          ));
-        } else {
-          // Show locked status
-          controls.add(_buildCompactButton(
-            icon: Icons.lock,
-            label: 'Locked',
-            onPressed: null,
-            color: Colors.red,
-          ));
-        }
-      } else {
-        // Show lock button for editors
-        controls.add(_buildCompactButton(
-          icon: Icons.edit,
-          label: 'Lock & Edit',
-          onPressed: _lockSheet,
-          color: Colors.blue,
-        ));
-      }
-      controls.add(const SizedBox(width: 4));
-    }
-    
-    return controls;
+  Widget _buildRibbonDivider() {
+    return Container(
+      height: 24,
+      width: 1,
+      color: Colors.grey[300],
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+    );
   }
+
+  // (collaborative controls are now inlined in _buildEditRibbon)
 
   Widget _buildStatusBar() {
     if (_currentSheet == null) return const SizedBox();
@@ -1689,267 +2272,112 @@ class _SheetScreenState extends State<SheetScreen> {
     return const SizedBox();
   }
 
-  Widget _buildVerticalDivider() {
-    return Container(
-      height: 24,
-      width: 1,
-      color: Colors.grey[300],
-      margin: const EdgeInsets.symmetric(horizontal: 8),
-    );
-  }
-
-  Widget _buildSheetList() {
-    return Container(
-      width: 220,
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        border: Border(
-          right: BorderSide(color: Colors.grey[300]!, width: 1),
+  // ═══════════════════════════════════════════════════════
+  //  Spreadsheet Grid (new wrapper without internal formula bar)
+  // ═══════════════════════════════════════════════════════
+  Widget _buildSpreadsheetGrid2() {
+    return Focus(
+      focusNode: _spreadsheetFocusNode,
+      onKeyEvent: (node, event) {
+        _handleKeyEvent(event);
+        if (_editingRow != null) return KeyEventResult.ignored;
+        return KeyEventResult.handled;
+      },
+      child: GestureDetector(
+        onTap: () {
+          if (_editingRow != null) {
+            _saveEdit();
+          }
+          _spreadsheetFocusNode.requestFocus();
+        },
+        child: Scrollbar(
+          controller: _verticalScrollController,
+          thumbVisibility: true,
+          trackVisibility: true,
+          child: Scrollbar(
+            controller: _horizontalScrollController,
+            thumbVisibility: true,
+            trackVisibility: true,
+            notificationPredicate: (notification) => notification.depth == 1,
+            child: SingleChildScrollView(
+              controller: _verticalScrollController,
+              child: SingleChildScrollView(
+                controller: _horizontalScrollController,
+                scrollDirection: Axis.horizontal,
+                child: _buildSpreadsheetGrid(),
+              ),
+            ),
+          ),
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(
-                bottom: BorderSide(color: Colors.grey[300]!, width: 1),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.folder_open, color: Colors.blue[700], size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'My Sheets',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    color: Colors.grey[800],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _sheets.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.description_outlined, 
-                            size: 48, 
-                            color: Colors.grey[400]
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No sheets yet',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 14,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Builder(
-                            builder: (context) {
-                              final viewerRole = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-                              return Text(
-                                viewerRole == 'viewer'
-                                    ? 'No sheets shared with you yet'
-                                    : 'Click "New" to create',
-                                style: TextStyle(
-                                  color: Colors.grey[500],
-                                  fontSize: 12,
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    itemCount: _sheets.length,
-                    itemBuilder: (context, index) {
-                      final sheet = _sheets[index];
-                      final isSelected = _currentSheet?.id == sheet.id;
-                      return Container(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isSelected ? Colors.blue[50] : Colors.transparent,
-                          borderRadius: BorderRadius.circular(6),
-                          border: isSelected
-                              ? Border.all(color: Colors.blue[200]!, width: 1)
-                              : null,
-                        ),
-                        child: ListTile(
-                          dense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 4,
-                          ),
-                          leading: Icon(
-                            Icons.table_chart,
-                            size: 20,
-                            color: isSelected ? Colors.blue[700] : Colors.grey[600],
-                          ),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  sheet.name,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                    color: isSelected ? Colors.blue[900] : Colors.grey[800],
-                                  ),
-                                ),
-                              ),
-                              // Status indicators
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // Lock indicator
-                                  if (sheet.isLocked && sheet.lockedByName != null)
-                                    Tooltip(
-                                      message: 'Locked by ${sheet.lockedByName}',
-                                      child: Icon(
-                                        Icons.lock,
-                                        size: 12,
-                                        color: Colors.red[500],
-                                      ),
-                                    ),
-                                  
-                                  // Editing indicator
-                                  if (sheet.isBeingEdited && sheet.editingUserName != null) ...[
-                                    if (sheet.isLocked && sheet.lockedByName != null)
-                                      const SizedBox(width: 4),
-                                    Tooltip(
-                                      message: 'Being edited by ${sheet.editingUserName}',
-                                      child: Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: Colors.green[500],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ],
-                          ),
-                          trailing: (() {
-                            final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-                            return r == 'admin' || r == 'editor' || r == 'manager';
-                          }())
-                            ? PopupMenuButton<String>(
-                                icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                tooltip: 'Sheet options',
-                                onSelected: (value) {
-                                  if (value == 'rename') {
-                                    _renameSheet(sheet);
-                                  } else if (value == 'delete') {
-                                    _confirmDeleteSheet(sheet);
-                                  }
-                                },
-                                itemBuilder: (context) {
-                                  final r = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-                                  return [
-                                    const PopupMenuItem<String>(
-                                      value: 'rename',
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.edit, size: 18, color: Colors.blue),
-                                          SizedBox(width: 8),
-                                          Text('Rename'),
-                                        ],
-                                      ),
-                                    ),
-                                    if (r == 'admin' || r == 'manager')
-                                      const PopupMenuItem<String>(
-                                        value: 'delete',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                                            SizedBox(width: 8),
-                                            Text('Delete', style: TextStyle(color: Colors.red)),
-                                          ],
-                                        ),
-                                      ),
-                                  ];
-                                },
-                              )
-                            : null,
-                          onTap: () => _loadSheetData(sheet.id),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
     );
   }
 
-  Widget _buildEmptyState() {
-    final role = Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
-    final isViewer = role == 'viewer';
-    
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+  // ═══════════════════════════════════════════════════════
+  //  Sheet Tabs at Bottom
+  // ═══════════════════════════════════════════════════════
+  Widget _buildSheetTabs() {
+    // Build tab list from loaded sheets, highlighting current
+    final visibleSheets = _sheets.take(10).toList();
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        border: Border(
+          top: BorderSide(color: Colors.grey[300]!, width: 1),
+        ),
+      ),
+      child: Row(
         children: [
-          Icon(
-            Icons.table_chart_outlined,
-            size: 120,
-            color: Colors.grey[300],
-          ),
-          const SizedBox(height: 24),
-          Text(
-            isViewer ? 'No Shared Sheets' : 'No Sheet Selected',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            isViewer 
-                ? 'Sheets shared by admin will appear here automatically'
-                : 'Select a sheet from the sidebar or create a new one',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
-          ),
-          if (!isViewer) ...[
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: _createNewSheet,
-              icon: const Icon(Icons.add),
-              label: const Text('Create New Sheet'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                textStyle: const TextStyle(fontSize: 16),
+          // Add sheet button
+          if (!widget.readOnly && (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') != 'viewer')
+            InkWell(
+              onTap: _createNewSheet,
+              child: Container(
+                width: 30,
+                height: 34,
+                alignment: Alignment.center,
+                child: Icon(Icons.add, size: 16, color: Colors.grey[600]),
               ),
             ),
-          ],
+          Container(width: 1, height: 34, color: Colors.grey[300]),
+          // Sheet tabs
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: visibleSheets.length,
+              itemBuilder: (context, index) {
+                final sheet = visibleSheets[index];
+                final isActive = sheet.id == _currentSheet?.id;
+                return GestureDetector(
+                  onTap: () {
+                    if (!isActive) _loadSheetData(sheet.id);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: isActive ? Colors.white : Colors.transparent,
+                      border: Border(
+                        right: BorderSide(color: Colors.grey[300]!, width: 1),
+                        top: isActive
+                            ? const BorderSide(color: _kSidebarBg, width: 2)
+                            : BorderSide.none,
+                      ),
+                    ),
+                    child: Text(
+                      sheet.name,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                        color: isActive ? _kNavy : Colors.grey[600],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
@@ -2051,56 +2479,6 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // =============== Excel-like Spreadsheet ===============
-
-  Widget _buildSpreadsheet() {
-    return Column(
-      children: [
-        // Formula bar
-        _buildFormulaBar(),
-        // Spreadsheet grid
-        Expanded(
-          child: Focus(
-            focusNode: _spreadsheetFocusNode,
-            onKeyEvent: (node, event) {
-              _handleKeyEvent(event);
-              // Let the event propagate for text input in TextField
-              if (_editingRow != null) return KeyEventResult.ignored;
-              return KeyEventResult.handled;
-            },
-            child: GestureDetector(
-              onTap: () {
-                if (_editingRow != null) {
-                  _saveEdit();
-                }
-                _spreadsheetFocusNode.requestFocus();
-              },
-              child: Scrollbar(
-                controller: _verticalScrollController,
-                thumbVisibility: true,
-                trackVisibility: true,
-                child: Scrollbar(
-                  controller: _horizontalScrollController,
-                  thumbVisibility: true,
-                  trackVisibility: true,
-                  notificationPredicate: (notification) => notification.depth == 1,
-                  child: SingleChildScrollView(
-                    controller: _verticalScrollController,
-                    child: SingleChildScrollView(
-                      controller: _horizontalScrollController,
-                      scrollDirection: Axis.horizontal,
-                      child: _buildSpreadsheetGrid(),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        // Selection info bar at bottom
-        _buildSelectionInfoBar(),
-      ],
-    );
-  }
 
   Widget _buildSpreadsheetGrid() {
     // Calculate total width
@@ -2417,22 +2795,41 @@ class _SheetScreenState extends State<SheetScreen> {
                       },
                     )
                   else
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                      child: Align(
-                        alignment: _isNumeric(value) ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Text(
-                          value,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.black87,
-                            fontFamily: 'Segoe UI',
+                    Builder(builder: (_) {
+                      final ck = _cellKey(rowIndex, colIndex);
+                      final fmts = _cellFormats[ck] ?? <String>{};
+                      final fontSize = _cellFontSizes[ck] ?? 13.0;
+                      final align = _cellAlignments[ck];
+                      Alignment cellAlign;
+                      if (align == TextAlign.center) {
+                        cellAlign = Alignment.center;
+                      } else if (align == TextAlign.right) {
+                        cellAlign = Alignment.centerRight;
+                      } else if (align == TextAlign.left) {
+                        cellAlign = Alignment.centerLeft;
+                      } else {
+                        cellAlign = _isNumeric(value) ? Alignment.centerRight : Alignment.centerLeft;
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                        child: Align(
+                          alignment: cellAlign,
+                          child: Text(
+                            value,
+                            style: TextStyle(
+                              fontSize: fontSize,
+                              color: Colors.black87,
+                              fontFamily: 'Segoe UI',
+                              fontWeight: fmts.contains('bold') ? FontWeight.bold : FontWeight.normal,
+                              fontStyle: fmts.contains('italic') ? FontStyle.italic : FontStyle.normal,
+                              decoration: fmts.contains('underline') ? TextDecoration.underline : TextDecoration.none,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
                           ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
                         ),
-                      ),
-                    ),
+                      );
+                    }),
                   // Active cell border (thick blue like Excel)
                   if (isActiveCell && !isEditing)
                     Positioned.fill(

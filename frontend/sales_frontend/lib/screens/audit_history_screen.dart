@@ -3,6 +3,10 @@ import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
 
+// ── Colour constants (matches dashboard) ──
+const Color _kContentBg = Color(0xFFFDF5F0);
+const Color _kNavy = Color(0xFF1E3A6E);
+
 class AuditHistoryScreen extends StatefulWidget {
   const AuditHistoryScreen({super.key});
 
@@ -13,6 +17,7 @@ class AuditHistoryScreen extends StatefulWidget {
 class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   String? _actionFilter;
   String? _entityFilter;
+  String _timeFilter = 'All Time';
   DateTime? _startDate;
   DateTime? _endDate;
 
@@ -24,145 +29,35 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
     });
   }
 
+  // ════════════════════════════════════════════
+  //  Build
+  // ════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _kContentBg,
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Audit History',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      onPressed: () => context.read<DataProvider>().loadAuditLogs(
-                        action: _actionFilter,
-                        entity: _entityFilter,
-                        startDate: _startDate,
-                        endDate: _endDate,
-                      ),
-                      tooltip: 'Refresh',
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.download),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Export feature coming soon')),
-                        );
-                      },
-                      tooltip: 'Export',
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // Filters
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _actionFilter,
-                        decoration: const InputDecoration(
-                          labelText: 'Action',
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: null, child: Text('All Actions')),
-                          DropdownMenuItem(value: 'CREATE', child: Text('Create')),
-                          DropdownMenuItem(value: 'UPDATE', child: Text('Update')),
-                          DropdownMenuItem(value: 'DELETE', child: Text('Delete')),
-                          DropdownMenuItem(value: 'LOGIN', child: Text('Login')),
-                          DropdownMenuItem(value: 'EXPORT', child: Text('Export')),
-                        ],
-                        onChanged: (value) {
-                          setState(() => _actionFilter = value);
-                          _applyFilters();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _entityFilter,
-                        decoration: const InputDecoration(
-                          labelText: 'Entity',
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: null, child: Text('All Entities')),
-                          DropdownMenuItem(value: 'file', child: Text('Files')),
-                          DropdownMenuItem(value: 'row', child: Text('Rows')),
-                          DropdownMenuItem(value: 'formula', child: Text('Formulas')),
-                          DropdownMenuItem(value: 'user', child: Text('Users')),
-                        ],
-                        onChanged: (value) {
-                          setState(() => _entityFilter = value);
-                          _applyFilters();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: InkWell(
-                        onTap: () => _selectDateRange(),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Date Range',
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _startDate != null && _endDate != null
-                                    ? '${_formatDateShort(_startDate!)} - ${_formatDateShort(_endDate!)}'
-                                    : 'All Time',
-                              ),
-                              const Icon(Icons.calendar_today, size: 18),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    TextButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _actionFilter = null;
-                          _entityFilter = null;
-                          _startDate = null;
-                          _endDate = null;
-                        });
-                        _applyFilters();
-                      },
-                      icon: const Icon(Icons.clear),
-                      label: const Text('Clear'),
-                    ),
-                  ],
-                ),
+            // ── Title ──
+            const Text(
+              'AUDIT HISTORY',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+                color: _kNavy,
+                letterSpacing: 0.5,
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 18),
 
-            // Audit logs list
+            // ── Filter row ──
+            _buildFilterRow(),
+            const SizedBox(height: 20),
+
+            // ── Log entries ──
             Expanded(
               child: Consumer<DataProvider>(
                 builder: (context, data, _) {
@@ -175,22 +70,25 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.history, size: 64, color: Colors.grey[400]),
+                          Icon(Icons.history, size: 64, color: Colors.grey[300]),
                           const SizedBox(height: 16),
                           Text(
                             'No audit logs found',
-                            style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.grey[500],
+                            ),
                           ),
                         ],
                       ),
                     );
                   }
 
-                  return ListView.builder(
+                  return ListView.separated(
                     itemCount: data.auditLogs.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
-                      final log = data.auditLogs[index];
-                      return _AuditLogCard(log: log);
+                      return _AuditLogTile(log: data.auditLogs[index]);
                     },
                   );
                 },
@@ -202,6 +100,153 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
     );
   }
 
+  // ════════════════════════════════════════════
+  //  Filter Row
+  // ════════════════════════════════════════════
+  Widget _buildFilterRow() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          // Action filter
+          Expanded(
+            child: _buildDropdown<String?>(
+              value: _actionFilter,
+              hint: 'All Actions',
+              items: const [
+                DropdownMenuItem(value: null, child: Text('All Actions')),
+                DropdownMenuItem(value: 'CREATE', child: Text('Create')),
+                DropdownMenuItem(value: 'UPDATE', child: Text('Update')),
+                DropdownMenuItem(value: 'DELETE', child: Text('Delete')),
+                DropdownMenuItem(value: 'LOGIN', child: Text('Login')),
+                DropdownMenuItem(value: 'LOGOUT', child: Text('Logout')),
+                DropdownMenuItem(value: 'EXPORT', child: Text('Export')),
+              ],
+              onChanged: (v) {
+                setState(() => _actionFilter = v);
+                _applyFilters();
+              },
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Entity filter
+          Expanded(
+            child: _buildDropdown<String?>(
+              value: _entityFilter,
+              hint: 'All Entities',
+              items: const [
+                DropdownMenuItem(value: null, child: Text('All Entities')),
+                DropdownMenuItem(value: 'users', child: Text('Users')),
+                DropdownMenuItem(value: 'file', child: Text('Files')),
+                DropdownMenuItem(value: 'row', child: Text('Rows')),
+                DropdownMenuItem(value: 'formula', child: Text('Formulas')),
+                DropdownMenuItem(value: 'sheets', child: Text('Sheets')),
+              ],
+              onChanged: (v) {
+                setState(() => _entityFilter = v);
+                _applyFilters();
+              },
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Time filter
+          Expanded(
+            child: _buildDropdown<String>(
+              value: _timeFilter,
+              hint: 'All Time',
+              items: const [
+                DropdownMenuItem(value: 'All Time', child: Text('All Time')),
+                DropdownMenuItem(value: 'Today', child: Text('Today')),
+                DropdownMenuItem(value: 'This Week', child: Text('This Week')),
+                DropdownMenuItem(value: 'This Month', child: Text('This Month')),
+                DropdownMenuItem(value: 'Custom', child: Text('Custom Range…')),
+              ],
+              onChanged: (v) async {
+                if (v == 'Custom') {
+                  await _selectDateRange();
+                } else {
+                  setState(() {
+                    _timeFilter = v ?? 'All Time';
+                    _computeDateRange();
+                  });
+                  _applyFilters();
+                }
+              },
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Clear button
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: _clearFilters,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.close, size: 16, color: Colors.grey[700]),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Clear',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDropdown<T>({
+    required T value,
+    required String hint,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(24),
+        color: Colors.white,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isExpanded: true,
+          icon: Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+          style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+          items: items,
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  Filter Helpers
+  // ════════════════════════════════════════════
   void _applyFilters() {
     context.read<DataProvider>().loadAuditLogs(
       action: _actionFilter,
@@ -209,6 +254,38 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
       startDate: _startDate,
       endDate: _endDate,
     );
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _actionFilter = null;
+      _entityFilter = null;
+      _timeFilter = 'All Time';
+      _startDate = null;
+      _endDate = null;
+    });
+    _applyFilters();
+  }
+
+  void _computeDateRange() {
+    final now = DateTime.now();
+    switch (_timeFilter) {
+      case 'Today':
+        _startDate = DateTime(now.year, now.month, now.day);
+        _endDate = now;
+        break;
+      case 'This Week':
+        _startDate = now.subtract(Duration(days: now.weekday - 1));
+        _endDate = now;
+        break;
+      case 'This Month':
+        _startDate = DateTime(now.year, now.month, 1);
+        _endDate = now;
+        break;
+      default:
+        _startDate = null;
+        _endDate = null;
+    }
   }
 
   Future<void> _selectDateRange() async {
@@ -223,282 +300,321 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
 
     if (picked != null) {
       setState(() {
+        _timeFilter = 'Custom';
         _startDate = picked.start;
         _endDate = picked.end;
       });
       _applyFilters();
     }
   }
-
-  String _formatDateShort(DateTime date) {
-    return '${date.month}/${date.day}';
-  }
 }
 
-class _AuditLogCard extends StatelessWidget {
+// ════════════════════════════════════════════════
+//  Single Audit Log Tile (matches screenshot)
+// ════════════════════════════════════════════════
+class _AuditLogTile extends StatefulWidget {
   final AuditLog log;
+  const _AuditLogTile({required this.log});
 
-  const _AuditLogCard({required this.log});
+  @override
+  State<_AuditLogTile> createState() => _AuditLogTileState();
+}
+
+class _AuditLogTileState extends State<_AuditLogTile> {
+  bool _expanded = false;
+
+  AuditLog get log => widget.log;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ExpansionTile(
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: _getActionColor(log.action).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          // ── Main row ──
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  // Action icon
+                  _buildActionIcon(),
+                  const SizedBox(width: 14),
+
+                  // Action badge
+                  _buildActionBadge(),
+                  const SizedBox(width: 14),
+
+                  // Entity info
+                  Expanded(child: _buildEntityInfo()),
+
+                  // Expand arrow
+                  Icon(
+                    _expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
+                    color: Colors.grey[500],
+                    size: 26,
+                  ),
+                ],
+              ),
+            ),
           ),
-          child: Icon(
-            _getActionIcon(log.action),
-            color: _getActionColor(log.action),
-            size: 20,
-          ),
+
+          // ── Expanded details ──
+          if (_expanded) _buildDetails(),
+        ],
+      ),
+    );
+  }
+
+  // ── Action icon (green for LOGIN/LOGOUT, teal for UPDATE, etc.) ──
+  Widget _buildActionIcon() {
+    final action = log.action.toUpperCase();
+    Color bgColor;
+    IconData icon;
+
+    switch (action) {
+      case 'LOGIN':
+      case 'LOGOUT':
+        bgColor = const Color(0xFF2E7D32); // dark green
+        icon = action == 'LOGOUT' ? Icons.logout : Icons.login;
+        break;
+      case 'UPDATE':
+        bgColor = const Color(0xFF00695C); // teal
+        icon = Icons.edit_note;
+        break;
+      case 'CREATE':
+        bgColor = const Color(0xFF2E7D32);
+        icon = Icons.add_circle_outline;
+        break;
+      case 'DELETE':
+        bgColor = const Color(0xFFC62828);
+        icon = Icons.delete_outline;
+        break;
+      case 'EXPORT':
+        bgColor = const Color(0xFF6A1B9A);
+        icon = Icons.download;
+        break;
+      default:
+        bgColor = Colors.grey;
+        icon = Icons.info_outline;
+    }
+
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, color: Colors.white, size: 22),
+    );
+  }
+
+  // ── Action badge (bordered label) ──
+  Widget _buildActionBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade400),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        log.action.toUpperCase(),
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: _kNavy,
+          letterSpacing: 0.3,
         ),
-        title: Row(
+      ),
+    );
+  }
+
+  // ── Entity info: entity type, user, description, time ──
+  Widget _buildEntityInfo() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            _ActionBadge(action: log.action),
-            const SizedBox(width: 8),
             Text(
               log.entityType,
-              style: const TextStyle(fontWeight: FontWeight.w500),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: _kNavy,
+              ),
             ),
-            if (log.entityName != null || log.entityId != null) ...[
-              const SizedBox(width: 4),
+            if (log.entityName != null) ...[
               Text(
-                log.entityName != null
-                    ? '- ${log.entityName}'
-                    : '#${log.entityId!.length > 8 ? '${log.entityId!.substring(0, 8)}...' : log.entityId!}',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                ' - ${log.entityName}',
+                style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+              ),
+            ] else if (log.description != null &&
+                log.description!.isNotEmpty) ...[
+              Flexible(
+                child: Text(
+                  ' - ${log.description}',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ],
         ),
-        subtitle: Row(
+        const SizedBox(height: 3),
+        Row(
           children: [
-            Icon(Icons.person, size: 14, color: Colors.grey[500]),
-            const SizedBox(width: 4),
-            Text(log.userName ?? 'Unknown'),
+            Text(
+              log.userName ?? 'Unknown',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
             const SizedBox(width: 16),
-            Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
+            Icon(Icons.access_time, size: 12, color: Colors.grey[400]),
             const SizedBox(width: 4),
-            Text(_formatDateTime(log.timestamp)),
+            Text(
+              _timeAgo(log.timestamp),
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
           ],
         ),
+      ],
+    );
+  }
+
+  // ── Expanded detail panel ──
+  Widget _buildDetails() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(74, 0, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+
+          if (log.description != null && log.description!.isNotEmpty) ...[
+            Text('Description',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.grey[600])),
+            const SizedBox(height: 4),
+            Text(log.description!, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+          ],
+
+          if (log.oldValue != null || log.newValue != null) ...[
+            Text('Changes',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.grey[600])),
+            const SizedBox(height: 8),
+            Row(
               children: [
-                if (log.description != null && log.description!.isNotEmpty) ...[
-                  Text(
-                    'Description',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[700],
+                if (log.oldValue != null)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red[200]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Old Value',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                  color: Colors.red[700])),
+                          const SizedBox(height: 4),
+                          Text(_formatValue(log.oldValue),
+                              style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(log.description!),
-                  const SizedBox(height: 16),
-                ],
-                if (log.oldValue != null || log.newValue != null) ...[
-                  Text(
-                    'Changes',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[700],
+                if (log.oldValue != null && log.newValue != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Icon(Icons.arrow_forward,
+                        size: 16, color: Colors.grey[400]),
+                  ),
+                if (log.newValue != null)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.green[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green[200]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('New Value',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                  color: Colors.green[700])),
+                          const SizedBox(height: 4),
+                          Text(_formatValue(log.newValue),
+                              style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (log.oldValue != null)
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.red[50],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.red[200]!),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Old Value',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.red[700],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatValue(log.oldValue),
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      if (log.oldValue != null && log.newValue != null)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.arrow_forward, color: Colors.grey[400]),
-                        ),
-                      if (log.newValue != null)
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.green[50],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.green[200]!),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'New Value',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.green[700],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatValue(log.newValue),
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Icon(Icons.computer, size: 14, color: Colors.grey[500]),
-                    const SizedBox(width: 4),
-                    Text(
-                      'IP: ${log.ipAddress ?? 'Unknown'}',
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                    ),
-                  ],
-                ),
               ],
             ),
+            const SizedBox(height: 12),
+          ],
+
+          Row(
+            children: [
+              Icon(Icons.computer, size: 13, color: Colors.grey[400]),
+              const SizedBox(width: 4),
+              Text(
+                'IP: ${log.ipAddress ?? 'Unknown'}',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+              const SizedBox(width: 16),
+              Icon(Icons.person_outline, size: 13, color: Colors.grey[400]),
+              const SizedBox(width: 4),
+              Text(
+                'User ID: ${log.userId ?? '-'}',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  IconData _getActionIcon(String action) {
-    switch (action.toUpperCase()) {
-      case 'CREATE':
-        return Icons.add_circle;
-      case 'UPDATE':
-        return Icons.edit;
-      case 'DELETE':
-        return Icons.delete;
-      case 'LOGIN':
-        return Icons.login;
-      case 'LOGOUT':
-        return Icons.logout;
-      case 'EXPORT':
-        return Icons.download;
-      default:
-        return Icons.info;
-    }
-  }
-
-  Color _getActionColor(String action) {
-    switch (action.toUpperCase()) {
-      case 'CREATE':
-        return Colors.green;
-      case 'UPDATE':
-        return Colors.blue;
-      case 'DELETE':
-        return Colors.red;
-      case 'LOGIN':
-      case 'LOGOUT':
-        return Colors.orange;
-      case 'EXPORT':
-        return Colors.purple;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  String _formatDateTime(DateTime? dt) {
+  // ── Helpers ──
+  String _timeAgo(DateTime? dt) {
     if (dt == null) return '';
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    
+    final diff = DateTime.now().difference(dt);
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
     if (diff.inHours < 24) return '${diff.inHours} hours ago';
     if (diff.inDays < 7) return '${diff.inDays} days ago';
-    
-    return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return '${dt.month}/${dt.day}/${dt.year}';
   }
 
   String _formatValue(dynamic value) {
     if (value == null) return 'null';
     if (value is Map) {
-      return value.entries
-          .map((e) => '${e.key}: ${e.value}')
-          .join('\n');
+      return value.entries.map((e) => '${e.key}: ${e.value}').join('\n');
     }
     return value.toString();
-  }
-}
-
-class _ActionBadge extends StatelessWidget {
-  final String action;
-
-  const _ActionBadge({required this.action});
-
-  @override
-  Widget build(BuildContext context) {
-    Color color;
-    switch (action.toUpperCase()) {
-      case 'CREATE':
-        color = Colors.green;
-        break;
-      case 'UPDATE':
-        color = Colors.blue;
-        break;
-      case 'DELETE':
-        color = Colors.red;
-        break;
-      default:
-        color = Colors.grey;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withOpacity(0.5)),
-      ),
-      child: Text(
-        action.toUpperCase(),
-        style: TextStyle(
-          color: color,
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
   }
 }
