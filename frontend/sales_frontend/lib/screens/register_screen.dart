@@ -57,6 +57,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: Theme.of(context).primaryColor,
+        automaticallyImplyLeading: false,
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -82,9 +83,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           const SizedBox(height: 16),
                           Text(
                             'Create Account',
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                           ),
                           const SizedBox(height: 24),
 
@@ -99,10 +103,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               ),
                               child: Row(
                                 children: [
-                                  Icon(Icons.error_outline, color: Colors.red[700]),
+                                  Icon(Icons.error_outline,
+                                      color: Colors.red[700]),
                                   const SizedBox(width: 8),
                                   Expanded(
-                                    child: Text(auth.error!, style: TextStyle(color: Colors.red[700])),
+                                    child: Text(auth.error!,
+                                        style:
+                                            TextStyle(color: Colors.red[700])),
                                   ),
                                 ],
                               ),
@@ -163,7 +170,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               if (value == null || value.trim().isEmpty) {
                                 return 'Please enter your email';
                               }
-                              if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
+                              if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$')
+                                  .hasMatch(value)) {
                                 return 'Please enter a valid email';
                               }
                               return null;
@@ -179,8 +187,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               prefixIcon: const Icon(Icons.lock),
                               border: const OutlineInputBorder(),
                               suffixIcon: IconButton(
-                                icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
-                                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                                icon: Icon(_obscurePassword
+                                    ? Icons.visibility
+                                    : Icons.visibility_off),
+                                onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword),
                               ),
                             ),
                             obscureText: _obscurePassword,
@@ -205,8 +216,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               prefixIcon: const Icon(Icons.lock_outline),
                               border: const OutlineInputBorder(),
                               suffixIcon: IconButton(
-                                icon: Icon(_obscureConfirmPassword ? Icons.visibility : Icons.visibility_off),
-                                onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                                icon: Icon(_obscureConfirmPassword
+                                    ? Icons.visibility
+                                    : Icons.visibility_off),
+                                onPressed: () => setState(() =>
+                                    _obscureConfirmPassword =
+                                        !_obscureConfirmPassword),
                               ),
                             ),
                             obscureText: _obscureConfirmPassword,
@@ -229,7 +244,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             width: double.infinity,
                             height: 48,
                             child: ElevatedButton(
-                              onPressed: auth.isLoading ? null : _handleRegister,
+                              onPressed:
+                                  auth.isLoading ? null : _handleRegister,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Theme.of(context).primaryColor,
                                 foregroundColor: Colors.white,
@@ -240,12 +256,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                       height: 24,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                                        valueColor: AlwaysStoppedAnimation(
+                                            Colors.white),
                                       ),
                                     )
                                   : const Text(
                                       'REGISTER',
-                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                      style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold),
                                     ),
                             ),
                           ),

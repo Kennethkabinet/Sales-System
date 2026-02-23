@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../providers/data_provider.dart';
 import 'login_screen.dart';
 import 'sheet_screen.dart';
 
@@ -20,7 +19,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
-    
+
     return Scaffold(
       body: Column(
         children: [
@@ -49,11 +48,11 @@ class _EditorDashboardState extends State<EditorDashboard> {
                 Text(
                   'Sheet Editor',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
                 const Spacer(),
-                
+
                 // Real-time sync indicator
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -90,20 +89,22 @@ class _EditorDashboardState extends State<EditorDashboard> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                
+
                 // Edit mode badge
                 Chip(
                   avatar: const Icon(Icons.edit, size: 16),
                   label: const Text('Edit Mode'),
                   labelStyle: const TextStyle(fontSize: 12),
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
                 ),
                 const SizedBox(width: 16),
-                
+
                 // User info
                 CircleAvatar(
                   radius: 18,
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
                   child: Text(
                     auth.user?.username[0].toUpperCase() ?? 'E',
                     style: TextStyle(
@@ -135,7 +136,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
                   ],
                 ),
                 const SizedBox(width: 16),
-                
+
                 // Settings button
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
@@ -144,7 +145,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
                     setState(() => _showSettings = !_showSettings);
                   },
                 ),
-                
+
                 // Logout button
                 IconButton(
                   icon: const Icon(Icons.logout),
@@ -182,7 +183,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
               ],
             ),
           ),
-          
+
           // Settings Panel (collapsible)
           if (_showSettings)
             Container(
@@ -204,9 +205,10 @@ class _EditorDashboardState extends State<EditorDashboard> {
                       const SizedBox(width: 8),
                       Text(
                         'Settings',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                       ),
                       const Spacer(),
                       IconButton(
@@ -245,7 +247,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
                 ],
               ),
             ),
-          
+
           // Sheet content - Direct access, no navigation
           const Expanded(
             child: SheetScreen(),

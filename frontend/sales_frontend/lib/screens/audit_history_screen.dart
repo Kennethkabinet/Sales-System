@@ -21,6 +21,11 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   DateTime? _startDate;
   DateTime? _endDate;
 
+  // Pagination state
+  int _currentPage = 1;
+  int _itemsPerPage = 20;
+  final List<int> _itemsPerPageOptions = [10, 20, 50];
+
   @override
   void initState() {
     super.initState();
@@ -70,7 +75,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.history, size: 64, color: Colors.grey[300]),
+                          Icon(Icons.history,
+                              size: 64, color: Colors.grey[300]),
                           const SizedBox(height: 16),
                           Text(
                             'No audit logs found',
@@ -84,12 +90,44 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                     );
                   }
 
-                  return ListView.separated(
-                    itemCount: data.auditLogs.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      return _AuditLogTile(log: data.auditLogs[index]);
-                    },
+                  // Calculate pagination
+                  final totalItems = data.auditLogs.length;
+                  final totalPages = (totalItems / _itemsPerPage).ceil();
+
+                  // Ensure current page is valid
+                  if (_currentPage > totalPages && totalPages > 0) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      setState(() => _currentPage = totalPages);
+                    });
+                  }
+
+                  final startIndex = (_currentPage - 1) * _itemsPerPage;
+                  final endIndex =
+                      (startIndex + _itemsPerPage).clamp(0, totalItems);
+                  final paginatedLogs = data.auditLogs.sublist(
+                    startIndex,
+                    endIndex,
+                  );
+
+                  return Column(
+                    children: [
+                      // List of audit logs
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: paginatedLogs.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            return _AuditLogTile(log: paginatedLogs[index]);
+                          },
+                        ),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Pagination controls
+                      _buildPaginationControls(totalItems, totalPages),
+                    ],
                   );
                 },
               ),
@@ -165,7 +203,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                 DropdownMenuItem(value: 'All Time', child: Text('All Time')),
                 DropdownMenuItem(value: 'Today', child: Text('Today')),
                 DropdownMenuItem(value: 'This Week', child: Text('This Week')),
-                DropdownMenuItem(value: 'This Month', child: Text('This Month')),
+                DropdownMenuItem(
+                    value: 'This Month', child: Text('This Month')),
                 DropdownMenuItem(value: 'Custom', child: Text('Custom Range…')),
               ],
               onChanged: (v) async {
@@ -190,7 +229,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
               borderRadius: BorderRadius.circular(8),
               onTap: _clearFilters,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.shade300),
                   borderRadius: BorderRadius.circular(8),
@@ -245,15 +285,204 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   }
 
   // ════════════════════════════════════════════
+  //  Pagination Controls
+  // ════════════════════════════════════════════
+  Widget _buildPaginationControls(int totalItems, int totalPages) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Items per page selector
+          Row(
+            children: [
+              Text(
+                'Show:',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white,
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: _itemsPerPage,
+                    isDense: true,
+                    icon: Icon(Icons.arrow_drop_down,
+                        size: 20, color: Colors.grey[600]),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+                    items: _itemsPerPageOptions.map((int value) {
+                      return DropdownMenuItem<int>(
+                        value: value,
+                        child: Text('$value'),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _itemsPerPage = value;
+                          _currentPage = 1; // Reset to first page
+                        });
+                      }
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'entries',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const SizedBox(width: 24),
+              Text(
+                'Showing ${(_currentPage - 1) * _itemsPerPage + 1}-${((_currentPage - 1) * _itemsPerPage + _itemsPerPage).clamp(0, totalItems)} of $totalItems',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+
+          // Page navigation
+          Row(
+            children: [
+              // Previous button
+              IconButton(
+                icon: Icon(Icons.chevron_left,
+                    color: _currentPage > 1 ? _kNavy : Colors.grey[400]),
+                onPressed: _currentPage > 1
+                    ? () => setState(() => _currentPage--)
+                    : null,
+                tooltip: 'Previous page',
+                splashRadius: 20,
+              ),
+
+              // Page numbers
+              ..._buildPageNumbers(totalPages),
+
+              // Next button
+              IconButton(
+                icon: Icon(Icons.chevron_right,
+                    color:
+                        _currentPage < totalPages ? _kNavy : Colors.grey[400]),
+                onPressed: _currentPage < totalPages
+                    ? () => setState(() => _currentPage++)
+                    : null,
+                tooltip: 'Next page',
+                splashRadius: 20,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildPageNumbers(int totalPages) {
+    List<Widget> pageButtons = [];
+
+    // Show up to 5 page numbers at a time
+    int startPage = (_currentPage - 2).clamp(1, totalPages);
+    int endPage = (startPage + 4).clamp(1, totalPages);
+
+    // Adjust start if we're near the end
+    if (endPage - startPage < 4) {
+      startPage = (endPage - 4).clamp(1, totalPages);
+    }
+
+    // First page if not in range
+    if (startPage > 1) {
+      pageButtons.add(_buildPageButton(1));
+      if (startPage > 2) {
+        pageButtons.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text('...', style: TextStyle(color: Colors.grey[400])),
+        ));
+      }
+    }
+
+    // Page number buttons
+    for (int i = startPage; i <= endPage; i++) {
+      pageButtons.add(_buildPageButton(i));
+    }
+
+    // Last page if not in range
+    if (endPage < totalPages) {
+      if (endPage < totalPages - 1) {
+        pageButtons.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text('...', style: TextStyle(color: Colors.grey[400])),
+        ));
+      }
+      pageButtons.add(_buildPageButton(totalPages));
+    }
+
+    return pageButtons;
+  }
+
+  Widget _buildPageButton(int pageNumber) {
+    final isActive = pageNumber == _currentPage;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: InkWell(
+        onTap: () => setState(() => _currentPage = pageNumber),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: isActive ? _kNavy : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isActive ? _kNavy : Colors.grey.shade300,
+              width: 1,
+            ),
+          ),
+          child: Text(
+            '$pageNumber',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+              color: isActive ? Colors.white : Colors.grey[700],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
   //  Filter Helpers
   // ════════════════════════════════════════════
   void _applyFilters() {
+    setState(() {
+      _currentPage = 1; // Reset to first page when filters change
+    });
     context.read<DataProvider>().loadAuditLogs(
-      action: _actionFilter,
-      entity: _entityFilter,
-      startDate: _startDate,
-      endDate: _endDate,
-    );
+          action: _actionFilter,
+          entity: _entityFilter,
+          startDate: _startDate,
+          endDate: _endDate,
+        );
   }
 
   void _clearFilters() {
@@ -263,6 +492,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
       _timeFilter = 'All Time';
       _startDate = null;
       _endDate = null;
+      _currentPage = 1; // Reset to first page
     });
     _applyFilters();
   }
@@ -497,7 +727,6 @@ class _AuditLogTileState extends State<_AuditLogTile> {
         children: [
           const Divider(height: 1),
           const SizedBox(height: 12),
-
           if (log.description != null && log.description!.isNotEmpty) ...[
             Text('Description',
                 style: TextStyle(
@@ -508,7 +737,6 @@ class _AuditLogTileState extends State<_AuditLogTile> {
             Text(log.description!, style: const TextStyle(fontSize: 13)),
             const SizedBox(height: 12),
           ],
-
           if (log.oldValue != null || log.newValue != null) ...[
             Text('Changes',
                 style: TextStyle(
@@ -576,7 +804,6 @@ class _AuditLogTileState extends State<_AuditLogTile> {
             ),
             const SizedBox(height: 12),
           ],
-
           Row(
             children: [
               Icon(Icons.computer, size: 13, color: Colors.grey[400]),

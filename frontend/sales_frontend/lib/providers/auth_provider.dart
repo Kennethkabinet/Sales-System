@@ -31,7 +31,7 @@ class AuthProvider extends ChangeNotifier {
       if (_token != null) {
         ApiService.setAuthToken(_token);
         _user = await ApiService.getCurrentUser();
-        
+
         // Connect to WebSocket
         SocketService.instance.connect(_token!);
       }
@@ -112,5 +112,49 @@ class AuthProvider extends ChangeNotifier {
   void clearError() {
     _error = null;
     notifyListeners();
+  }
+
+  Future<bool> register(
+      {required String username,
+      required String email,
+      required String password,
+      required String fullName}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final result = await ApiService.register(
+        username: username,
+        email: email,
+        password: password,
+        fullName: fullName,
+      );
+
+      if (result.success && result.token != null && result.user != null) {
+        _token = result.token;
+        _user = result.user;
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_token', _token!);
+
+        ApiService.setAuthToken(_token);
+        SocketService.instance.connect(_token!);
+
+        _isLoading = false;
+        notifyListeners();
+        return true;
+      } else {
+        _error = result.error ?? 'Registration failed';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
   }
 }

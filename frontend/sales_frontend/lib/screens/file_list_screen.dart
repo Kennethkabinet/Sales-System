@@ -15,6 +15,8 @@ class FileListScreen extends StatefulWidget {
 }
 
 class _FileListScreenState extends State<FileListScreen> {
+  final Set<int> _selectedFileIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -25,7 +27,8 @@ class _FileListScreenState extends State<FileListScreen> {
 
   // ============== Dialogs ==============
 
-  Future<String?> _showNameDialog({String title = 'Name', String? initialValue}) async {
+  Future<String?> _showNameDialog(
+      {String title = 'Name', String? initialValue}) async {
     final controller = TextEditingController(text: initialValue ?? '');
     return showDialog<String>(
       context: context,
@@ -82,10 +85,10 @@ class _FileListScreenState extends State<FileListScreen> {
                 )
               else
                 ...folders.map((f) => ListTile(
-                  leading: const Icon(Icons.folder, color: Colors.amber),
-                  title: Text(f.name),
-                  onTap: () => Navigator.pop(context, f.id),
-                )),
+                      leading: const Icon(Icons.folder, color: Colors.amber),
+                      title: Text(f.name),
+                      onTap: () => Navigator.pop(context, f.id),
+                    )),
             ],
           ),
         ),
@@ -97,6 +100,61 @@ class _FileListScreenState extends State<FileListScreen> {
         ],
       ),
     );
+  }
+
+  // ============== Bulk Actions ==============
+
+  Future<void> _bulkDeleteFiles() async {
+    if (_selectedFileIds.isEmpty) return;
+    final count = _selectedFileIds.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Selected Files'),
+        content: Text(
+            'Permanently delete $count file${count > 1 ? 's' : ''}? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(_, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(_, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final data = context.read<DataProvider>();
+    for (final id in List<int>.from(_selectedFileIds)) {
+      try {
+        await data.deleteFile(id);
+      } catch (_) {}
+    }
+    setState(() => _selectedFileIds.clear());
+  }
+
+  Future<void> _bulkMoveFiles() async {
+    if (_selectedFileIds.isEmpty) return;
+    final data = context.read<DataProvider>();
+    final targetId = await _showMoveToFolderDialog(data);
+    if (targetId == null || !mounted) return;
+    final folderId = targetId == -1 ? null : targetId;
+    for (final id in List<int>.from(_selectedFileIds)) {
+      try {
+        await data.moveFileToFolder(id, folderId: folderId);
+      } catch (_) {}
+    }
+    setState(() => _selectedFileIds.clear());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Files moved successfully'),
+            backgroundColor: Colors.green),
+      );
+    }
   }
 
   // ============== Actions ==============
@@ -147,7 +205,8 @@ class _FileListScreenState extends State<FileListScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(success ? 'Folder "$name" created' : 'Failed to create folder'),
+            content: Text(
+                success ? 'Folder "$name" created' : 'Failed to create folder'),
             backgroundColor: success ? Colors.green : Colors.red,
           ),
         );
@@ -156,13 +215,16 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _renameFile(FileModel file) async {
-    final name = await _showNameDialog(title: 'Rename File', initialValue: file.name);
+    final name =
+        await _showNameDialog(title: 'Rename File', initialValue: file.name);
     if (name != null && name.isNotEmpty && mounted) {
-      final success = await context.read<DataProvider>().renameFileItem(file.id, name);
+      final success =
+          await context.read<DataProvider>().renameFileItem(file.id, name);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(success ? 'File renamed to "$name"' : 'Failed to rename file'),
+            content: Text(
+                success ? 'File renamed to "$name"' : 'Failed to rename file'),
             backgroundColor: success ? Colors.green : Colors.red,
           ),
         );
@@ -171,13 +233,17 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _renameFolder(FolderModel folder) async {
-    final name = await _showNameDialog(title: 'Rename Folder', initialValue: folder.name);
+    final name = await _showNameDialog(
+        title: 'Rename Folder', initialValue: folder.name);
     if (name != null && name.isNotEmpty && mounted) {
-      final success = await context.read<DataProvider>().renameFolder(folder.id, name);
+      final success =
+          await context.read<DataProvider>().renameFolder(folder.id, name);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(success ? 'Folder renamed to "$name"' : 'Failed to rename folder'),
+            content: Text(success
+                ? 'Folder renamed to "$name"'
+                : 'Failed to rename folder'),
             backgroundColor: success ? Colors.green : Colors.red,
           ),
         );
@@ -194,7 +260,8 @@ class _FileListScreenState extends State<FileListScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(success ? 'File moved successfully' : 'Failed to move file'),
+            content: Text(
+                success ? 'File moved successfully' : 'Failed to move file'),
             backgroundColor: success ? Colors.green : Colors.red,
           ),
         );
@@ -205,7 +272,7 @@ class _FileListScreenState extends State<FileListScreen> {
   Future<void> _downloadFile(FileModel file) async {
     try {
       final bytes = await ApiService.downloadFile(file.id);
-      
+
       // Use file_picker to let user choose save location
       final outputPath = await FilePicker.platform.saveFile(
         dialogTitle: 'Save File',
@@ -287,6 +354,304 @@ class _FileListScreenState extends State<FileListScreen> {
     }
   }
 
+  // ============== Helpers ==============
+
+  IconData _fileIcon(String? type) {
+    switch (type?.toLowerCase()) {
+      case 'xlsx':
+      case 'xls':
+        return Icons.table_chart;
+      case 'csv':
+        return Icons.description;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
+
+  Color _fileColor(String? type) {
+    switch (type?.toLowerCase()) {
+      case 'xlsx':
+      case 'xls':
+        return Colors.green;
+      case 'csv':
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _fmtDate(DateTime? date) {
+    if (date == null) return '';
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inDays == 0) return 'Today';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${date.month}/${date.day}/${date.year}';
+  }
+
+  Widget _buildFilesTable(List<FileModel> files) {
+    final allSelected =
+        files.isNotEmpty && files.every((f) => _selectedFileIds.contains(f.id));
+
+    Widget hCell(String label, {TextAlign align = TextAlign.left}) => TableCell(
+          verticalAlignment: TableCellVerticalAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Text(label,
+                textAlign: align,
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.black87)),
+          ),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Table(
+          columnWidths: const {
+            0: FixedColumnWidth(48), // checkbox
+            1: FlexColumnWidth(3), // name
+            2: FlexColumnWidth(1.2), // type
+            3: FlexColumnWidth(1.5), // last modified
+            4: FixedColumnWidth(100), // actions
+          },
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          children: [
+            // Header
+            TableRow(
+              decoration: BoxDecoration(color: Colors.grey.shade50),
+              children: [
+                TableCell(
+                  verticalAlignment: TableCellVerticalAlignment.middle,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Checkbox(
+                      value: allSelected,
+                      tristate: _selectedFileIds.isNotEmpty && !allSelected,
+                      onChanged: (_) => setState(() {
+                        if (allSelected) {
+                          _selectedFileIds.clear();
+                        } else {
+                          _selectedFileIds.addAll(files.map((f) => f.id));
+                        }
+                      }),
+                    ),
+                  ),
+                ),
+                hCell('Name'),
+                hCell('Type'),
+                hCell('Last Modified'),
+                hCell('Actions', align: TextAlign.center),
+              ],
+            ),
+            // Divider
+            TableRow(
+              children: List.generate(
+                  5,
+                  (_) =>
+                      const TableCell(child: Divider(height: 1, thickness: 1))),
+            ),
+            // Data rows
+            ...files.asMap().entries.map((entry) {
+              final idx = entry.key;
+              final file = entry.value;
+              final isSelected = _selectedFileIds.contains(file.id);
+              final rowBg = isSelected
+                  ? Colors.blue.shade50
+                  : idx.isEven
+                      ? Colors.white
+                      : const Color(0xFFF9FBF9);
+              return TableRow(
+                decoration: BoxDecoration(color: rowBg),
+                children: [
+                  // Checkbox
+                  TableCell(
+                    verticalAlignment: TableCellVerticalAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Checkbox(
+                        value: isSelected,
+                        onChanged: (v) => setState(() {
+                          if (v == true) {
+                            _selectedFileIds.add(file.id);
+                          } else {
+                            _selectedFileIds.remove(file.id);
+                          }
+                        }),
+                      ),
+                    ),
+                  ),
+                  // Name + row count below
+                  TableCell(
+                    verticalAlignment: TableCellVerticalAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: InkWell(
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => TableViewScreen(file: file)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: _fileColor(file.type).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Icon(_fileIcon(file.type),
+                                  color: _fileColor(file.type), size: 16),
+                            ),
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    file.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    '${file.rowCount ?? 0} rows',
+                                    style: TextStyle(
+                                        fontSize: 11, color: Colors.grey[400]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (file.activeUsers > 0) ...[
+                              const SizedBox(width: 6),
+                              const Icon(Icons.people,
+                                  size: 12, color: Colors.green),
+                            ],
+                            if (file.sourceSheetId != null) ...[
+                              const SizedBox(width: 4),
+                              Tooltip(
+                                message: 'Auto-saved from Sheet',
+                                child: Icon(Icons.sync,
+                                    size: 13, color: Colors.blue[300]),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Type
+                  TableCell(
+                    verticalAlignment: TableCellVerticalAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Text(
+                        (file.type ?? 'file').toUpperCase(),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ),
+                  ),
+                  // Last Modified
+                  TableCell(
+                    verticalAlignment: TableCellVerticalAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Text(
+                        _fmtDate(file.updatedAt),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ),
+                  ),
+                  // Actions
+                  TableCell(
+                    verticalAlignment: TableCellVerticalAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert,
+                                size: 18, color: Colors.grey[500]),
+                            padding: EdgeInsets.zero,
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'rename':
+                                  _renameFile(file);
+                                  break;
+                                case 'move':
+                                  _moveFile(file);
+                                  break;
+                                case 'download':
+                                  _downloadFile(file);
+                                  break;
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'rename',
+                                child: Row(children: [
+                                  Icon(Icons.edit, size: 16),
+                                  SizedBox(width: 8),
+                                  Text('Rename')
+                                ]),
+                              ),
+                              PopupMenuItem(
+                                value: 'move',
+                                child: Row(children: [
+                                  Icon(Icons.drive_file_move, size: 16),
+                                  SizedBox(width: 8),
+                                  Text('Move to Folder')
+                                ]),
+                              ),
+                              PopupMenuItem(
+                                value: 'download',
+                                child: Row(children: [
+                                  Icon(Icons.download, size: 16),
+                                  SizedBox(width: 8),
+                                  Text('Download')
+                                ]),
+                              ),
+                            ],
+                          ),
+                          InkWell(
+                            onTap: () => _confirmDeleteFile(file),
+                            borderRadius: BorderRadius.circular(4),
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Icon(Icons.delete_outline,
+                                  size: 18, color: Colors.red[400]),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ============== Build ==============
 
   @override
@@ -344,7 +709,9 @@ class _FileListScreenState extends State<FileListScreen> {
             Expanded(
               child: Consumer<DataProvider>(
                 builder: (context, data, _) {
-                  if (data.isLoading && data.files.isEmpty && data.folders.isEmpty) {
+                  if (data.isLoading &&
+                      data.files.isEmpty &&
+                      data.folders.isEmpty) {
                     return const Center(child: CircularProgressIndicator());
                   }
 
@@ -353,13 +720,15 @@ class _FileListScreenState extends State<FileListScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.folder_open, size: 64, color: Colors.grey[400]),
+                          Icon(Icons.folder_open,
+                              size: 64, color: Colors.grey[400]),
                           const SizedBox(height: 16),
                           Text(
                             data.currentFolderId == null
                                 ? 'No files yet'
                                 : 'This folder is empty',
-                            style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                            style: TextStyle(
+                                fontSize: 18, color: Colors.grey[600]),
                           ),
                           const SizedBox(height: 8),
                           Text(
@@ -373,45 +742,105 @@ class _FileListScreenState extends State<FileListScreen> {
 
                   final folders = data.folders;
                   final files = data.files;
-                  final totalItems = folders.length + files.length;
 
                   return RefreshIndicator(
-                    onRefresh: () => data.loadFiles(folderId: data.currentFolderId),
-                    child: GridView.builder(
-                      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 220,
-                        childAspectRatio: 0.95,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
+                    onRefresh: () =>
+                        data.loadFiles(folderId: data.currentFolderId),
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // ── Folders grid ──
+                          if (folders.isNotEmpty) ...[
+                            const Text('Folders',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 14)),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: folders
+                                  .map((folder) => SizedBox(
+                                        width: 200,
+                                        height: 110,
+                                        child: _FolderCard(
+                                          folder: folder,
+                                          onTap: () => data.navigateToFolder(
+                                              folder.id, folder.name),
+                                          onRename: () => _renameFolder(folder),
+                                          onDelete: () =>
+                                              _confirmDeleteFolder(folder),
+                                        ),
+                                      ))
+                                  .toList(),
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+
+                          // ── Files table ──
+                          if (files.isNotEmpty) ...[
+                            Row(
+                              children: [
+                                const Text('Files',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14)),
+                                const Spacer(),
+                                if (_selectedFileIds.isNotEmpty) ...[
+                                  Text(
+                                    '${_selectedFileIds.length} selected',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  OutlinedButton.icon(
+                                    onPressed: _bulkMoveFiles,
+                                    icon: const Icon(
+                                        Icons.drive_file_move_outlined,
+                                        size: 14),
+                                    label: const Text('Move',
+                                        style: TextStyle(fontSize: 12)),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.blueGrey,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 6),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  OutlinedButton.icon(
+                                    onPressed: _bulkDeleteFiles,
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 14),
+                                    label: const Text('Delete',
+                                        style: TextStyle(fontSize: 12)),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                      side: const BorderSide(color: Colors.red),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 6),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  TextButton(
+                                    onPressed: () => setState(
+                                        () => _selectedFileIds.clear()),
+                                    child: const Text('Clear',
+                                        style: TextStyle(fontSize: 12)),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            _buildFilesTable(files),
+                            const SizedBox(height: 16),
+                          ],
+                        ],
                       ),
-                      itemCount: totalItems,
-                      itemBuilder: (context, index) {
-                        if (index < folders.length) {
-                          final folder = folders[index];
-                          return _FolderCard(
-                            folder: folder,
-                            onTap: () => data.navigateToFolder(folder.id, folder.name),
-                            onRename: () => _renameFolder(folder),
-                            onDelete: () => _confirmDeleteFolder(folder),
-                          );
-                        } else {
-                          final file = files[index - folders.length];
-                          return _FileCard(
-                            file: file,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => TableViewScreen(file: file),
-                                ),
-                              );
-                            },
-                            onRename: () => _renameFile(file),
-                            onMove: () => _moveFile(file),
-                            onDownload: () => _downloadFile(file),
-                            onDelete: () => _confirmDeleteFile(file),
-                          );
-                        }
-                      },
                     ),
                   );
                 },
@@ -431,13 +860,16 @@ class _FileListScreenState extends State<FileListScreen> {
           onTap: crumbs.isEmpty ? null : () => data.navigateToRoot(),
           child: Row(
             children: [
-              Icon(Icons.home, size: 18, color: crumbs.isEmpty ? Colors.grey[800] : Colors.blue),
+              Icon(Icons.home,
+                  size: 18,
+                  color: crumbs.isEmpty ? Colors.grey[800] : Colors.blue),
               const SizedBox(width: 4),
               Text(
                 'My Files',
                 style: TextStyle(
                   color: crumbs.isEmpty ? Colors.grey[800] : Colors.blue,
-                  fontWeight: crumbs.isEmpty ? FontWeight.bold : FontWeight.normal,
+                  fontWeight:
+                      crumbs.isEmpty ? FontWeight.bold : FontWeight.normal,
                 ),
               ),
             ],
@@ -449,12 +881,16 @@ class _FileListScreenState extends State<FileListScreen> {
             child: Icon(Icons.chevron_right, size: 18, color: Colors.grey),
           ),
           InkWell(
-            onTap: i == crumbs.length - 1 ? null : () => data.navigateToBreadcrumb(i),
+            onTap: i == crumbs.length - 1
+                ? null
+                : () => data.navigateToBreadcrumb(i),
             child: Text(
               crumbs[i]['name'] as String,
               style: TextStyle(
                 color: i == crumbs.length - 1 ? Colors.grey[800] : Colors.blue,
-                fontWeight: i == crumbs.length - 1 ? FontWeight.bold : FontWeight.normal,
+                fontWeight: i == crumbs.length - 1
+                    ? FontWeight.bold
+                    : FontWeight.normal,
               ),
             ),
           ),
@@ -500,7 +936,8 @@ class _FolderCard extends StatelessWidget {
                       color: Colors.amber.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(Icons.folder, color: Colors.amber, size: 28),
+                    child:
+                        const Icon(Icons.folder, color: Colors.amber, size: 28),
                   ),
                   const Spacer(),
                   PopupMenuButton<String>(
@@ -536,7 +973,8 @@ class _FolderCard extends StatelessWidget {
               const Spacer(),
               Text(
                 folder.name,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -613,7 +1051,8 @@ class _FileCard extends StatelessWidget {
                   if (file.sourceSheetId != null)
                     Tooltip(
                       message: 'Auto-saved from Sheet',
-                      child: Icon(Icons.sync, size: 16, color: Colors.blue[300]),
+                      child:
+                          Icon(Icons.sync, size: 16, color: Colors.blue[300]),
                     ),
                   PopupMenuButton<String>(
                     onSelected: (value) {
@@ -680,7 +1119,8 @@ class _FileCard extends StatelessWidget {
               const Spacer(),
               Text(
                 file.name,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),

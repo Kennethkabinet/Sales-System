@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../providers/data_provider.dart';
 import 'login_screen.dart';
 import 'sheet_screen.dart';
 
@@ -20,7 +19,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
-    
+
     return Scaffold(
       body: Column(
         children: [
@@ -49,11 +48,11 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                 Text(
                   'Sheet Viewer',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
                 const Spacer(),
-                
+
                 // Real-time updates indicator
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -90,20 +89,22 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                
+
                 // Read-only badge
                 Chip(
                   avatar: const Icon(Icons.lock, size: 16),
                   label: const Text('Read-Only'),
                   labelStyle: const TextStyle(fontSize: 12),
-                  backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.secondaryContainer,
                 ),
                 const SizedBox(width: 16),
-                
+
                 // User info
                 CircleAvatar(
                   radius: 18,
-                  backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.secondaryContainer,
                   child: Text(
                     auth.user?.username[0].toUpperCase() ?? 'V',
                     style: TextStyle(
@@ -135,7 +136,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                   ],
                 ),
                 const SizedBox(width: 16),
-                
+
                 // Settings button
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
@@ -144,7 +145,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                     setState(() => _showSettings = !_showSettings);
                   },
                 ),
-                
+
                 // Logout button
                 IconButton(
                   icon: const Icon(Icons.logout),
@@ -182,7 +183,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
               ],
             ),
           ),
-          
+
           // Settings Panel (collapsible)
           if (_showSettings)
             Container(
@@ -204,9 +205,10 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                       const SizedBox(width: 8),
                       Text(
                         'Settings',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                       ),
                       const Spacer(),
                       IconButton(
@@ -245,7 +247,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                 ],
               ),
             ),
-          
+
           // Sheet content (read-only) - Direct access, no navigation
           const Expanded(
             child: SheetScreen(readOnly: true),

@@ -34,7 +34,8 @@ class ApiService {
     return _handleResponse(response);
   }
 
-  static Future<Map<String, dynamic>> _post(String endpoint, Map<String, dynamic> body) async {
+  static Future<Map<String, dynamic>> _post(
+      String endpoint, Map<String, dynamic> body) async {
     final response = await http
         .post(
           Uri.parse('${AppConfig.apiBaseUrl}$endpoint'),
@@ -45,7 +46,8 @@ class ApiService {
     return _handleResponse(response);
   }
 
-  static Future<Map<String, dynamic>> _put(String endpoint, Map<String, dynamic> body) async {
+  static Future<Map<String, dynamic>> _put(
+      String endpoint, Map<String, dynamic> body) async {
     final response = await http
         .put(
           Uri.parse('${AppConfig.apiBaseUrl}$endpoint'),
@@ -56,7 +58,8 @@ class ApiService {
     return _handleResponse(response);
   }
 
-  static Future<Map<String, dynamic>> _patch(String endpoint, Map<String, dynamic> body) async {
+  static Future<Map<String, dynamic>> _patch(
+      String endpoint, Map<String, dynamic> body) async {
     final response = await http
         .patch(
           Uri.parse('${AppConfig.apiBaseUrl}$endpoint'),
@@ -69,7 +72,8 @@ class ApiService {
 
   static Future<Map<String, dynamic>> _delete(String endpoint) async {
     final response = await http
-        .delete(Uri.parse('${AppConfig.apiBaseUrl}$endpoint'), headers: _headers)
+        .delete(Uri.parse('${AppConfig.apiBaseUrl}$endpoint'),
+            headers: _headers)
         .timeout(timeout);
     return _handleResponse(response);
   }
@@ -96,24 +100,26 @@ class ApiService {
   }) async {
     final uri = Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.uploadFile}');
     final request = http.MultipartRequest('POST', uri);
-    
+
     // Add auth header
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
     }
-    
+
     // Add file
-    request.files.add(await http.MultipartFile.fromPath('file', filePath, filename: fileName));
-    
+    request.files.add(await http.MultipartFile.fromPath('file', filePath,
+        filename: fileName));
+
     // Add form fields
     request.fields['name'] = name;
     if (departmentId != null) {
       request.fields['department_id'] = departmentId.toString();
     }
-    
-    final streamedResponse = await request.send().timeout(const Duration(minutes: 2));
+
+    final streamedResponse =
+        await request.send().timeout(const Duration(minutes: 2));
     final response = await http.Response.fromStream(streamedResponse);
-    
+
     return _handleResponse(response);
   }
 
@@ -121,7 +127,9 @@ class ApiService {
 
   static Future<String> testConnection() async {
     try {
-      final response = await http.get(Uri.parse(AppConfig.apiBaseUrl.replaceAll('/api', '/'))).timeout(timeout);
+      final response = await http
+          .get(Uri.parse(AppConfig.apiBaseUrl.replaceAll('/api', '/')))
+          .timeout(timeout);
       if (response.statusCode == 200) {
         return response.body;
       } else {
@@ -150,6 +158,21 @@ class ApiService {
     return AuthResult.fromJson(response);
   }
 
+  static Future<AuthResult> register({
+    required String username,
+    required String email,
+    required String password,
+    required String fullName,
+  }) async {
+    final response = await _post(ApiEndpoints.register, {
+      'username': username,
+      'email': email,
+      'password': password,
+      'full_name': fullName,
+    });
+    return AuthResult.fromJson(response);
+  }
+
   static Future<User> getCurrentUser() async {
     final response = await _get(ApiEndpoints.me);
     return User.fromJson(response['user']);
@@ -164,9 +187,7 @@ class ApiService {
 
   static Future<List<User>> getUsers() async {
     final response = await _get(ApiEndpoints.users);
-    return (response['users'] as List)
-        .map((u) => User.fromJson(u))
-        .toList();
+    return (response['users'] as List).map((u) => User.fromJson(u)).toList();
   }
 
   static Future<User> createUser({
@@ -230,16 +251,30 @@ class ApiService {
         .toList();
   }
 
+  static Future<Department> createDepartment({
+    required String name,
+    String? description,
+  }) async {
+    final response = await _post(ApiEndpoints.departments, {
+      'name': name,
+      if (description != null) 'description': description,
+    });
+    return Department.fromJson(response['department']);
+  }
+
+  static Future<void> deleteDepartment(int departmentId) async {
+    await _delete('${ApiEndpoints.departments}/$departmentId');
+  }
+
   static Future<List<Role>> getRoles() async {
     final response = await _get(ApiEndpoints.roles);
-    return (response['roles'] as List)
-        .map((r) => Role.fromJson(r))
-        .toList();
+    return (response['roles'] as List).map((r) => Role.fromJson(r)).toList();
   }
 
   // ============== Files ==============
 
-  static Future<FileListResult> getFiles({int page = 1, int limit = 20, int? departmentId, int? folderId}) async {
+  static Future<FileListResult> getFiles(
+      {int page = 1, int limit = 20, int? departmentId, int? folderId}) async {
     String endpoint = '${ApiEndpoints.files}?page=$page&limit=$limit';
     if (departmentId != null) endpoint += '&department_id=$departmentId';
     if (folderId != null) {
@@ -251,17 +286,22 @@ class ApiService {
     return FileListResult.fromJson(response);
   }
 
-  static Future<FileDataResult> getFileData(int fileId, {int page = 1, int limit = 50}) async {
-    final response = await _get('${ApiEndpoints.files}/$fileId/data?page=$page&limit=$limit');
+  static Future<FileDataResult> getFileData(int fileId,
+      {int page = 1, int limit = 50}) async {
+    final response = await _get(
+        '${ApiEndpoints.files}/$fileId/data?page=$page&limit=$limit');
     return FileDataResult.fromJson(response);
   }
 
-  static Future<void> updateRow(int fileId, int rowId, Map<String, dynamic> values) async {
+  static Future<void> updateRow(
+      int fileId, int rowId, Map<String, dynamic> values) async {
     await _put('${ApiEndpoints.files}/$fileId/data/$rowId', {'values': values});
   }
 
-  static Future<FileDataRow> addRow(int fileId, Map<String, dynamic> values) async {
-    final response = await _post('${ApiEndpoints.files}/$fileId/rows', {'values': values});
+  static Future<FileDataRow> addRow(
+      int fileId, Map<String, dynamic> values) async {
+    final response =
+        await _post('${ApiEndpoints.files}/$fileId/rows', {'values': values});
     return FileDataRow.fromJson(response['row']);
   }
 
@@ -280,7 +320,8 @@ class ApiService {
     await _delete('${ApiEndpoints.files}/$fileId');
   }
 
-  static Future<FileModel> createFile(String name, {String? fileType, int? folderId}) async {
+  static Future<FileModel> createFile(String name,
+      {String? fileType, int? folderId}) async {
     final response = await _post(ApiEndpoints.files, {
       'name': name,
       'file_type': fileType ?? 'xlsx',
@@ -319,7 +360,8 @@ class ApiService {
 
   static Future<List<int>> downloadFile(int fileId) async {
     if (_authToken == null) throw Exception('Not authenticated');
-    final url = Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.files}/$fileId/download');
+    final url = Uri.parse(
+        '${AppConfig.apiBaseUrl}${ApiEndpoints.files}/$fileId/download');
     final response = await http.get(url, headers: _headers).timeout(timeout);
     if (response.statusCode == 200) {
       return response.bodyBytes;
@@ -353,11 +395,13 @@ class ApiService {
   }
 
   static Future<Formula> updateFormula(int id, Formula formula) async {
-    final response = await _put('${ApiEndpoints.formulas}/$id', formula.toJson());
+    final response =
+        await _put('${ApiEndpoints.formulas}/$id', formula.toJson());
     return Formula.fromJson(response['formula']);
   }
 
-  static Future<FormulaApplyResult> applyFormula(int formulaId, int fileId, {Map<String, String>? columnMapping}) async {
+  static Future<FormulaApplyResult> applyFormula(int formulaId, int fileId,
+      {Map<String, String>? columnMapping}) async {
     final response = await _post('${ApiEndpoints.formulas}/$formulaId/apply', {
       'file_id': fileId,
       if (columnMapping != null) 'column_mapping': columnMapping,
@@ -365,7 +409,8 @@ class ApiService {
     return FormulaApplyResult.fromJson(response);
   }
 
-  static Future<FormulaPreview> previewFormula(String expression, Map<String, dynamic> testValues) async {
+  static Future<FormulaPreview> previewFormula(
+      String expression, Map<String, dynamic> testValues) async {
     final response = await _post(ApiEndpoints.formulaPreview, {
       'expression': expression,
       'test_values': testValues,
@@ -394,7 +439,7 @@ class ApiService {
     if (action != null) endpoint += '&action=$action';
     if (startDate != null) endpoint += '&start_date=$startDate';
     if (endDate != null) endpoint += '&end_date=$endDate';
-    
+
     final response = await _get(endpoint);
     return AuditListResult.fromJson(response);
   }
@@ -411,7 +456,8 @@ class ApiService {
     return DashboardStats.fromJson(response);
   }
 
-  static Future<List<RecentActivity>> getRecentActivity({int limit = 10}) async {
+  static Future<List<RecentActivity>> getRecentActivity(
+      {int limit = 10}) async {
     final response = await _get('${ApiEndpoints.recentActivity}?limit=$limit');
     return (response['activity'] as List)
         .map((a) => RecentActivity.fromJson(a))
@@ -420,15 +466,37 @@ class ApiService {
 
   // ============== Sheets ==============
 
-  static Future<Map<String, dynamic>> getSheets({int page = 1, int limit = 50}) async {
-    return await _get('${ApiEndpoints.sheets}?page=$page&limit=$limit');
+  static Future<Map<String, dynamic>> getSheets(
+      {int page = 1,
+      int limit = 50,
+      int? folderId,
+      bool rootOnly = false}) async {
+    String url = '${ApiEndpoints.sheets}?page=$page&limit=$limit';
+    if (folderId != null) {
+      url += '&folder_id=$folderId';
+    } else if (rootOnly) {
+      url += '&folder_id=root';
+    }
+    return await _get(url);
+  }
+
+  static Future<Map<String, dynamic>> getSheetFolders() async {
+    return await _get('${ApiEndpoints.sheets}/folders');
+  }
+
+  static Future<Map<String, dynamic>> moveSheetToFolder(
+      int sheetId, int? folderId) async {
+    return await _put('${ApiEndpoints.sheets}/$sheetId/move', {
+      'folder_id': folderId,
+    });
   }
 
   static Future<Map<String, dynamic>> getSheetData(int sheetId) async {
     return await _get('${ApiEndpoints.sheets}/$sheetId');
   }
 
-  static Future<Map<String, dynamic>> createSheet(String name, List<String> columns) async {
+  static Future<Map<String, dynamic>> createSheet(
+      String name, List<String> columns) async {
     return await _post(ApiEndpoints.sheets, {
       'name': name,
       'columns': columns,
@@ -448,7 +516,8 @@ class ApiService {
     });
   }
 
-  static Future<Map<String, dynamic>> renameSheet(int sheetId, String name) async {
+  static Future<Map<String, dynamic>> renameSheet(
+      int sheetId, String name) async {
     return await _patch('${ApiEndpoints.sheets}/$sheetId/rename', {
       'name': name,
     });
@@ -458,14 +527,22 @@ class ApiService {
     await _delete('${ApiEndpoints.sheets}/$sheetId');
   }
 
-  static Future<List<int>> exportSheet(int sheetId, {String format = 'xlsx'}) async {
+  static Future<void> deleteSheetFolder(int folderId) async {
+    await _delete('${ApiEndpoints.sheets}/folders/$folderId');
+  }
+
+  static Future<List<int>> exportSheet(int sheetId,
+      {String format = 'xlsx'}) async {
     if (_authToken == null) throw Exception('Not authenticated');
 
-    final url = Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.sheets}/$sheetId/export?format=$format');
-    final response = await http.get(
-      url,
-      headers: _headers,
-    ).timeout(timeout);
+    final url = Uri.parse(
+        '${AppConfig.apiBaseUrl}${ApiEndpoints.sheets}/$sheetId/export?format=$format');
+    final response = await http
+        .get(
+          url,
+          headers: _headers,
+        )
+        .timeout(timeout);
 
     if (response.statusCode == 200) {
       return response.bodyBytes;
@@ -479,10 +556,66 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> importSheetFromFile({
+    required String filePath,
+    required String fileName,
+    String? sheetName,
+  }) async {
+    if (_authToken == null) throw Exception('Not authenticated');
+    final url =
+        Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.sheets}/import-file');
+    final request = http.MultipartRequest('POST', url)
+      ..headers['Authorization'] = 'Bearer $_authToken'
+      ..fields['name'] = sheetName ??
+          fileName.replaceAll(
+              RegExp(r'\.(xlsx?|csv)$', caseSensitive: false), '')
+      ..files.add(await http.MultipartFile.fromPath('file', filePath,
+          filename: fileName));
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    final response = await http.Response.fromStream(streamed);
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return body;
+    } else {
+      throw ApiException(
+        code: body['error']?['code'] ?? 'ERROR',
+        message: body['error']?['message'] ?? 'Import failed',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  static Future<Map<String, dynamic>> importSheetFromBytes({
+    required List<int> bytes,
+    required String fileName,
+    String? sheetName,
+  }) async {
+    if (_authToken == null) throw Exception('Not authenticated');
+    final url =
+        Uri.parse('${AppConfig.apiBaseUrl}${ApiEndpoints.sheets}/import-file');
+    final request = http.MultipartRequest('POST', url)
+      ..headers['Authorization'] = 'Bearer $_authToken'
+      ..fields['name'] = sheetName ??
+          fileName.replaceAll(
+              RegExp(r'\.(xlsx?|csv)$', caseSensitive: false), '')
+      ..files
+          .add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    final response = await http.Response.fromStream(streamed);
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return body;
+    } else {
+      throw ApiException(
+        code: body['error']?['code'] ?? 'ERROR',
+        message: body['error']?['message'] ?? 'Import failed',
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
   static Future<Map<String, dynamic>> importSheet(
-    int sheetId, 
-    List<List<dynamic>> data
-  ) async {
+      int sheetId, List<List<dynamic>> data) async {
     return await _post('${ApiEndpoints.sheets}/$sheetId/import', {
       'data': data,
     });
@@ -492,9 +625,7 @@ class ApiService {
 
   /// Toggle sheet visibility to viewers (Admin only)
   static Future<Map<String, dynamic>> toggleSheetVisibility(
-    int sheetId, 
-    bool showToViewers
-  ) async {
+      int sheetId, bool showToViewers) async {
     return await _put('${ApiEndpoints.sheets}/$sheetId/visibility', {
       'shown_to_viewers': showToViewers,
     });
@@ -520,8 +651,102 @@ class ApiService {
     return await _get('${ApiEndpoints.sheets}/$sheetId/status');
   }
 
-  static Future<Map<String, dynamic>> getSheetHistory(int sheetId, {int page = 1, int limit = 50}) async {
-    return await _get('${ApiEndpoints.sheets}/$sheetId/history?page=$page&limit=$limit');
+  static Future<Map<String, dynamic>> getSheetHistory(int sheetId,
+      {int page = 1, int limit = 50}) async {
+    return await _get(
+        '${ApiEndpoints.sheets}/$sheetId/history?page=$page&limit=$limit');
+  }
+
+  // ============== Inventory ==============
+
+  /// Current stock snapshot for all active products
+  static Future<Map<String, dynamic>> getInventoryStock() async {
+    return await _get(ApiEndpoints.inventoryStock);
+  }
+
+  /// All active products (admin sees inactive too)
+  static Future<Map<String, dynamic>> getInventoryProducts() async {
+    return await _get(ApiEndpoints.inventoryProducts);
+  }
+
+  /// Create product (admin only)
+  static Future<Map<String, dynamic>> createInventoryProduct({
+    required String productName,
+    String? qcCode,
+    int maintainingQty = 0,
+    int criticalQty = 0,
+  }) async {
+    return await _post(ApiEndpoints.inventoryProducts, {
+      'product_name': productName,
+      'qc_code': qcCode,
+      'maintaining_qty': maintainingQty,
+      'critical_qty': criticalQty,
+    });
+  }
+
+  /// Update product (admin only)
+  static Future<Map<String, dynamic>> updateInventoryProduct(
+      int id, Map<String, dynamic> body) async {
+    return await _put('${ApiEndpoints.inventoryProducts}/$id', body);
+  }
+
+  /// Soft-delete product (admin only)
+  static Future<Map<String, dynamic>> deleteInventoryProduct(int id) async {
+    return await _delete('${ApiEndpoints.inventoryProducts}/$id');
+  }
+
+  /// Transactions: optional date filter like '2026-02-18'
+  static Future<Map<String, dynamic>> getInventoryTransactions(
+      {String? date, String? from, String? to}) async {
+    final params = <String, String>{};
+    if (date != null) params['date'] = date;
+    if (from != null) params['from'] = from;
+    if (to != null) params['to'] = to;
+    final query = params.isNotEmpty
+        ? '?${params.entries.map((e) => '${e.key}=${e.value}').join('&')}'
+        : '';
+    return await _get('${ApiEndpoints.inventoryTransactions}$query');
+  }
+
+  /// Distinct dates with transactions (for accordion)
+  static Future<Map<String, dynamic>> getInventoryDates() async {
+    return await _get(ApiEndpoints.inventoryDates);
+  }
+
+  /// Record a new transaction
+  static Future<Map<String, dynamic>> createInventoryTransaction({
+    required int productId,
+    int qtyIn = 0,
+    int qtyOut = 0,
+    String? referenceNo,
+    String? remarks,
+    String? transactionDate,
+  }) async {
+    return await _post(ApiEndpoints.inventoryTransactions, {
+      'product_id': productId,
+      'qty_in': qtyIn,
+      'qty_out': qtyOut,
+      if (referenceNo != null) 'reference_no': referenceNo,
+      if (remarks != null) 'remarks': remarks,
+      if (transactionDate != null) 'transaction_date': transactionDate,
+    });
+  }
+
+  /// Update transaction
+  static Future<Map<String, dynamic>> updateInventoryTransaction(
+      int id, Map<String, dynamic> body) async {
+    return await _put('${ApiEndpoints.inventoryTransactions}/$id', body);
+  }
+
+  /// Delete transaction
+  static Future<Map<String, dynamic>> deleteInventoryTransaction(int id) async {
+    return await _delete('${ApiEndpoints.inventoryTransactions}/$id');
+  }
+
+  /// Inventory audit log (admin only)
+  static Future<Map<String, dynamic>> getInventoryAudit(
+      {int page = 1, int limit = 100}) async {
+    return await _get('${ApiEndpoints.inventoryAudit}?page=$page&limit=$limit');
   }
 }
 
@@ -534,7 +759,8 @@ class AuthResult {
   final String? message;
   final String? error;
 
-  AuthResult({this.success = false, this.token, this.user, this.message, this.error});
+  AuthResult(
+      {this.success = false, this.token, this.user, this.message, this.error});
 
   factory AuthResult.fromJson(Map<String, dynamic> json) {
     return AuthResult(
@@ -552,12 +778,17 @@ class FileListResult {
   final List<FolderModel> folders;
   final Pagination pagination;
 
-  FileListResult({required this.files, required this.folders, required this.pagination});
+  FileListResult(
+      {required this.files, required this.folders, required this.pagination});
 
   factory FileListResult.fromJson(Map<String, dynamic> json) {
     return FileListResult(
-      files: (json['files'] as List? ?? []).map((f) => FileModel.fromJson(f)).toList(),
-      folders: (json['folders'] as List? ?? []).map((f) => FolderModel.fromJson(f)).toList(),
+      files: (json['files'] as List? ?? [])
+          .map((f) => FileModel.fromJson(f))
+          .toList(),
+      folders: (json['folders'] as List? ?? [])
+          .map((f) => FolderModel.fromJson(f))
+          .toList(),
       pagination: Pagination.fromJson(json['pagination'] ?? {}),
     );
   }
@@ -568,7 +799,8 @@ class FileDataResult {
   final List<FileDataRow> data;
   final Pagination pagination;
 
-  FileDataResult({required this.file, required this.data, required this.pagination});
+  FileDataResult(
+      {required this.file, required this.data, required this.pagination});
 
   factory FileDataResult.fromJson(Map<String, dynamic> json) {
     return FileDataResult(
@@ -683,7 +915,8 @@ class DashboardStats {
           .map<Map<String, dynamic>>((item) => Map<String, dynamic>.from(item))
           .toList(),
       activeUsersList: (json['active_users_list'] ?? [])
-          .map<DashboardActiveUser>((item) => DashboardActiveUser.fromJson(Map<String, dynamic>.from(item)))
+          .map<DashboardActiveUser>((item) =>
+              DashboardActiveUser.fromJson(Map<String, dynamic>.from(item)))
           .toList(),
     );
   }
@@ -708,7 +941,8 @@ class TopProduct {
   final int quantity;
   final double revenue;
 
-  TopProduct({required this.name, required this.quantity, required this.revenue});
+  TopProduct(
+      {required this.name, required this.quantity, required this.revenue});
 
   factory TopProduct.fromJson(Map<String, dynamic> json) {
     return TopProduct(
@@ -738,9 +972,9 @@ class ApiException implements Exception {
   final String message;
   final int statusCode;
 
-  ApiException({required this.code, required this.message, required this.statusCode});
+  ApiException(
+      {required this.code, required this.message, required this.statusCode});
 
   @override
   String toString() => message;
 }
-

@@ -2,15 +2,15 @@
 class AppConfig {
   static const String appName = 'Sales & Inventory System';
   static const String appVersion = '1.0.0';
-  
+
   // API Configuration
   static const String apiBaseUrl = 'http://localhost:3000/api';
   static const String wsBaseUrl = 'http://localhost:3000';
-  
+
   // Timeouts
   static const Duration apiTimeout = Duration(seconds: 30);
   static const Duration wsReconnectDelay = Duration(seconds: 3);
-  
+
   // Pagination
   static const int defaultPageSize = 50;
   static const int maxPageSize = 100;
@@ -30,31 +30,38 @@ class ApiEndpoints {
   static const String register = '/auth/register';
   static const String me = '/auth/me';
   static const String logout = '/auth/logout';
-  
+
   // Users
   static const String users = '/users';
   static const String departments = '/users/meta/departments';
   static const String roles = '/users/meta/roles';
-  
+
   // Files
   static const String files = '/files';
   static const String uploadFile = '/files/upload';
-  
+
   // Folders
   static const String folders = '/files/folders';
-  
+
   // Formulas
   static const String formulas = '/formulas';
   static const String formulaPreview = '/formulas/preview';
-  
+
   // Audit
   static const String audit = '/audit';
   static const String auditSummary = '/audit/summary';
-  
+
   // Dashboard
   static const String dashboardStats = '/dashboard/stats';
   static const String recentActivity = '/dashboard/recent-activity';
-  
+
   // Sheets
   static const String sheets = '/sheets';
+
+  // Inventory
+  static const String inventoryStock = '/inventory/stock';
+  static const String inventoryProducts = '/inventory/products';
+  static const String inventoryTransactions = '/inventory/transactions';
+  static const String inventoryDates = '/inventory/dates';
+  static const String inventoryAudit = '/inventory/audit';
 }

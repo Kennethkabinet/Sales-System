@@ -575,6 +575,94 @@ router.get('/meta/departments', authenticate, async (req, res) => {
   }
 });
 
+// POST /users/meta/departments - Create new department (Admin only)
+router.post('/meta/departments', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Department name is required' }
+      });
+    }
+
+    // Check for duplicate department name
+    const existing = await pool.query(
+      'SELECT id FROM departments WHERE LOWER(name) = LOWER($1)',
+      [name.trim()]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'DUPLICATE_DEPARTMENT', message: 'Department already exists' }
+      });
+    }
+
+    const result = await pool.query(
+      'INSERT INTO departments (name, description) VALUES ($1, $2) RETURNING id, name, description',
+      [name.trim(), description?.trim() || null]
+    );
+
+    res.json({
+      success: true,
+      department: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Create department error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to create department' }
+    });
+  }
+});
+
+// DELETE /users/meta/departments/:id - Delete department (Admin only)
+router.delete('/meta/departments/:id', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const departmentId = parseInt(req.params.id);
+
+    // Check if department exists
+    const deptCheck = await pool.query('SELECT id FROM departments WHERE id = $1', [departmentId]);
+    if (deptCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Department not found' }
+      });
+    }
+
+    // Check if any users are assigned to this department
+    const userCheck = await pool.query(
+      'SELECT COUNT(*) as count FROM users WHERE department_id = $1',
+      [departmentId]
+    );
+
+    if (parseInt(userCheck.rows[0].count) > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { 
+          code: 'DEPARTMENT_IN_USE', 
+          message: `Cannot delete department. ${userCheck.rows[0].count} user(s) are assigned to this department.`
+        }
+      });
+    }
+
+    await pool.query('DELETE FROM departments WHERE id = $1', [departmentId]);
+
+    res.json({
+      success: true,
+      message: 'Department deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete department error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to delete department' }
+    });
+  }
+});
+
 // GET /users/roles - Get all roles
 router.get('/meta/roles', authenticate, async (req, res) => {
   try {

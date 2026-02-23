@@ -5,8 +5,7 @@ import '../config/constants.dart';
 class SocketService {
   static SocketService? _instance;
   io.Socket? _socket;
-  String? _authToken;
-  
+
   // Callbacks
   Function(Map<String, dynamic>)? onUserJoined;
   Function(Map<String, dynamic>)? onUserLeft;
@@ -30,8 +29,6 @@ class SocketService {
 
   /// Connect to WebSocket server with auth token
   void connect(String authToken) {
-    _authToken = authToken;
-    
     _socket = io.io(
       AppConfig.wsBaseUrl,
       io.OptionBuilder()

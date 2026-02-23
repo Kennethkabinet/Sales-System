@@ -160,6 +160,80 @@ router.post('/login', loginValidation, async (req, res) => {
   }
 });
 
+// POST /auth/register
+router.post('/register', async (req, res) => {
+  try {
+    const { username, email, password, full_name } = req.body;
+
+    if (!username || !email || !password || !full_name) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'All fields are required' }
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Password must be at least 6 characters' }
+      });
+    }
+
+    // Check if username or email already exists
+    const existing = await pool.query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2',
+      [username, email]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'CONFLICT', message: 'Username or email already exists' }
+      });
+    }
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Create user with default 'user' role
+    const result = await pool.query(`
+      INSERT INTO users (username, email, password_hash, full_name, role_id)
+      VALUES ($1, $2, $3, $4, (SELECT id FROM roles WHERE name = 'user'))
+      RETURNING id, username, email, full_name
+    `, [username.trim(), email.trim(), passwordHash, full_name.trim()]);
+
+    const newUser = result.rows[0];
+
+    // Generate token
+    const token = generateToken(newUser.id, 'user');
+
+    await auditService.log({
+      userId: newUser.id,
+      action: 'REGISTER',
+      entityType: 'users',
+      entityId: newUser.id
+    });
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        full_name: newUser.full_name,
+        role: 'user'
+      }
+    });
+  } catch (error) {
+    console.error('Register error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Registration failed' }
+    });
+  }
+});
+
 // GET /auth/me
 router.get('/me', authenticate, async (req, res) => {
   res.json({

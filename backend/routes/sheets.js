@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { 
   requireSheetAccess, 
@@ -9,6 +10,9 @@ const {
 } = require('../middleware/rbac');
 const auditService = require('../services/auditService');
 const XLSX = require('xlsx');
+
+// Multer memory storage for sheet file imports
+const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // GET /sheets - Get all sheets for user
 router.get('/', authenticate, requireSheetAccess, async (req, res) => {
@@ -22,25 +26,43 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
     let params;
     let countParams;
 
+    const folderIdParam = req.query.folder_id;
+    let folderCondition = '';
+    let folderConditionCount = '';
+    if (folderIdParam !== undefined) {
+      if (folderIdParam === 'root' || folderIdParam === '') {
+        folderCondition = 'AND s.folder_id IS NULL';
+        folderConditionCount = 'AND folder_id IS NULL';
+      } else {
+        const fid = parseInt(folderIdParam);
+        if (!isNaN(fid)) {
+          folderCondition = `AND s.folder_id = ${fid}`;
+          folderConditionCount = `AND folder_id = ${fid}`;
+        }
+      }
+    }
+
     if (req.user.role === 'admin') {
       // Admin sees all sheets
       query = `
         SELECT s.id, s.name, s.columns, s.created_by, u.username as created_by_name,
                s.created_at, s.updated_at, s.last_edited_by, le.username as last_edited_by_name,
-               s.shown_to_viewers, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
+               s.shown_to_viewers, s.folder_id, f.name as folder_name,
+               sl.locked_by, lu.username as locked_by_name, sl.locked_at,
                ses.user_id as editing_user_id, seu.username as editing_user_name
         FROM sheets s
         LEFT JOIN users u ON s.created_by = u.id
         LEFT JOIN users le ON s.last_edited_by = le.id
+        LEFT JOIN folders f ON s.folder_id = f.id
         LEFT JOIN sheet_locks sl ON s.id = sl.sheet_id AND sl.expires_at > CURRENT_TIMESTAMP
         LEFT JOIN users lu ON sl.locked_by = lu.id
         LEFT JOIN sheet_edit_sessions ses ON s.id = ses.sheet_id AND ses.is_active = TRUE AND ses.last_activity > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
         LEFT JOIN users seu ON ses.user_id = seu.id
-        WHERE s.is_active = TRUE
+        WHERE s.is_active = TRUE ${folderCondition}
         ORDER BY s.updated_at DESC
         LIMIT $1 OFFSET $2
       `;
-      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE`;
+      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE ${folderConditionCount}`;
       params = [limit, offset];
       countParams = [];
     } else if (req.user.role === 'viewer') {
@@ -48,20 +70,22 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
       query = `
         SELECT s.id, s.name, s.columns, s.created_by, u.username as created_by_name,
                s.created_at, s.updated_at, s.last_edited_by, le.username as last_edited_by_name,
-               s.shown_to_viewers, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
+               s.shown_to_viewers, s.folder_id, f.name as folder_name,
+               sl.locked_by, lu.username as locked_by_name, sl.locked_at,
                ses.user_id as editing_user_id, seu.username as editing_user_name
         FROM sheets s
         LEFT JOIN users u ON s.created_by = u.id
         LEFT JOIN users le ON s.last_edited_by = le.id
+        LEFT JOIN folders f ON s.folder_id = f.id
         LEFT JOIN sheet_locks sl ON s.id = sl.sheet_id AND sl.expires_at > CURRENT_TIMESTAMP
         LEFT JOIN users lu ON sl.locked_by = lu.id
         LEFT JOIN sheet_edit_sessions ses ON s.id = ses.sheet_id AND ses.is_active = TRUE AND ses.last_activity > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
         LEFT JOIN users seu ON ses.user_id = seu.id
-        WHERE s.is_active = TRUE AND s.shown_to_viewers = TRUE
+        WHERE s.is_active = TRUE AND s.shown_to_viewers = TRUE ${folderCondition}
         ORDER BY s.updated_at DESC
         LIMIT $1 OFFSET $2
       `;
-      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE AND shown_to_viewers = TRUE`;
+      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE AND shown_to_viewers = TRUE ${folderConditionCount}`;
       params = [limit, offset];
       countParams = [];
     } else if (req.user.role === 'editor') {
@@ -69,20 +93,22 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
       query = `
         SELECT s.id, s.name, s.columns, s.created_by, u.username as created_by_name,
                s.created_at, s.updated_at, s.last_edited_by, le.username as last_edited_by_name,
-               s.shown_to_viewers, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
+               s.shown_to_viewers, s.folder_id, f.name as folder_name,
+               sl.locked_by, lu.username as locked_by_name, sl.locked_at,
                ses.user_id as editing_user_id, seu.username as editing_user_name
         FROM sheets s
         LEFT JOIN users u ON s.created_by = u.id
         LEFT JOIN users le ON s.last_edited_by = le.id
+        LEFT JOIN folders f ON s.folder_id = f.id
         LEFT JOIN sheet_locks sl ON s.id = sl.sheet_id AND sl.expires_at > CURRENT_TIMESTAMP
         LEFT JOIN users lu ON sl.locked_by = lu.id
         LEFT JOIN sheet_edit_sessions ses ON s.id = ses.sheet_id AND ses.is_active = TRUE AND ses.last_activity > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
         LEFT JOIN users seu ON ses.user_id = seu.id
-        WHERE s.is_active = TRUE
+        WHERE s.is_active = TRUE ${folderCondition}
         ORDER BY s.updated_at DESC
         LIMIT $1 OFFSET $2
       `;
-      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE`;
+      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE ${folderConditionCount}`;
       params = [limit, offset];
       countParams = [];
     } else {
@@ -90,20 +116,22 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
       query = `
         SELECT s.id, s.name, s.columns, s.created_by, u.username as created_by_name,
                s.created_at, s.updated_at, s.last_edited_by, le.username as last_edited_by_name,
-               s.shown_to_viewers, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
+               s.shown_to_viewers, s.folder_id, f.name as folder_name,
+               sl.locked_by, lu.username as locked_by_name, sl.locked_at,
                ses.user_id as editing_user_id, seu.username as editing_user_name
         FROM sheets s
         LEFT JOIN users u ON s.created_by = u.id
         LEFT JOIN users le ON s.last_edited_by = le.id
+        LEFT JOIN folders f ON s.folder_id = f.id
         LEFT JOIN sheet_locks sl ON s.id = sl.sheet_id AND sl.expires_at > CURRENT_TIMESTAMP
         LEFT JOIN users lu ON sl.locked_by = lu.id
         LEFT JOIN sheet_edit_sessions ses ON s.id = ses.sheet_id AND ses.is_active = TRUE AND ses.last_activity > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
         LEFT JOIN users seu ON ses.user_id = seu.id
-        WHERE s.is_active = TRUE AND (s.created_by = $1 OR s.is_shared = TRUE)
+        WHERE s.is_active = TRUE AND (s.created_by = $1 OR s.is_shared = TRUE) ${folderCondition}
         ORDER BY s.updated_at DESC
         LIMIT $2 OFFSET $3
       `;
-      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE AND (created_by = $1 OR is_shared = TRUE)`;
+      countQuery = `SELECT COUNT(*) as total FROM sheets WHERE is_active = TRUE AND (created_by = $1 OR is_shared = TRUE) ${folderConditionCount}`;
       params = [req.user.id, limit, offset];
       countParams = [req.user.id];
     }
@@ -115,9 +143,39 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
 
     const total = parseInt(countResult.rows[0]?.total || 0);
 
+    // Fetch folders for the current level
+    let folderQuery;
+    let folderQueryParams = [];
+    let fpIdx = 1;
+    const isAdmin = req.user.role === 'admin';
+    const parentCondition = (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '')
+      ? `fo.parent_id = $${fpIdx++}` : 'fo.parent_id IS NULL';
+    if (!isAdmin) {
+      folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
+              (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
+       FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
+       WHERE fo.is_active = TRUE AND ${parentCondition} AND fo.created_by = $${fpIdx}
+       ORDER BY fo.name ASC`;
+      if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
+        folderQueryParams.push(parseInt(folderIdParam));
+      }
+      folderQueryParams.push(req.user.id);
+    } else {
+      folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
+              (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
+       FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
+       WHERE fo.is_active = TRUE AND ${parentCondition}
+       ORDER BY fo.name ASC`;
+      if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
+        folderQueryParams.push(parseInt(folderIdParam));
+      }
+    }
+    const foldersResult = await pool.query(folderQuery, folderQueryParams);
+
     res.json({
       success: true,
       sheets: sheetsResult.rows,
+      folders: foldersResult.rows,
       pagination: {
         page,
         limit,
@@ -131,6 +189,107 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to get sheets' }
     });
+  }
+});
+
+// POST /sheets/import-file - Create a new sheet from an uploaded Excel/CSV file
+router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.single('file'), async (req, res) => {
+  try {
+    if (!['admin', 'manager', 'editor'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions' } });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: { code: 'NO_FILE', message: 'No file uploaded' } });
+    }
+
+    const originalName = req.file.originalname || 'Imported Sheet';
+    const sheetName = req.body.name || originalName.replace(/\.(xlsx?|csv)$/i, '');
+
+    // Parse with XLSX (supports xlsx, xls, csv)
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const firstSheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[firstSheetName];
+    const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+    if (!rawData || rawData.length === 0) {
+      return res.status(400).json({ success: false, error: { code: 'EMPTY_FILE', message: 'The file appears to be empty' } });
+    }
+
+    // First row = column headers
+    const columns = (rawData[0] || []).map((c, i) => c ? String(c) : `Column${i + 1}`);
+    const dataRows = rawData.slice(1).map(row => {
+      const rowObj = {};
+      columns.forEach((col, idx) => {
+        rowObj[col] = row[idx] !== undefined ? String(row[idx]) : '';
+      });
+      return rowObj;
+    });
+
+    // Create the sheet record
+    const sheetResult = await pool.query(`
+      INSERT INTO sheets (name, columns, created_by, last_edited_by)
+      VALUES ($1, $2, $3, $3)
+      RETURNING id, name, columns, created_by, created_at, updated_at
+    `, [sheetName, JSON.stringify(columns), req.user.id]);
+
+    const sheet = sheetResult.rows[0];
+
+    // Insert rows
+    for (let i = 0; i < dataRows.length; i++) {
+      await pool.query(
+        'INSERT INTO sheet_data (sheet_id, row_number, data) VALUES ($1, $2, $3)',
+        [sheet.id, i + 1, JSON.stringify(dataRows[i])]
+      );
+    }
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'IMPORT',
+      entityType: 'sheets',
+      entityId: sheet.id,
+      metadata: { rowCount: dataRows.length, columnCount: columns.length, source: originalName }
+    });
+
+    res.json({
+      success: true,
+      sheet: { ...sheet, rows: dataRows },
+      rowCount: dataRows.length,
+      columnCount: columns.length
+    });
+  } catch (error) {
+    console.error('Import sheet file error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to import file: ' + error.message } });
+  }
+});
+
+// GET /sheets/folders - List all folders (for move-to-folder picker)
+router.get('/folders', authenticate, async (req, res) => {
+  try {
+    const isAdmin = req.user.role === 'admin';
+    let foldersResult;
+    if (isAdmin) {
+      foldersResult = await pool.query(`
+        SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at,
+               (SELECT COUNT(*) FROM sheets s WHERE s.folder_id = fo.id AND s.is_active = TRUE) as sheet_count
+        FROM folders fo
+        LEFT JOIN users u ON fo.created_by = u.id
+        WHERE fo.is_active = TRUE
+        ORDER BY fo.name ASC
+      `);
+    } else {
+      foldersResult = await pool.query(`
+        SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at,
+               (SELECT COUNT(*) FROM sheets s WHERE s.folder_id = fo.id AND s.is_active = TRUE) as sheet_count
+        FROM folders fo
+        LEFT JOIN users u ON fo.created_by = u.id
+        WHERE fo.is_active = TRUE AND fo.created_by = $1
+        ORDER BY fo.name ASC
+      `, [req.user.id]);
+    }
+    res.json({ success: true, folders: foldersResult.rows });
+  } catch (error) {
+    console.error('Get sheet folders error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get folders' } });
   }
 });
 
@@ -380,6 +539,32 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
   }
 });
 
+// DELETE /sheets/folders/:id - Delete a sheet folder (Admin only)
+router.delete('/folders/:id', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Move sheets in this folder back to root
+    await pool.query('UPDATE sheets SET folder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE folder_id = $1', [id]);
+
+    // Soft delete the folder
+    await pool.query('UPDATE folders SET is_active = FALSE WHERE id = $1', [id]);
+
+    await auditService.log({
+      userId: req.user.id,
+      action: 'DELETE',
+      entityType: 'folders',
+      entityId: parseInt(id),
+      metadata: { deleted_by: req.user.username }
+    });
+
+    res.json({ success: true, message: 'Folder deleted' });
+  } catch (error) {
+    console.error('Delete sheet folder error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to delete folder' } });
+  }
+});
+
 // DELETE /sheets/:id - Delete sheet (Admin only)
 router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
   try {
@@ -471,6 +656,71 @@ router.patch('/:id/rename', authenticate, requireSheetEditAccess, async (req, re
   }
 });
 
+// PUT /sheets/:id/move - Move sheet to folder
+router.put('/:id/move', authenticate, requireSheetEditAccess, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { folder_id } = req.body;
+
+    // Check if sheet exists
+    const sheetCheck = await pool.query(
+      'SELECT id, name FROM sheets WHERE id = $1 AND is_active = TRUE',
+      [id]
+    );
+
+    if (sheetCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Sheet not found' }
+      });
+    }
+
+    // If folder_id is provided, verify folder exists
+    if (folder_id !== null && folder_id !== undefined) {
+      const folderCheck = await pool.query(
+        'SELECT id FROM folders WHERE id = $1 AND is_active = TRUE',
+        [folder_id]
+      );
+
+      if (folderCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Folder not found' }
+        });
+      }
+    }
+
+    // Move sheet to folder (null means root)
+    await pool.query(
+      'UPDATE sheets SET folder_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [folder_id || null, id]
+    );
+
+    // Audit log
+    await auditService.log({
+      userId: req.user.id,
+      action: 'MOVE',
+      entityType: 'sheets',
+      entityId: parseInt(id),
+      metadata: { 
+        folder_id: folder_id || null,
+        sheet_name: sheetCheck.rows[0].name 
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Sheet moved successfully'
+    });
+  } catch (error) {
+    console.error('Move sheet error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to move sheet' }
+    });
+  }
+});
+
 // GET /sheets/:id/history - Get edit history for a sheet
 router.get('/:id/history', authenticate, requireSheetAccess, async (req, res) => {
   try {
@@ -548,7 +798,7 @@ router.get('/:id/export', authenticate, async (req, res) => {
 
     const sheet = sheetResult.rows[0];
 
-    // Get sheet data
+    // Get all sheet data
     const dataResult = await pool.query(`
       SELECT row_number, data
       FROM sheet_data
@@ -558,24 +808,100 @@ router.get('/:id/export', authenticate, async (req, res) => {
 
     // Prepare data for SheetJS
     const columns = sheet.columns;
-    const rows = dataResult.rows.map(r => r.data);
+    let rows = dataResult.rows.map(r => r.data);
+
+    // Filter out any row that exactly matches the column headers (A, B, C, D, etc.)
+    rows = rows.filter(row => {
+      const values = columns.map(col => row[col] || '');
+      // Check if this row contains values that exactly match column names
+      const isHeaderRow = values.filter(v => v).length > 0 && 
+                          values.every((val, idx) => {
+                            return val === columns[idx] || val === '';
+                          }) &&
+                          values.some((val, idx) => val === columns[idx]);
+      return !isHeaderRow;
+    });
 
     // Create workbook
     const wb = XLSX.utils.book_new();
-    
-    // Convert to array format for SheetJS
-    const wsData = [];
-    // Add header row
-    wsData.push(columns);
-    // Add data rows
-    rows.forEach(row => {
-      const rowArray = columns.map(col => row[col] || '');
-      wsData.push(rowArray);
-    });
 
-    // Create worksheet
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31)); // Excel sheet name limit
+    // ── Detect Inventory Tracker (has DATE:YYYY-MM-DD:IN columns) ──
+    const invDateRegex = /^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/;
+    const isInventoryTracker = columns.some(col => invDateRegex.test(col));
+
+    if (isInventoryTracker) {
+      // Categorise columns
+      const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'Maintaining'].includes(col));
+      const frozenRight = columns.filter(col => col === 'Total Quantity');
+      const dates = [...new Set(
+        columns
+          .filter(col => /^DATE:\d{4}-\d{2}-\d{2}:IN$/.test(col))
+          .map(col => col.split(':')[1])
+      )].sort();
+
+      // Helper: format date as "Feb-17"
+      const fmtDate = (d) => {
+        const dt = new Date(d + 'T00:00:00');
+        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      };
+
+      // Row 1: Product Name | QC Code | Maintaining | Feb-17 | (blank) | Feb-18 | (blank) | ... | Total Quantity
+      const headerRow1 = [
+        ...frozenLeft,
+        ...dates.flatMap(d => [fmtDate(d), '']),
+        ...frozenRight,
+      ];
+
+      // Row 2: (blank per frozen left) | IN | OUT | IN | OUT | ... | (blank per frozen right)
+      const headerRow2 = [
+        ...frozenLeft.map(() => ''),
+        ...dates.flatMap(() => ['IN', 'OUT']),
+        ...frozenRight.map(() => ''),
+      ];
+
+      const wsData = [headerRow1, headerRow2];
+
+      // Data rows
+      rows.forEach(row => {
+        const rowArr = [
+          ...frozenLeft.map(col => row[col] || ''),
+          ...dates.flatMap(d => [row[`DATE:${d}:IN`] || '', row[`DATE:${d}:OUT`] || '']),
+          ...frozenRight.map(col => row[col] || ''),
+        ];
+        wsData.push(rowArr);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+      // Merge date group cells across IN/OUT pairs in row 1 (r=0)
+      ws['!merges'] = [];
+      let colIdx = frozenLeft.length;
+      for (let i = 0; i < dates.length; i++) {
+        ws['!merges'].push({ s: { r: 0, c: colIdx }, e: { r: 0, c: colIdx + 1 } });
+        colIdx += 2;
+      }
+
+      // Column widths
+      ws['!cols'] = [
+        ...frozenLeft.map(() => ({ wch: 18 })),
+        ...dates.flatMap(() => [{ wch: 10 }, { wch: 10 }]),
+        ...frozenRight.map(() => ({ wch: 16 })),
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
+    } else {
+      // ── Standard export with column header row 1 ──
+      const wsData = [];
+      // Header row
+      wsData.push(columns);
+      // Data rows
+      rows.forEach(row => {
+        const rowArray = columns.map(col => row[col] || '');
+        wsData.push(rowArray);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
+    }
 
     // Generate buffer
     const fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: format === 'csv' ? 'csv' : 'xlsx' });

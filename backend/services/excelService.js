@@ -117,8 +117,8 @@ const excelService = {
       // Create workbook
       const workbook = XLSX.utils.book_new();
       
-      // Prepare data with headers
-      const exportData = [columns.length > 0 ? columns : Object.keys(data[0] || {})];
+      // Prepare data without headers
+      const exportData = [];
       
       data.forEach(row => {
         const rowData = columns.length > 0 

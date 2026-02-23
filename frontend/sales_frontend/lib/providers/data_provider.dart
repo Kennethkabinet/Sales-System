@@ -8,7 +8,6 @@ import '../services/socket_service.dart';
 /// Data state provider for files, formulas, and realtime updates
 class DataProvider extends ChangeNotifier {
   // Auth
-  String? _token;
   String? _userId;
 
   // Files
@@ -24,7 +23,7 @@ class DataProvider extends ChangeNotifier {
 
   // Formulas
   List<Formula> _formulas = [];
-  
+
   // Audit
   List<AuditLog> _auditLogs = [];
 
@@ -65,7 +64,6 @@ class DataProvider extends ChangeNotifier {
   }
 
   void setAuth(String token, String userId) {
-    _token = token;
     _userId = userId;
     ApiService.setAuthToken(token);
     SocketService.instance.connect(token);
@@ -91,7 +89,8 @@ class DataProvider extends ChangeNotifier {
     };
 
     socket.onRowLocked = (data) {
-      _lockedRows[data['row_id']?.toString() ?? ''] = data['locked_by']?.toString() ?? '';
+      _lockedRows[data['row_id']?.toString() ?? ''] =
+          data['locked_by']?.toString() ?? '';
       notifyListeners();
     };
 
@@ -103,7 +102,7 @@ class DataProvider extends ChangeNotifier {
     socket.onRowUpdated = (data) {
       final rowId = data['row_id']?.toString();
       final values = Map<String, dynamic>.from(data['values'] ?? {});
-      
+
       final index = _fileData.indexWhere((r) => r['id']?.toString() == rowId);
       if (index != -1) {
         _fileData[index] = {..._fileData[index], ...values};
@@ -114,9 +113,9 @@ class DataProvider extends ChangeNotifier {
     socket.onActiveUsers = (data) {
       final users = (data['users'] as List? ?? [])
           .map((u) => ActiveUser(
-            id: u['user_id']?.toString() ?? '',
-            name: u['username']?.toString() ?? '',
-          ))
+                id: u['user_id']?.toString() ?? '',
+                name: u['username']?.toString() ?? '',
+              ))
           .toList();
       _activeUsers = users;
       notifyListeners();
@@ -130,14 +129,16 @@ class DataProvider extends ChangeNotifier {
 
   // ============== Files ==============
 
-  Future<void> loadFiles({int page = 1, int? departmentId, int? folderId}) async {
+  Future<void> loadFiles(
+      {int page = 1, int? departmentId, int? folderId}) async {
     _isLoading = true;
     _error = null;
     _currentFolderId = folderId;
     notifyListeners();
 
     try {
-      final result = await ApiService.getFiles(page: page, departmentId: departmentId, folderId: folderId);
+      final result = await ApiService.getFiles(
+          page: page, departmentId: departmentId, folderId: folderId);
       _files = result.files;
       _folders = result.folders;
       _filePagination = result.pagination;
@@ -240,9 +241,9 @@ class DataProvider extends ChangeNotifier {
         fileName: fileName,
         name: name,
       );
-      
+
       print('uploadFile response: $response'); // Debug
-      
+
       if (response['success'] == true && response['file'] != null) {
         // Reload files to get the new file in the list
         await loadFiles();
@@ -265,7 +266,8 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final newFile = await ApiService.createFile(name, folderId: _currentFolderId);
+      final newFile =
+          await ApiService.createFile(name, folderId: _currentFolderId);
       _files.insert(0, newFile);
     } catch (e) {
       _error = e.toString();
@@ -299,11 +301,13 @@ class DataProvider extends ChangeNotifier {
 
       final result = await ApiService.getFileData(fileId, page: page);
       _currentFile = result.file;
-      _fileColumns = result.file?.columns ?? [];
-      _fileData = result.data.map((row) => {
-        ...row.values,
-        'id': row.rowId.toString(),
-      }).toList();
+      _fileColumns = result.file.columns;
+      _fileData = result.data
+          .map((row) => {
+                ...row.values,
+                'id': row.rowId.toString(),
+              })
+          .toList();
       _dataPagination = result.pagination;
 
       // Join file for real-time updates
@@ -322,7 +326,7 @@ class DataProvider extends ChangeNotifier {
     try {
       final intRowId = int.tryParse(rowId) ?? 0;
       await ApiService.updateRow(_currentFile!.id, intRowId, values);
-      
+
       // Update local data
       final index = _fileData.indexWhere((r) => r['id']?.toString() == rowId);
       if (index != -1) {
@@ -332,7 +336,7 @@ class DataProvider extends ChangeNotifier {
 
       // Broadcast to others via socket
       SocketService.instance.updateRow(_currentFile!.id, intRowId, values);
-      
+
       return true;
     } catch (e) {
       _error = e.toString();
@@ -421,7 +425,8 @@ class DataProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> createFormula(String name, String expression, String? description) async {
+  Future<bool> createFormula(
+      String name, String expression, String? description) async {
     try {
       final formula = Formula(
         id: 0,
@@ -441,7 +446,8 @@ class DataProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> updateFormula(int id, String name, String expression, String? description) async {
+  Future<bool> updateFormula(
+      int id, String name, String expression, String? description) async {
     try {
       final formula = Formula(
         id: id,
@@ -477,21 +483,22 @@ class DataProvider extends ChangeNotifier {
     }
   }
 
-  Future<FormulaApplyResult?> applyFormula(int formulaId, {Map<String, String>? columnMapping}) async {
+  Future<FormulaApplyResult?> applyFormula(int formulaId,
+      {Map<String, String>? columnMapping}) async {
     if (_currentFile == null) return null;
 
     try {
       final result = await ApiService.applyFormula(
-        formulaId, 
+        formulaId,
         _currentFile!.id,
         columnMapping: columnMapping,
       );
-      
+
       if (result.success) {
         // Reload file data to see results
         await loadFileData(_currentFile!.id, _userId ?? '');
       }
-      
+
       return result;
     } catch (e) {
       _error = e.toString();

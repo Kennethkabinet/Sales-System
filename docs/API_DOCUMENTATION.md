@@ -127,6 +127,86 @@ Update user role (Admin only).
 
 ---
 
+## Departments
+
+### GET /users/meta/departments
+Get all departments.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "departments": [
+    {
+      "id": 1,
+      "name": "Sales",
+      "description": "Sales department"
+    }
+  ]
+}
+```
+
+### POST /users/meta/departments
+Create a new department (Admin only).
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "name": "Marketing",
+  "description": "Marketing and communications"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "department": {
+    "id": 5,
+    "name": "Marketing",
+    "description": "Marketing and communications"
+  }
+}
+```
+
+**Error Responses:**
+- `400` - Validation error (empty name)
+- `400` - Duplicate department name
+- `403` - Forbidden (non-admin user)
+
+### DELETE /users/meta/departments/:id
+Delete a department (Admin only).
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Department deleted successfully"
+}
+```
+
+**Error Responses:**
+- `404` - Department not found
+- `400` - Department has assigned users
+- `403` - Forbidden (non-admin user)
+
+---
+
 ## Files
 
 ### GET /files

@@ -43,6 +43,7 @@ const formulaRoutes = require('./routes/formulas');
 const auditRoutes = require('./routes/audit');
 const dashboardRoutes = require('./routes/dashboard');
 const sheetRoutes = require('./routes/sheets');
+const inventoryRoutes = require('./routes/inventory');
 
 const PORT = process.env.PORT || 3001;
 
@@ -88,6 +89,7 @@ app.use('/api/formulas', formulaRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/sheets', sheetRoutes);
+app.use('/api/inventory', inventoryRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

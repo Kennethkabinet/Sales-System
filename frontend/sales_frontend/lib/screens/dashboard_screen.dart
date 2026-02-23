@@ -1,9 +1,8 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
-import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
@@ -14,7 +13,6 @@ import 'user_management_screen.dart';
 const Color _kSidebarBg = Color(0xFFCD5C5C);
 const Color _kContentBg = Color(0xFFFDF5F0);
 const Color _kNavy = Color(0xFF1E3A6E);
-const Color _kBlue = Color(0xFF3B5998);
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -452,12 +450,10 @@ class _DashboardContent extends StatelessWidget {
                 _ChartCard(
                   title: 'Recent Activity',
                   child: stats != null && stats.recentActivity.isNotEmpty
-                      ? _RecentActivityTable(
-                          activities: stats.recentActivity)
+                      ? _RecentActivityTable(activities: stats.recentActivity)
                       : const Padding(
                           padding: EdgeInsets.all(32),
-                          child:
-                              Center(child: Text('No recent activity')),
+                          child: Center(child: Text('No recent activity')),
                         ),
                 ),
                 const SizedBox(height: 24),
@@ -603,8 +599,10 @@ class _ActivityChart extends StatelessWidget {
               },
             ),
           ),
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         ),
         borderData: FlBorderData(show: false),
         lineBarsData: [
@@ -632,8 +630,14 @@ class _FileTypesChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = [Colors.blue, Colors.green, Colors.orange, Colors.purple, Colors.red];
-    
+    final colors = [
+      Colors.blue,
+      Colors.green,
+      Colors.orange,
+      Colors.purple,
+      Colors.red
+    ];
+
     return PieChart(
       PieChartData(
         sections: data.asMap().entries.map((entry) {
@@ -694,118 +698,6 @@ class _RecentActivityTable extends StatelessWidget {
       return '${diff.inDays}d ago';
     } catch (_) {
       return timestamp;
-    }
-  }
-}
-
-class _ActiveUsersList extends StatelessWidget {
-  final List<DashboardActiveUser> users;
-
-  const _ActiveUsersList({required this.users});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: users.map((user) {
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundColor: _getRoleColor(user.role).withOpacity(0.15),
-            child: Text(
-              _getInitials(user.fullName.isNotEmpty ? user.fullName : user.username),
-              style: TextStyle(
-                color: _getRoleColor(user.role),
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-          ),
-          title: Text(
-            user.fullName.isNotEmpty ? user.fullName : user.username,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(user.email),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _getRoleColor(user.role).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  user.role.toUpperCase(),
-                  style: TextStyle(
-                    color: _getRoleColor(user.role),
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.green.withOpacity(0.4),
-                      blurRadius: 4,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _formatLastLogin(user.lastLogin),
-                style: TextStyle(
-                  color: Colors.grey[600],
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  String _getInitials(String name) {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return name.isNotEmpty ? name[0].toUpperCase() : '?';
-  }
-
-  Color _getRoleColor(String role) {
-    switch (role.toLowerCase()) {
-      case 'admin':
-        return Colors.red;
-      case 'editor':
-        return Colors.blue;
-      case 'viewer':
-        return Colors.green;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  String _formatLastLogin(String? lastLogin) {
-    if (lastLogin == null) return 'N/A';
-    try {
-      final dt = DateTime.parse(lastLogin);
-      final now = DateTime.now();
-      final diff = now.difference(dt);
-      if (diff.inMinutes < 1) return 'Just now';
-      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-      if (diff.inHours < 24) return '${diff.inHours}h ago';
-      return '${diff.inDays}d ago';
-    } catch (_) {
-      return 'N/A';
     }
   }
 }

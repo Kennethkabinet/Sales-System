@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS departments (
 
 -- Insert default departments
 INSERT INTO departments (name, description) VALUES 
-    ('Admin', 'System Administration'),
     ('Sales', 'Sales Department'),
     ('Operations', 'Operations Department'),
     ('Finance', 'Finance Department'),
