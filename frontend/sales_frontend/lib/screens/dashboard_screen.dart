@@ -8,11 +8,12 @@ import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
 import 'sheet_screen.dart';
 import 'user_management_screen.dart';
+import 'settings_screen.dart';
 
-// ─── Theme colors ───
-const Color _kSidebarBg = Color(0xFFCD5C5C);
-const Color _kContentBg = Color(0xFFFDF5F0);
-const Color _kNavy = Color(0xFF1E3A6E);
+// ─── Theme colors (clean modern palette) ───
+const Color _kSidebarBg = Color(0xFF1A73E8); // accent blue (active states)
+const Color _kContentBg = Color(0xFFFFFFFF); // white base
+const Color _kNavy = Color(0xFF202124); // near-black text
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -46,6 +47,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!isViewer) const FileListScreen(),
       const AuditHistoryScreen(),
       if (isAdmin) const UserManagementScreen(),
+      if (isAdmin) const SettingsScreen(),
     ];
 
     // Build nav items with correct indices
@@ -63,7 +65,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       navItems.add(_NavItem(Icons.people_alt_outlined, 'Users', nextIdx));
       nextIdx++;
     }
-    navItems.add(_NavItem(Icons.settings, 'Settings', -1)); // placeholder
+    if (isAdmin) {
+      navItems.add(_NavItem(Icons.settings_outlined, 'Settings', nextIdx));
+    }
 
     return Scaffold(
       backgroundColor: _kContentBg,
@@ -74,7 +78,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             duration: const Duration(milliseconds: 200),
             width: _sidebarExpanded ? 220 : 68,
             clipBehavior: Clip.hardEdge,
-            decoration: const BoxDecoration(color: _kSidebarBg),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(
+                right: BorderSide(color: Colors.grey.shade200, width: 1),
+              ),
+            ),
             child: Column(
               children: [
                 // Hamburger
@@ -88,7 +97,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     top: 8,
                   ),
                   child: IconButton(
-                    icon: const Icon(Icons.menu, color: Colors.white, size: 26),
+                    icon:
+                        Icon(Icons.menu, color: Colors.grey.shade600, size: 24),
                     onPressed: () =>
                         setState(() => _sidebarExpanded = !_sidebarExpanded),
                   ),
@@ -124,17 +134,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 // Top bar (only for Dashboard page – other pages have their own header)
                 if (_selectedIndex == 0)
                   Container(
-                    height: 60,
-                    color: _kContentBg,
+                    height: 56,
                     padding: const EdgeInsets.symmetric(horizontal: 24),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border(
+                        bottom: BorderSide(color: Colors.grey.shade100),
+                      ),
+                    ),
                     alignment: Alignment.centerLeft,
                     child: Text(
                       _currentTitle,
                       style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w900,
-                        color: _kNavy,
-                        letterSpacing: 0.5,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF202124),
+                        letterSpacing: 0.2,
                       ),
                     ),
                   ),
@@ -153,11 +168,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String get _currentTitle {
     switch (_selectedIndex) {
       case 0:
-        return 'ADMIN DASHBOARD';
+        return 'Dashboard';
       case 1:
-        return 'WORK SHEETS';
+        return 'Work Sheets';
       default:
-        return 'ADMIN DASHBOARD';
+        return 'Dashboard';
     }
   }
 
@@ -180,15 +195,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 20,
-            backgroundColor: Colors.grey[300],
-            child: Icon(Icons.person, color: Colors.grey[600], size: 24),
+            backgroundColor: const Color(0xFFE8F0FE),
+            child: Icon(Icons.person, color: _kSidebarBg, size: 22),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -198,18 +213,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text(
                   (auth.user?.fullName ?? 'ADMINISTRATOR').toUpperCase(),
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.3,
+                    color: Color(0xFF202124),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
                   ),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
                 Text(
                   auth.user?.role ?? 'Administrator',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
+                  style: const TextStyle(
+                    color: Color(0xFF5F6368),
                     fontSize: 11,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -249,19 +264,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 Icon(
                   item.icon,
-                  color: selected ? _kSidebarBg : Colors.white,
-                  size: 22,
+                  color: selected ? _kSidebarBg : const Color(0xFF5F6368),
+                  size: 20,
                 ),
                 if (_sidebarExpanded) ...[
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       item.label,
                       style: TextStyle(
-                        color: selected ? _kSidebarBg : Colors.white,
+                        color: selected ? _kSidebarBg : const Color(0xFF5F6368),
                         fontWeight:
-                            selected ? FontWeight.bold : FontWeight.w500,
-                        fontSize: 14,
+                            selected ? FontWeight.w600 : FontWeight.w400,
+                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -318,15 +333,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ? MainAxisAlignment.start
                 : MainAxisAlignment.center,
             children: [
-              const Icon(Icons.logout, color: Colors.white, size: 22),
+              const Icon(Icons.logout, color: Color(0xFF5F6368), size: 20),
               if (_sidebarExpanded) ...[
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 const Text(
                   'Logout',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w500,
-                    fontSize: 14,
+                    color: Color(0xFF5F6368),
+                    fontWeight: FontWeight.w400,
+                    fontSize: 13,
                   ),
                 ),
               ],
@@ -546,8 +561,8 @@ class _ChartCard extends StatelessWidget {
             title,
             style: const TextStyle(
               fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: _kNavy,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF202124),
             ),
           ),
           const SizedBox(height: 16),

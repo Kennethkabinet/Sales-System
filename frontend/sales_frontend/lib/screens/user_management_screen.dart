@@ -4,9 +4,9 @@ import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../models/user.dart';
 
-// ── Colour constants ──
-const Color _kContentBg = Color(0xFFFDF5F0);
-const Color _kNavy = Color(0xFF1E3A6E);
+// ── Colour constants (clean modern palette) ──
+const Color _kContentBg = Color(0xFFFFFFFF); // white base
+const Color _kNavy = Color(0xFF202124); // near-black text
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -1481,12 +1481,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     children: [
                       // ── Title ──
                       const Text(
-                        'USER MANAGEMENT',
+                        'User Management',
                         style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
                           color: _kNavy,
-                          letterSpacing: 0.5,
+                          letterSpacing: 0.2,
                         ),
                       ),
                       const SizedBox(height: 20),

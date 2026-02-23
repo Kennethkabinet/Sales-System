@@ -134,6 +134,9 @@ class _SheetScreenState extends State<SheetScreen> {
   int? _selectionEndCol;
   bool _isDragging = false;
 
+  // Bulk sheet selection (All Sheets table)
+  final Set<int> _selectedSheetIds = {};
+
   // Column widths for resizable columns
   final Map<int, double> _columnWidths = {};
   static const double _defaultCellWidth = 120.0;
@@ -157,8 +160,6 @@ class _SheetScreenState extends State<SheetScreen> {
   // Linked controllers for frozen column header and row numbers
   final _headerHScrollController = ScrollController();
   final _rowNumVScrollController = ScrollController();
-  // Ribbon toolbar horizontal scroll
-  final _ribbonScrollController = ScrollController();
 
   // Ribbon toolbar state
   String _selectedRibbonTab = 'File';
@@ -1473,6 +1474,91 @@ class _SheetScreenState extends State<SheetScreen> {
     }
   }
 
+  Future<void> _bulkDeleteSheets() async {
+    if (_selectedSheetIds.isEmpty) return;
+    final count = _selectedSheetIds.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Selected Sheets'),
+        content: Text(
+            'Permanently delete $count sheet${count > 1 ? 's' : ''}? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(_, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(_, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _isLoading = true);
+    for (final id in List<int>.from(_selectedSheetIds)) {
+      try {
+        await ApiService.deleteSheet(id);
+      } catch (_) {}
+    }
+    setState(() => _selectedSheetIds.clear());
+    await _loadSheets();
+  }
+
+  Future<void> _bulkMoveSheets() async {
+    if (_selectedSheetIds.isEmpty) return;
+    List<Map<String, dynamic>> allFolders = [];
+    try {
+      final response = await ApiService.getSheetFolders();
+      allFolders = (response['folders'] as List?)
+              ?.cast<Map<String, dynamic>>()
+              .toList() ??
+          [];
+    } catch (_) {}
+    if (!mounted) return;
+    final selectedFolderId = await showDialog<int?>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Move to Folder'),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.folder_off_outlined),
+                title: const Text('Root (no folder)'),
+                onTap: () => Navigator.pop(_, -1),
+              ),
+              const Divider(height: 1),
+              ...allFolders.map((f) => ListTile(
+                    leading: const Icon(Icons.folder, color: Colors.amber),
+                    title: Text(f['name'] ?? ''),
+                    onTap: () => Navigator.pop(_, f['id'] as int),
+                  )),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(_), child: const Text('Cancel')),
+        ],
+      ),
+    );
+    if (selectedFolderId == null || !mounted) return;
+    final targetId = selectedFolderId == -1 ? null : selectedFolderId;
+    setState(() => _isLoading = true);
+    for (final id in List<int>.from(_selectedSheetIds)) {
+      try {
+        await ApiService.moveSheetToFolder(id, targetId);
+      } catch (_) {}
+    }
+    setState(() => _selectedSheetIds.clear());
+    await _loadSheets();
+  }
+
   Future<void> _deleteSheet(int sheetId) async {
     setState(() => _isLoading = true);
 
@@ -2373,15 +2459,15 @@ class _SheetScreenState extends State<SheetScreen> {
     _verticalScrollController.dispose();
     _headerHScrollController.dispose();
     _rowNumVScrollController.dispose();
-    _ribbonScrollController.dispose();
     super.dispose();
   }
 
-  // ─── Theme colors (match dashboard) ───
-  static const Color _kSidebarBg = Color(0xFFCD5C5C);
-  static const Color _kContentBg = Color(0xFFFDF5F0);
-  static const Color _kNavy = Color(0xFF1E3A6E);
-  static const Color _kBlue = Color(0xFF3B5998);
+  // ─── Theme colors (clean modern palette) ───
+  static const Color _kSidebarBg =
+      Color(0xFF1A73E8); // accent blue – active states
+  static const Color _kContentBg = Color(0xFFFFFFFF); // pure white base
+  static const Color _kNavy = Color(0xFF202124); // near-black text
+  static const Color _kBlue = Color(0xFF1A73E8); // accent blue – buttons
 
   @override
   Widget build(BuildContext context) {
@@ -2497,12 +2583,12 @@ class _SheetScreenState extends State<SheetScreen> {
                 ),
               ] else
                 const Text(
-                  'WORK SHEETS',
+                  'Work Sheets',
                   style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
                     color: _kNavy,
-                    letterSpacing: 0.5,
+                    letterSpacing: 0.2,
                   ),
                 ),
             ],
@@ -2696,6 +2782,53 @@ class _SheetScreenState extends State<SheetScreen> {
                   color: _kBlue,
                 ),
               ),
+              const Spacer(),
+              if (_selectedSheetIds.isNotEmpty) ...[
+                Text(
+                  '${_selectedSheetIds.length} selected',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: (auth.user?.role == 'admin' ||
+                          auth.user?.role == 'manager' ||
+                          auth.user?.role == 'editor')
+                      ? _bulkMoveSheets
+                      : null,
+                  icon: const Icon(Icons.drive_file_move_outlined, size: 14),
+                  label: const Text('Move', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blueGrey,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  onPressed: (auth.user?.role == 'admin' ||
+                          auth.user?.role == 'manager')
+                      ? _bulkDeleteSheets
+                      : null,
+                  icon: const Icon(Icons.delete_outline, size: 14),
+                  label: const Text('Delete', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                TextButton(
+                  onPressed: () => setState(() => _selectedSheetIds.clear()),
+                  child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 12),
@@ -2782,166 +2915,278 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildAllSheetsTable(AuthProvider auth) {
     final role = auth.user?.role ?? '';
     final canManage = role == 'admin' || role == 'editor' || role == 'manager';
+    final allSelected = _sheets.isNotEmpty &&
+        _sheets.every((s) => _selectedSheetIds.contains(s.id));
 
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.blue.shade100),
-      ),
-      child: DataTable(
-        headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
-        headingTextStyle: TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 13,
-          color: Colors.grey[700],
-        ),
-        dataRowMinHeight: 48,
-        dataRowMaxHeight: 56,
-        columnSpacing: 24,
-        columns: const [
-          DataColumn(label: Text('Name')),
-          DataColumn(label: Text('Owner')),
-          DataColumn(label: Text('Rows'), numeric: true),
-          DataColumn(label: Text('Created')),
-          DataColumn(label: Text('Last Modified')),
-          DataColumn(label: Text('Actions')),
-        ],
-        rows: _sheets.map((sheet) {
-          return DataRow(
-            cells: [
-              // Name
-              DataCell(
-                InkWell(
-                  onTap: () => _loadSheetData(sheet.id),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: Colors.green[600],
-                          borderRadius: BorderRadius.circular(4),
+    Widget hCell(String label) => TableCell(
+          verticalAlignment: TableCellVerticalAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Text(label,
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.grey[700])),
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blue.shade100),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Table(
+              columnWidths: const {
+                0: FixedColumnWidth(48),
+                1: FlexColumnWidth(3),
+                2: FlexColumnWidth(1.5),
+                3: FlexColumnWidth(1.4),
+                4: FlexColumnWidth(1.4),
+                5: FixedColumnWidth(90),
+              },
+              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+              children: [
+                // Header
+                TableRow(
+                  decoration: BoxDecoration(color: Colors.grey.shade50),
+                  children: [
+                    TableCell(
+                      verticalAlignment: TableCellVerticalAlignment.middle,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Checkbox(
+                          value: allSelected,
+                          tristate:
+                              _selectedSheetIds.isNotEmpty && !allSelected,
+                          onChanged: canManage
+                              ? (_) => setState(() {
+                                    if (allSelected) {
+                                      _selectedSheetIds.clear();
+                                    } else {
+                                      _selectedSheetIds
+                                          .addAll(_sheets.map((s) => s.id));
+                                    }
+                                  })
+                              : null,
                         ),
-                        child: const Icon(Icons.description,
-                            color: Colors.white, size: 16),
                       ),
-                      const SizedBox(width: 10),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            sheet.name,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                            ),
-                          ),
-                          Text(
-                            '${sheet.rows.length} rows',
-                            style: TextStyle(
-                                fontSize: 11, color: Colors.grey[400]),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    ),
+                    hCell('Name'),
+                    hCell('Owner'),
+                    hCell('Created'),
+                    hCell('Last Modified'),
+                    hCell('Actions'),
+                  ],
                 ),
-              ),
-              // Owner
-              DataCell(Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 12,
-                    backgroundColor: Colors.grey[300],
-                    child:
-                        Icon(Icons.person, size: 14, color: Colors.grey[600]),
-                  ),
-                  const SizedBox(width: 6),
-                  Text('admin',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                ],
-              )),
-              // Rows
-              DataCell(Text(
-                '${sheet.rows.length}',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              )),
-              // Created
-              DataCell(Text(
-                _formatDate(sheet.createdAt),
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              )),
-              // Last Modified
-              DataCell(Text(
-                _formatDate(sheet.updatedAt ?? sheet.createdAt),
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              )),
-              // Actions
-              DataCell(
-                canManage
-                    ? Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // ⋮ menu: Open / Rename / Move
-                          PopupMenuButton<String>(
-                            icon: Icon(Icons.more_vert,
-                                size: 18, color: Colors.grey[500]),
-                            padding: EdgeInsets.zero,
-                            onSelected: (value) {
-                              if (value == 'open') _loadSheetData(sheet.id);
-                              if (value == 'rename') _renameSheet(sheet);
-                              if (value == 'move')
-                                _showMoveSheetToFolderDialog(sheet);
-                            },
-                            itemBuilder: (_) => [
-                              const PopupMenuItem(
-                                  value: 'open', child: Text('Open')),
-                              const PopupMenuItem(
-                                  value: 'rename', child: Text('Rename')),
-                              const PopupMenuItem(
-                                value: 'move',
-                                child: Row(
+                // Divider
+                TableRow(
+                  children: List.generate(
+                      6,
+                      (_) => const TableCell(
+                          child: Divider(height: 1, thickness: 1))),
+                ),
+                // Rows
+                ..._sheets.asMap().entries.map((entry) {
+                  final idx = entry.key;
+                  final sheet = entry.value;
+                  final isSelected = _selectedSheetIds.contains(sheet.id);
+                  final rowBg = isSelected
+                      ? Colors.blue.shade50
+                      : idx.isEven
+                          ? Colors.white
+                          : const Color(0xFFF9FBF9);
+                  return TableRow(
+                    decoration: BoxDecoration(color: rowBg),
+                    children: [
+                      // Checkbox
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Checkbox(
+                            value: isSelected,
+                            onChanged: canManage
+                                ? (v) => setState(() {
+                                      if (v == true) {
+                                        _selectedSheetIds.add(sheet.id);
+                                      } else {
+                                        _selectedSheetIds.remove(sheet.id);
+                                      }
+                                    })
+                                : null,
+                          ),
+                        ),
+                      ),
+                      // Name + row count
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          child: InkWell(
+                            onTap: () => _loadSheetData(sheet.id),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 28,
+                                  height: 28,
+                                  decoration: BoxDecoration(
+                                    color: Colors.green[600],
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(Icons.description,
+                                      color: Colors.white, size: 16),
+                                ),
+                                const SizedBox(width: 10),
+                                Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Icon(Icons.drive_file_move_outlined,
-                                        size: 16, color: Colors.blueGrey),
-                                    SizedBox(width: 8),
-                                    Text('Move to Folder'),
+                                    Text(
+                                      sheet.name,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13),
+                                    ),
                                   ],
                                 ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Owner
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircleAvatar(
+                                radius: 12,
+                                backgroundColor: Colors.grey[300],
+                                child: Icon(Icons.person,
+                                    size: 14, color: Colors.grey[600]),
                               ),
+                              const SizedBox(width: 6),
+                              Text('admin',
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.grey[600])),
                             ],
                           ),
-                          // Visible delete button for admin / manager
-                          if (role == 'admin' || role == 'manager')
-                            Tooltip(
-                              message: 'Delete sheet',
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(4),
-                                onTap: () => _confirmDeleteSheet(sheet),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Icon(Icons.delete_outline,
-                                      size: 18, color: Colors.red[400]),
-                                ),
-                              ),
-                            ),
-                        ],
-                      )
-                    : const SizedBox(),
-              ),
-            ],
-          );
-        }).toList(),
-      ),
+                        ),
+                      ),
+                      // Created
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          child: Text(
+                            _formatDate(sheet.createdAt),
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[600]),
+                          ),
+                        ),
+                      ),
+                      // Last Modified
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          child: Text(
+                            _formatDate(sheet.updatedAt ?? sheet.createdAt),
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[600]),
+                          ),
+                        ),
+                      ),
+                      // Actions
+                      TableCell(
+                        verticalAlignment: TableCellVerticalAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: canManage
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    PopupMenuButton<String>(
+                                      icon: Icon(Icons.more_vert,
+                                          size: 18, color: Colors.grey[500]),
+                                      padding: EdgeInsets.zero,
+                                      onSelected: (value) {
+                                        if (value == 'open')
+                                          _loadSheetData(sheet.id);
+                                        if (value == 'rename')
+                                          _renameSheet(sheet);
+                                        if (value == 'move')
+                                          _showMoveSheetToFolderDialog(sheet);
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                            value: 'open', child: Text('Open')),
+                                        PopupMenuItem(
+                                            value: 'rename',
+                                            child: Text('Rename')),
+                                        PopupMenuItem(
+                                          value: 'move',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                  Icons
+                                                      .drive_file_move_outlined,
+                                                  size: 16,
+                                                  color: Colors.blueGrey),
+                                              SizedBox(width: 8),
+                                              Text('Move to Folder'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (role == 'admin' || role == 'manager')
+                                      Tooltip(
+                                        message: 'Delete sheet',
+                                        child: InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                          onTap: () =>
+                                              _confirmDeleteSheet(sheet),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(4),
+                                            child: Icon(Icons.delete_outline,
+                                                size: 18,
+                                                color: Colors.red[400]),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                )
+                              : const SizedBox(),
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  // ── Outlined action button ──
   Widget _buildOutlinedBtn({
     required IconData icon,
     required String label,
@@ -2980,13 +3225,19 @@ class _SheetScreenState extends State<SheetScreen> {
   // ═══════════════════════════════════════════════════════
   Widget _buildRedHeader() {
     return Container(
-      height: 48,
-      color: _kSidebarBg,
+      height: 44,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
+        ),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
+            icon: const Icon(Icons.arrow_back,
+                size: 20, color: Color(0xFF5F6368)),
             tooltip: 'Back to Work Sheets',
             onPressed: () {
               setState(() {
@@ -3002,12 +3253,12 @@ class _SheetScreenState extends State<SheetScreen> {
           ),
           const SizedBox(width: 8),
           const Text(
-            'WORK SHEETS',
+            'Work Sheets',
             style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-              letterSpacing: 0.5,
+              color: Color(0xFF202124),
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              letterSpacing: 0.2,
             ),
           ),
         ],
@@ -3116,19 +3367,16 @@ class _SheetScreenState extends State<SheetScreen> {
     final isViewer =
         (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') ==
             'viewer';
-    final contentH = _selectedRibbonTab == 'All' ? 72.0 : 52.0;
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
         children: [
-          // Tab header row - fills full width
+          // Tab headers
           Container(
             height: 32,
             color: Colors.white,
@@ -3144,15 +3392,12 @@ class _SheetScreenState extends State<SheetScreen> {
               ],
             ),
           ),
-          // Content area - scrolls horizontally when buttons overflow
-          SizedBox(
-            height: contentH,
-            child: SingleChildScrollView(
-              controller: _ribbonScrollController,
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: _buildRibbonContent(isViewer),
-            ),
+          // Tab content
+          Container(
+            height: _selectedRibbonTab == 'All' ? 72 : 52,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.white,
+            child: _buildRibbonContent(isViewer),
           ),
         ],
       ),
@@ -3164,9 +3409,11 @@ class _SheetScreenState extends State<SheetScreen> {
     return GestureDetector(
       onTap: () => setState(() => _selectedRibbonTab = label),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         alignment: Alignment.center,
         decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFF0F4FF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
           border: Border(
             bottom: BorderSide(
               color: isSelected ? _kSidebarBg : Colors.transparent,
@@ -3177,9 +3424,9 @@ class _SheetScreenState extends State<SheetScreen> {
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 13,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-            color: isSelected ? _kSidebarBg : Colors.grey[600],
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+            color: isSelected ? _kSidebarBg : const Color(0xFF5F6368),
           ),
         ),
       ),
@@ -3278,12 +3525,13 @@ class _SheetScreenState extends State<SheetScreen> {
                     ?.username) ||
             role == 'admin');
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // ── File ──
-        group('File', [
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── File ──
+          group('File', [
             if (!isViewer && !widget.readOnly)
               _buildRibbonButton(
                   Icons.upload_file, 'Import', canEdit ? _importSheet : null),
@@ -3393,7 +3641,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 _showCriticalAlertsModal,
               ),
             ]),
-      ],
+        ],
+      ),
     );
   }
 
@@ -4519,41 +4768,43 @@ class _SheetScreenState extends State<SheetScreen> {
     final isItalic = formats.contains('italic');
     final isUnderline = formats.contains('underline');
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Text formatting icons
-        _buildFormatToggle(
-            Icons.format_bold, 'Bold', isBold, () => _toggleFormat('bold')),
-        _buildFormatToggle(Icons.format_italic, 'Italic', isItalic,
-            () => _toggleFormat('italic')),
-        _buildFormatToggle(Icons.format_underlined, 'Underline', isUnderline,
-            () => _toggleFormat('underline')),
-        _buildRibbonDivider(),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          // Text formatting icons
+          _buildFormatToggle(
+              Icons.format_bold, 'Bold', isBold, () => _toggleFormat('bold')),
+          _buildFormatToggle(Icons.format_italic, 'Italic', isItalic,
+              () => _toggleFormat('italic')),
+          _buildFormatToggle(Icons.format_underlined, 'Underline', isUnderline,
+              () => _toggleFormat('underline')),
+          _buildRibbonDivider(),
 
-        // Alignment buttons
-        _buildFormatToggle(Icons.format_align_left, 'Align Left', false,
-            () => _setAlignment(TextAlign.left)),
-        _buildFormatToggle(Icons.format_align_center, 'Align Center', false,
-            () => _setAlignment(TextAlign.center)),
-        _buildFormatToggle(Icons.format_align_right, 'Align Right', false,
-            () => _setAlignment(TextAlign.right)),
-        _buildRibbonDivider(),
+          // Alignment buttons
+          _buildFormatToggle(Icons.format_align_left, 'Align Left', false,
+              () => _setAlignment(TextAlign.left)),
+          _buildFormatToggle(Icons.format_align_center, 'Align Center', false,
+              () => _setAlignment(TextAlign.center)),
+          _buildFormatToggle(Icons.format_align_right, 'Align Right', false,
+              () => _setAlignment(TextAlign.right)),
+          _buildRibbonDivider(),
 
-        // Text Color
-        _buildColorButton(
-            Icons.format_color_text, 'Text Color', _currentTextColor, true),
-        const SizedBox(width: 6),
+          // Text Color
+          _buildColorButton(
+              Icons.format_color_text, 'Text Color', _currentTextColor, true),
+          const SizedBox(width: 6),
 
-        // Background Color
-        _buildColorButton(Icons.format_color_fill, 'Background',
-            _currentBackgroundColor, false),
-        _buildRibbonDivider(),
+          // Background Color
+          _buildColorButton(Icons.format_color_fill, 'Background',
+              _currentBackgroundColor, false),
+          _buildRibbonDivider(),
 
-        // Borders
-        _buildRibbonButton(Icons.border_all, 'Borders',
-            _canEditSheet() ? _showBorderMenu : null),
-      ],
+          // Borders
+          _buildRibbonButton(Icons.border_all, 'Borders',
+              _canEditSheet() ? _showBorderMenu : null),
+        ],
+      ),
     );
   }
 
@@ -5127,26 +5378,31 @@ class _SheetScreenState extends State<SheetScreen> {
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(4),
+        hoverColor: const Color(0xFFF1F3F4),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            border: Border.all(
-                color: enabled ? Colors.grey[300]! : Colors.grey[200]!),
-            borderRadius: BorderRadius.circular(6),
-            color: enabled ? Colors.white : Colors.grey[100],
+            borderRadius: BorderRadius.circular(4),
+            color: Colors.transparent,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: enabled ? _kNavy : Colors.grey[400]),
-              const SizedBox(width: 6),
+              Icon(icon,
+                  size: 15,
+                  color: enabled
+                      ? const Color(0xFF3C4043)
+                      : const Color(0xFFBDC1C6)),
+              const SizedBox(width: 5),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: enabled ? _kNavy : Colors.grey[400],
+                  fontWeight: FontWeight.w400,
+                  color: enabled
+                      ? const Color(0xFF3C4043)
+                      : const Color(0xFFBDC1C6),
                 ),
               ),
             ],
@@ -6331,9 +6587,10 @@ class _SheetScreenState extends State<SheetScreen> {
                     decoration: BoxDecoration(
                       color: isActive ? Colors.white : Colors.transparent,
                       border: Border(
-                        right: BorderSide(color: Colors.grey[300]!, width: 1),
+                        right: BorderSide(color: Colors.grey[200]!, width: 1),
                         top: isActive
-                            ? const BorderSide(color: _kSidebarBg, width: 2)
+                            ? const BorderSide(
+                                color: Color(0xFF1A73E8), width: 2)
                             : BorderSide.none,
                       ),
                     ),
@@ -6342,8 +6599,10 @@ class _SheetScreenState extends State<SheetScreen> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight:
-                            isActive ? FontWeight.w600 : FontWeight.normal,
-                        color: isActive ? _kNavy : Colors.grey[600],
+                            isActive ? FontWeight.w600 : FontWeight.w400,
+                        color: isActive
+                            ? const Color(0xFF1A73E8)
+                            : Colors.grey[600],
                       ),
                     ),
                   ),
@@ -6540,13 +6799,13 @@ class _SheetScreenState extends State<SheetScreen> {
         height: _headerHeight,
         decoration: BoxDecoration(
           border: Border(
-            right: BorderSide(color: Colors.grey[400]!, width: 1),
-            bottom: BorderSide(color: Colors.grey[400]!, width: 1),
+            right: BorderSide(color: Colors.grey[300]!, width: 1),
+            bottom: BorderSide(color: Colors.grey[300]!, width: 1),
           ),
-          color: const Color(0xFFE0E0E0),
+          color: const Color(0xFFF8F8F8),
         ),
         child: const Center(
-          child: Icon(Icons.select_all, size: 14, color: Colors.grey),
+          child: Icon(Icons.select_all, size: 13, color: Color(0xFF9AA0A6)),
         ),
       ),
     );
@@ -6555,9 +6814,9 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildHeaderRow({bool includeCorner = true}) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF0F0F0),
+        color: const Color(0xFFF8F8F8),
         border: Border(
-          bottom: BorderSide(color: Colors.grey[400]!, width: 1),
+          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
         ),
       ),
       child: Row(
@@ -6597,29 +6856,20 @@ class _SheetScreenState extends State<SheetScreen> {
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         border: Border(
-                          right: BorderSide(color: Colors.grey[400]!, width: 1),
+                          right: BorderSide(color: Colors.grey[300]!, width: 1),
                         ),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: isColSelected
-                              ? [
-                                  const Color(0xFF4472C4),
-                                  const Color(0xFF3461B3)
-                                ]
-                              : [
-                                  const Color(0xFFF5F5F5),
-                                  const Color(0xFFE0E0E0)
-                                ],
-                        ),
+                        color: isColSelected
+                            ? const Color(0xFFD2E3FC)
+                            : const Color(0xFFF8F8F8),
                       ),
                       child: Text(
                         entry.value,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
-                          color:
-                              isColSelected ? Colors.white : Colors.grey[700],
+                          color: isColSelected
+                              ? const Color(0xFF1A73E8)
+                              : Colors.grey[700],
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -6695,24 +6945,22 @@ class _SheetScreenState extends State<SheetScreen> {
         height: rowHeight,
         decoration: BoxDecoration(
           border: Border(
-            right: BorderSide(color: Colors.grey[400]!, width: 1),
+            right: BorderSide(color: Colors.grey[300]!, width: 1),
             bottom: BorderSide(color: Colors.grey[300]!, width: 1),
           ),
-          gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: isRowInSelection
-                ? [const Color(0xFF4472C4), const Color(0xFF3461B3)]
-                : [const Color(0xFFF5F5F5), const Color(0xFFE8E8E8)],
-          ),
+          color: isRowInSelection
+              ? const Color(0xFFD2E3FC)
+              : const Color(0xFFF8F8F8),
         ),
         child: Center(
           child: Text(
             _rowLabels[rowIndex],
             style: TextStyle(
               fontSize: 11,
-              fontWeight: isRowInSelection ? FontWeight.bold : FontWeight.w500,
-              color: isRowInSelection ? Colors.white : Colors.grey[600],
+              fontWeight: isRowInSelection ? FontWeight.w600 : FontWeight.w400,
+              color: isRowInSelection
+                  ? const Color(0xFF1A73E8)
+                  : const Color(0xFF9AA0A6),
             ),
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
@@ -6843,9 +7091,9 @@ class _SheetScreenState extends State<SheetScreen> {
                   return isEditing
                       ? Colors.white
                       : isActiveCell
-                          ? Colors.white
+                          ? const Color(0xFFE8F0FE)
                           : isInSel
-                              ? const Color(0xFFD6E4F0)
+                              ? const Color(0xFFD2E3FC)
                               : (rowIndex % 2 == 0
                                   ? Colors.white
                                   : const Color(0xFFFAFAFA));

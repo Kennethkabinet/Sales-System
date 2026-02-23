@@ -3,9 +3,9 @@ import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
 
-// ── Colour constants (matches dashboard) ──
-const Color _kContentBg = Color(0xFFFDF5F0);
-const Color _kNavy = Color(0xFF1E3A6E);
+// ── Colour constants (clean modern palette) ──
+const Color _kContentBg = Color(0xFFFFFFFF); // white base
+const Color _kNavy = Color(0xFF202124); // near-black text
 
 class AuditHistoryScreen extends StatefulWidget {
   const AuditHistoryScreen({super.key});
@@ -48,12 +48,12 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
           children: [
             // ── Title ──
             const Text(
-              'AUDIT HISTORY',
+              'Audit History',
               style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
                 color: _kNavy,
-                letterSpacing: 0.5,
+                letterSpacing: 0.2,
               ),
             ),
             const SizedBox(height: 18),

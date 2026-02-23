@@ -16,73 +16,98 @@ class EditorDashboard extends StatefulWidget {
 class _EditorDashboardState extends State<EditorDashboard> {
   bool _showSettings = false;
 
+  static const Color _kAccent = Color(0xFF1A73E8);
+  static const Color _kNavy = Color(0xFF202124);
+  static const Color _kGray = Color(0xFF5F6368);
+  static const Color _kBg = Color(0xFFFFFFFF);
+  static const Color _kBorder = Color(0xFFE8EAED);
+  static const Color _kAvatBg = Color(0xFFE8F0FE);
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
 
     return Scaffold(
+      backgroundColor: _kBg,
       body: Column(
         children: [
-          // Top App Bar - Simple header with user info and settings
+          // ── Top bar ──
           Container(
-            height: 60,
+            height: 56,
             padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
+            decoration: const BoxDecoration(
+              color: _kBg,
               border: Border(
-                bottom: BorderSide(
-                  color: Theme.of(context).dividerColor,
-                  width: 1,
-                ),
+                bottom: BorderSide(color: Color(0xFFE8EAED)),
               ),
             ),
             child: Row(
               children: [
                 // App Title
-                Icon(
-                  Icons.edit_document,
-                  size: 28,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 12),
-                Text(
+                const Icon(Icons.edit_document, size: 22, color: _kAccent),
+                const SizedBox(width: 10),
+                const Text(
                   'Sheet Editor',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: _kNavy,
+                  ),
                 ),
                 const Spacer(),
 
-                // Real-time sync indicator
+                // Live Sync badge
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.green.withOpacity(0.3),
-                    ),
+                    color: const Color(0xFFE6F4EA),
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 8,
-                        height: 8,
+                        width: 7,
+                        height: 7,
                         decoration: const BoxDecoration(
-                          color: Colors.green,
+                          color: Color(0xFF34A853),
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       const Text(
                         'Live Sync',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w500,
+                          color: Color(0xFF1E7E34),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+
+                // Edit mode badge
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _kAvatBg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.edit, size: 13, color: _kAccent),
+                      SizedBox(width: 5),
+                      Text(
+                        'Edit Mode',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: _kAccent,
                         ),
                       ),
                     ],
@@ -90,27 +115,16 @@ class _EditorDashboardState extends State<EditorDashboard> {
                 ),
                 const SizedBox(width: 16),
 
-                // Edit mode badge
-                Chip(
-                  avatar: const Icon(Icons.edit, size: 16),
-                  label: const Text('Edit Mode'),
-                  labelStyle: const TextStyle(fontSize: 12),
-                  backgroundColor:
-                      Theme.of(context).colorScheme.primaryContainer,
-                ),
-                const SizedBox(width: 16),
-
                 // User info
                 CircleAvatar(
-                  radius: 18,
-                  backgroundColor:
-                      Theme.of(context).colorScheme.primaryContainer,
+                  radius: 17,
+                  backgroundColor: _kAvatBg,
                   child: Text(
                     auth.user?.username[0].toUpperCase() ?? 'E',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    style: const TextStyle(
+                      color: _kAccent,
                       fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                      fontSize: 15,
                     ),
                   ),
                 ),
@@ -124,22 +138,20 @@ class _EditorDashboardState extends State<EditorDashboard> {
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
+                        color: _kNavy,
                       ),
                     ),
-                    Text(
+                    const Text(
                       'Editor',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
+                      style: TextStyle(fontSize: 11, color: _kGray),
                     ),
                   ],
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 8),
 
                 // Settings button
                 IconButton(
-                  icon: const Icon(Icons.settings_outlined),
+                  icon: const Icon(Icons.settings_outlined, color: _kGray),
                   tooltip: 'Settings',
                   onPressed: () {
                     setState(() => _showSettings = !_showSettings);
@@ -148,7 +160,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
 
                 // Logout button
                 IconButton(
-                  icon: const Icon(Icons.logout),
+                  icon: const Icon(Icons.logout, color: _kGray),
                   tooltip: 'Logout',
                   onPressed: () async {
                     final confirmed = await showDialog<bool>(
@@ -188,12 +200,10 @@ class _EditorDashboardState extends State<EditorDashboard> {
           if (_showSettings)
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8F9FA),
                 border: Border(
-                  bottom: BorderSide(
-                    color: Theme.of(context).dividerColor,
-                  ),
+                  bottom: BorderSide(color: _kBorder),
                 ),
               ),
               child: Column(
@@ -201,14 +211,15 @@ class _EditorDashboardState extends State<EditorDashboard> {
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.settings, size: 20),
+                      const Icon(Icons.settings, size: 18, color: _kAccent),
                       const SizedBox(width: 8),
-                      Text(
+                      const Text(
                         'Settings',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _kNavy,
+                        ),
                       ),
                       const Spacer(),
                       IconButton(
@@ -264,19 +275,16 @@ class _EditorDashboardState extends State<EditorDashboard> {
     required String value,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
+          Icon(icon, size: 16, color: _kAccent),
           const SizedBox(width: 12),
           SizedBox(
-            width: 120,
+            width: 110,
             child: Text(
               title,
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.secondary,
-              ),
+              style: const TextStyle(fontSize: 13, color: _kGray),
             ),
           ),
           Expanded(
@@ -285,6 +293,7 @@ class _EditorDashboardState extends State<EditorDashboard> {
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
+                color: _kNavy,
               ),
             ),
           ),

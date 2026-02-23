@@ -16,73 +16,98 @@ class ViewerDashboard extends StatefulWidget {
 class _ViewerDashboardState extends State<ViewerDashboard> {
   bool _showSettings = false;
 
+  static const Color _kAccent = Color(0xFF1A73E8);
+  static const Color _kNavy = Color(0xFF202124);
+  static const Color _kGray = Color(0xFF5F6368);
+  static const Color _kBg = Color(0xFFFFFFFF);
+  static const Color _kBorder = Color(0xFFE8EAED);
+  static const Color _kAvatBg = Color(0xFFE8F0FE);
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
 
     return Scaffold(
+      backgroundColor: _kBg,
       body: Column(
         children: [
-          // Top App Bar - Simple header with user info and settings
+          // ── Top bar ──
           Container(
-            height: 60,
+            height: 56,
             padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
+            decoration: const BoxDecoration(
+              color: _kBg,
               border: Border(
-                bottom: BorderSide(
-                  color: Theme.of(context).dividerColor,
-                  width: 1,
-                ),
+                bottom: BorderSide(color: Color(0xFFE8EAED)),
               ),
             ),
             child: Row(
               children: [
                 // App Title
-                Icon(
-                  Icons.visibility,
-                  size: 28,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 12),
-                Text(
+                const Icon(Icons.visibility, size: 22, color: _kAccent),
+                const SizedBox(width: 10),
+                const Text(
                   'Sheet Viewer',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: _kNavy,
+                  ),
                 ),
                 const Spacer(),
 
-                // Real-time updates indicator
+                // Live Updates badge
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.green.withOpacity(0.3),
-                    ),
+                    color: const Color(0xFFE6F4EA),
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 8,
-                        height: 8,
+                        width: 7,
+                        height: 7,
                         decoration: const BoxDecoration(
-                          color: Colors.green,
+                          color: Color(0xFF34A853),
                           shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       const Text(
                         'Live Updates',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w500,
+                          color: Color(0xFF1E7E34),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+
+                // Read-only badge
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock_outline, size: 13, color: _kGray),
+                      SizedBox(width: 5),
+                      Text(
+                        'Read-Only',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: _kGray,
                         ),
                       ),
                     ],
@@ -90,27 +115,16 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                 ),
                 const SizedBox(width: 16),
 
-                // Read-only badge
-                Chip(
-                  avatar: const Icon(Icons.lock, size: 16),
-                  label: const Text('Read-Only'),
-                  labelStyle: const TextStyle(fontSize: 12),
-                  backgroundColor:
-                      Theme.of(context).colorScheme.secondaryContainer,
-                ),
-                const SizedBox(width: 16),
-
                 // User info
                 CircleAvatar(
-                  radius: 18,
-                  backgroundColor:
-                      Theme.of(context).colorScheme.secondaryContainer,
+                  radius: 17,
+                  backgroundColor: _kAvatBg,
                   child: Text(
                     auth.user?.username[0].toUpperCase() ?? 'V',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    style: const TextStyle(
+                      color: _kAccent,
                       fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                      fontSize: 15,
                     ),
                   ),
                 ),
@@ -124,22 +138,20 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
+                        color: _kNavy,
                       ),
                     ),
-                    Text(
+                    const Text(
                       'Viewer',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
+                      style: TextStyle(fontSize: 11, color: _kGray),
                     ),
                   ],
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 8),
 
                 // Settings button
                 IconButton(
-                  icon: const Icon(Icons.settings_outlined),
+                  icon: const Icon(Icons.settings_outlined, color: _kGray),
                   tooltip: 'Settings',
                   onPressed: () {
                     setState(() => _showSettings = !_showSettings);
@@ -148,7 +160,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
 
                 // Logout button
                 IconButton(
-                  icon: const Icon(Icons.logout),
+                  icon: const Icon(Icons.logout, color: _kGray),
                   tooltip: 'Logout',
                   onPressed: () async {
                     final confirmed = await showDialog<bool>(
@@ -188,12 +200,10 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
           if (_showSettings)
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8F9FA),
                 border: Border(
-                  bottom: BorderSide(
-                    color: Theme.of(context).dividerColor,
-                  ),
+                  bottom: BorderSide(color: _kBorder),
                 ),
               ),
               child: Column(
@@ -201,14 +211,15 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.settings, size: 20),
+                      const Icon(Icons.settings, size: 18, color: _kAccent),
                       const SizedBox(width: 8),
-                      Text(
+                      const Text(
                         'Settings',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _kNavy,
+                        ),
                       ),
                       const Spacer(),
                       IconButton(
@@ -264,19 +275,16 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
     required String value,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
+          Icon(icon, size: 16, color: _kAccent),
           const SizedBox(width: 12),
           SizedBox(
-            width: 120,
+            width: 110,
             child: Text(
               title,
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.secondary,
-              ),
+              style: const TextStyle(fontSize: 13, color: _kGray),
             ),
           ),
           Expanded(
@@ -285,6 +293,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
+                color: _kNavy,
               ),
             ),
           ),
