@@ -329,10 +329,14 @@ class _SheetScreenState extends State<SheetScreen> {
             : int.tryParse('${u['user_id'] ?? ''}') ?? -1;
         final username = (u['username'] ?? '').toString();
         final fullName = (u['full_name'] ?? '').toString();
+        final role = (u['role'] ?? '').toString();
+        final department = (u['department_name'] ?? '').toString();
         return <String, dynamic>{
           'user_id': uid,
           'username': username,
           'full_name': fullName,
+          'role': role,
+          'department_name': department,
           'is_you': authId != null && uid == authId,
         };
       }).toList()
@@ -346,10 +350,12 @@ class _SheetScreenState extends State<SheetScreen> {
         });
 
       final newSig = normalized
-          .map((u) => '${u['user_id']}|${u['username']}|${u['is_you']}')
+          .map((u) =>
+            '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
           .toList();
       final oldSig = _activeSheetUsers
-          .map((u) => '${u['user_id']}|${u['username']}|${u['is_you']}')
+          .map((u) =>
+            '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
           .toList();
 
       if (!listEquals(newSig, oldSig)) {
@@ -4068,131 +4074,123 @@ class _SheetScreenState extends State<SheetScreen> {
         return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
       }
 
-      String roleFor(Map<String, dynamic> user) {
-        final raw = (user['role'] ?? '').toString().trim();
-        if (raw.isNotEmpty) return raw;
-        final uid = user['user_id'];
-        final fromPresence = _presenceInfoMap[uid is int ? uid : -1]?.role;
-        if (fromPresence != null && fromPresence.trim().isNotEmpty) {
-          return fromPresence;
-        }
-        if (user['is_you'] == true) return authUser?.role ?? 'user';
-        return 'unknown';
-      }
-
-      Widget userBubble(Map<String, dynamic> user) {
-        final uid = user['user_id'];
+      Map<String, dynamic> enrichUser(Map<String, dynamic> user) {
+        final uid = user['user_id'] is num
+            ? (user['user_id'] as num).toInt()
+            : int.tryParse('${user['user_id'] ?? ''}') ?? -1;
+        final fromPresence = _presenceInfoMap[uid];
         final username = (user['username'] ?? '').toString();
         final fullName = ((user['full_name'] ?? '').toString().trim().isNotEmpty
                 ? user['full_name']
                 : username)
             .toString();
-        final role = roleFor(user);
-        final isYou = user['is_you'] == true;
-        final avatarUrl = (user['avatar_url'] ?? '').toString().trim();
-
-        final int hash = uid is int ? uid : username.hashCode;
-        final bg = kPresenceColors[hash.abs() % kPresenceColors.length];
-
-        return Tooltip(
-          message:
-              '${fullName}${isYou ? ' (You)' : ''}\nRole: ${role.isEmpty ? 'Unknown' : role[0].toUpperCase()}${role.length > 1 ? role.substring(1) : ''}',
-          child: Container(
-            margin: const EdgeInsets.only(right: 6),
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isYou ? const Color(0xFF2563EB) : Colors.white,
-                      width: isYou ? 2.5 : 1.8,
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x1A000000),
-                        blurRadius: 4,
-                        offset: Offset(0, 1),
-                      ),
-                    ],
-                  ),
-                  child: CircleAvatar(
-                    backgroundColor: bg,
-                    backgroundImage:
-                        avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-                    child: avatarUrl.isNotEmpty
-                        ? null
-                        : Text(
-                            initialsOf(fullName),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                  ),
-                ),
-                if (isYou)
-                  Positioned(
-                    top: -6,
-                    right: -6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2563EB),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'You',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 7,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
+        final role = (fromPresence?.role ?? user['role'] ??
+                ((user['is_you'] == true) ? authUser?.role : '') ??
+                '')
+            .toString();
+        final department =
+          (fromPresence?.departmentName ?? user['department_name'])
+            ?.toString();
+        final isEditing = (fromPresence?.currentCell ?? '').trim().isNotEmpty;
+        return {
+          ...user,
+          'user_id': uid,
+          'username': username,
+          'full_name': fullName,
+          'role': role,
+          'department': department,
+          'is_editing': isEditing,
+        };
       }
 
-      return Container(
-        constraints: const BoxConstraints(maxWidth: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Active Users: ${users.length}',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF334155),
-              ),
-            ),
-            const SizedBox(height: 2),
-            SizedBox(
-              height: 32,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [for (final user in users) userBubble(user)],
+      final enriched = users.map(enrichUser).toList();
+      final maxVisible = enriched.length > 3 ? 2 : enriched.length;
+      final overflow = enriched.length > 3 ? enriched.length - 2 : 0;
+      final visibleUsers = enriched.take(maxVisible).toList();
+
+      final double avatarSize = 34;
+      final double step = 24;
+      final double overflowSlot = overflow > 0 ? avatarSize : 0;
+      final double groupWidth = visibleUsers.isEmpty
+          ? 0
+          : ((visibleUsers.length - 1) * step) + avatarSize + overflowSlot;
+      final double panelWidth = (108 + groupWidth).clamp(130, 260).toDouble();
+
+      return SizedBox(
+        height: 48,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: panelWidth,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '👥 ${enriched.length} Active',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF334155),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              SizedBox(
+                width: groupWidth,
+                height: 34,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    for (int i = 0; i < visibleUsers.length; i++)
+                      Positioned(
+                        left: i * step,
+                        child: _ActiveUserBubble(
+                          size: avatarSize,
+                          userId: visibleUsers[i]['user_id'] as int,
+                          fullName: visibleUsers[i]['full_name'] as String,
+                          username: visibleUsers[i]['username'] as String,
+                          role: (visibleUsers[i]['role'] ?? '').toString(),
+                          department:
+                              (visibleUsers[i]['department'] ?? '').toString(),
+                          isYou: visibleUsers[i]['is_you'] == true,
+                          isEditing: visibleUsers[i]['is_editing'] == true,
+                          initials:
+                              initialsOf(visibleUsers[i]['full_name'] as String),
+                          avatarUrl:
+                              (visibleUsers[i]['avatar_url'] ?? '').toString(),
+                        ),
+                      ),
+                    if (overflow > 0)
+                      Positioned(
+                        left: visibleUsers.length * step,
+                        child: Container(
+                          width: avatarSize,
+                          height: avatarSize,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFFE2E8F0),
+                            border: Border.all(color: Colors.white, width: 1.8),
+                          ),
+                          child: Text(
+                            '+$overflow',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF334155),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -4353,9 +4351,6 @@ class _SheetScreenState extends State<SheetScreen> {
           const SizedBox(width: 12),
           // ─ Active users tracking panel (DB heartbeat) ─
           activeUsersPanel(),
-          const SizedBox(width: 8),
-          // ─ Presence avatars ─
-          presenceRow(),
           const SizedBox(width: 4),
         ],
       ),
@@ -9678,6 +9673,292 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
         ), // closes AnimatedContainer
       ), // closes GestureDetector
     ); // closes MouseRegion
+  }
+}
+
+class _ActiveUserBubble extends StatefulWidget {
+  final double size;
+  final int userId;
+  final String fullName;
+  final String username;
+  final String role;
+  final String department;
+  final bool isYou;
+  final bool isEditing;
+  final String initials;
+  final String avatarUrl;
+
+  const _ActiveUserBubble({
+    required this.size,
+    required this.userId,
+    required this.fullName,
+    required this.username,
+    required this.role,
+    required this.department,
+    required this.isYou,
+    required this.isEditing,
+    required this.initials,
+    required this.avatarUrl,
+  });
+
+  @override
+  State<_ActiveUserBubble> createState() => _ActiveUserBubbleState();
+}
+
+class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
+  static _ActiveUserBubbleState? _activeOwner;
+  OverlayEntry? _overlay;
+  Timer? _hoverDelay;
+  bool _hovered = false;
+  Offset _cursorGlobal = Offset.zero;
+
+  Color get _avatarColor =>
+      kPresenceColors[widget.userId.abs() % kPresenceColors.length];
+
+  String _cap(String text) {
+    final v = text.trim();
+    if (v.isEmpty) return 'Unknown';
+    return '${v[0].toUpperCase()}${v.substring(1)}';
+  }
+
+  void _hideOverlay() {
+    _hoverDelay?.cancel();
+    _hoverDelay = null;
+    _overlay?.remove();
+    _overlay = null;
+    if (_activeOwner == this) _activeOwner = null;
+  }
+
+  void _scheduleShow() {
+    _hoverDelay?.cancel();
+    _hoverDelay = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted || !_hovered) return;
+      _showOverlay();
+    });
+  }
+
+  void _showOverlay() {
+    if (!mounted) return;
+
+    if (_activeOwner != null && _activeOwner != this) {
+      _activeOwner!._hideOverlay();
+    }
+    _activeOwner = this;
+
+    _overlay?.remove();
+
+    _overlay = OverlayEntry(
+      builder: (overlayCtx) {
+        const cardWidth = 240.0;
+        final screen = MediaQuery.of(overlayCtx).size;
+        var left = _cursorGlobal.dx + 14;
+        var top = _cursorGlobal.dy + 14;
+
+        if (left + cardWidth > screen.width - 8) {
+          left = (_cursorGlobal.dx - cardWidth - 14).clamp(8.0, screen.width - cardWidth - 8);
+        }
+        if (top + 160 > screen.height - 8) {
+          top = (_cursorGlobal.dy - 160).clamp(8.0, screen.height - 168);
+        }
+
+        return Positioned(
+          left: left,
+          top: top,
+          child: IgnorePointer(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: cardWidth,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E2533),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.28),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: _avatarColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white.withOpacity(0.32), width: 2),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            widget.initials,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.isYou
+                                    ? '${widget.fullName} (You)'
+                                    : widget.fullName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                '@${widget.username}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Divider(color: Color(0xFF2E3A4E), height: 1),
+                    const SizedBox(height: 8),
+                    _TooltipRow(
+                      icon: Icons.shield_outlined,
+                      label: 'Role',
+                      text: _cap(widget.role),
+                    ),
+                    if (widget.department.trim().isNotEmpty)
+                      _TooltipRow(
+                        icon: Icons.business_outlined,
+                        label: 'Dept',
+                        text: widget.department,
+                      ),
+                    _TooltipRow(
+                      icon: widget.isEditing
+                          ? Icons.edit_outlined
+                          : Icons.visibility_outlined,
+                      label: 'Status',
+                      text: widget.isEditing ? 'Editing' : 'Viewing',
+                      highlight: widget.isEditing,
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF22C55E),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        const Text(
+                          'Online',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF86EFAC),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    Overlay.of(context).insert(_overlay!);
+  }
+
+  @override
+  void dispose() {
+    _hideOverlay();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (event) {
+        _hovered = true;
+        _cursorGlobal = event.position;
+        _scheduleShow();
+      },
+      onHover: (event) {
+        _cursorGlobal = event.position;
+        _overlay?.markNeedsBuild();
+      },
+      onExit: (_) {
+        _hovered = false;
+        _hideOverlay();
+      },
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 120),
+        scale: _hovered ? 1.04 : 1.0,
+        child: Container(
+          width: widget.size,
+          height: widget.size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: widget.isYou
+                  ? const Color(0xFF2563EB)
+                  : (widget.isEditing
+                      ? const Color(0xFF22C55E)
+                      : Colors.white),
+              width: widget.isYou ? 2.4 : 1.8,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: widget.isEditing
+                    ? const Color(0x3322C55E)
+                    : const Color(0x1A000000),
+                blurRadius: 6,
+                spreadRadius: widget.isEditing ? 0.5 : 0,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: CircleAvatar(
+            backgroundColor: _avatarColor,
+            backgroundImage:
+                widget.avatarUrl.isNotEmpty ? NetworkImage(widget.avatarUrl) : null,
+            child: widget.avatarUrl.isNotEmpty
+                ? null
+                : Text(
+                    widget.initials,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

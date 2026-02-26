@@ -504,9 +504,13 @@ router.get('/:id/active-users', authenticate, requireSheetAccess, async (req, re
         au.sheet_id,
         au.last_active_timestamp,
         u.username,
-        u.full_name
+        u.full_name,
+        r.name AS role,
+        d.name AS department_name
       FROM active_users au
       INNER JOIN users u ON u.id = au.user_id
+      LEFT JOIN roles r ON r.id = u.role_id
+      LEFT JOIN departments d ON d.id = u.department_id
       WHERE au.sheet_id = $1
         AND au.last_active_timestamp > CURRENT_TIMESTAMP - INTERVAL '10 seconds'
       ORDER BY au.last_active_timestamp DESC
