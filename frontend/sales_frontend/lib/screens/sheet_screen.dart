@@ -256,6 +256,10 @@ class _SheetScreenState extends State<SheetScreen> {
       if (!_hasUnsavedChanges && _editingRow == null && _currentSheet != null) {
         _reloadSheetDataOnly();
       }
+      // Periodically refresh presence list so any missed events self-correct.
+      if (_currentSheet != null) {
+        SocketService.instance.getPresence(_currentSheet!.id);
+      }
     });
 
     // Sync column headers horizontal scroll with main grid horizontal scroll
@@ -5625,20 +5629,45 @@ class _SheetScreenState extends State<SheetScreen> {
     // updates are received even after a disconnect/reconnect cycle.
     socket.onConnect = () {
       if (!mounted) return;
-      if (_currentSheet != null) {
-        SocketService.instance.joinSheet(_currentSheet!.id);
+      final sid = _currentSheet?.id;
+      if (sid != null) {
+        SocketService.instance.joinSheet(sid);
+        // After all users have had time to rejoin, fetch the full list.
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && _currentSheet?.id == sid) {
+            SocketService.instance.getPresence(sid);
+          }
+        });
       }
     };
 
     socket.onPresenceUpdate = (data) {
       if (!mounted) return;
       try {
+        // Ignore presence updates for sheets other than the one currently open.
+        // Stale updates can arrive when the user just switched sheets.
+        final dynamic incomingId = data['sheet_id'];
+        if (incomingId != null && _currentSheet != null) {
+          final int? incoming = incomingId is int
+              ? incomingId
+              : int.tryParse(incomingId.toString());
+          if (incoming != null && incoming != _currentSheet!.id) {
+            print('[Presence] Ignoring stale presence_update for sheet $incoming (current: ${_currentSheet!.id})');
+            return;
+          }
+        }
+
         final rawList = data['users'];
         if (rawList == null) return;
-        final users = (rawList as List)
-            .whereType<Map>()
-            .map((u) => CellPresence.fromJson(Map<String, dynamic>.from(u)))
-            .toList();
+
+        // Parse and deduplicate by userId (in case backend sends duplicates).
+        final Map<int, CellPresence> seen = {};
+        for (final raw in (rawList as List).whereType<Map>()) {
+          final u = CellPresence.fromJson(Map<String, dynamic>.from(raw));
+          seen.putIfAbsent(u.userId, () => u);
+        }
+        final users = seen.values.toList();
+
         setState(() {
           _presenceUsers = users;
           // Keep _presenceInfoMap up to date for cell-highlight lookups
@@ -5646,6 +5675,7 @@ class _SheetScreenState extends State<SheetScreen> {
             _presenceInfoMap[u.userId] = u;
           }
         });
+        print('[Presence] Updated: ${users.map((u) => u.username).join(', ')}');
       } catch (e) {
         print('[Presence] Failed to parse presence_update: $e | data=$data');
       }

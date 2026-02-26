@@ -394,7 +394,24 @@ class CollaborationHandler {
       if (!this.sheetPresence.has(sheet_id)) {
         this.sheetPresence.set(sheet_id, new Map());
       }
-      this.sheetPresence.get(sheet_id).set(socket.id, {
+
+      const presenceMap = this.sheetPresence.get(sheet_id);
+
+      // ── Evict any stale socket entries for the same userId ─────────────────
+      // This handles reconnects / multiple tabs: the old socketId entry would
+      // linger as a "ghost" until disconnect fires. Removing it first ensures
+      // the presence list is always accurate without waiting for the stale
+      // disconnect event.
+      for (const [sid, p] of presenceMap.entries()) {
+        if (p.userId === socket.user.id && sid !== socket.id) {
+          presenceMap.delete(sid);
+          // Also clean up the sheetRooms set
+          const roomSet = this.sheetRooms.get(sheet_id);
+          if (roomSet) roomSet.delete(sid);
+        }
+      }
+
+      presenceMap.set(socket.id, {
         userId:         socket.user.id,
         username:       socket.user.username,
         fullName:       socket.user.full_name || socket.user.username,
@@ -409,15 +426,15 @@ class CollaborationHandler {
         user.currentCell  = null;
       }
 
-      // Broadcast updated presence list to ALL users in the sheet
+      // Broadcast updated presence list to ALL users in the sheet (including
+      // already-present users so they see the newly joined user).
       this._broadcastSheetPresence(sheet_id);
 
-      // Also emit directly to the joining socket so it always gets
-      // its own copy even if the room broadcast fires before the socket
-      // has fully subscribed (race condition safeguard).
+      // Also emit directly to the joining socket so it gets the full list
+      // immediately even before the room broadcast propagates.
       socket.emit('presence_update', this._buildPresencePayload(sheet_id));
 
-      console.log(`${socket.user.username} joined sheet ${sheet_id}`);
+      console.log(`${socket.user.username} joined sheet ${sheet_id} (${presenceMap.size} users now present)`);
     } catch (err) {
       console.error('Join sheet error:', err);
       socket.emit('error', { code: 'JOIN_SHEET_ERROR', message: 'Failed to join sheet' });
@@ -554,14 +571,26 @@ class CollaborationHandler {
   _buildPresencePayload(sheet_id) {
     const presence = this.sheetPresence.get(sheet_id);
     const users = presence
-      ? Array.from(presence.values()).map(p => ({
-          user_id:         p.userId,
-          username:        p.username,
-          full_name:       p.fullName || p.username,
-          role:            p.role,
-          department_name: p.departmentName,
-          current_cell:    p.currentCell
-        }))
+      ? (() => {
+          // Deduplicate by userId (safety net — join handler already evicts
+          // stale entries, but guard here too for resilience).
+          const seen = new Set();
+          const out  = [];
+          for (const p of presence.values()) {
+            if (!seen.has(p.userId)) {
+              seen.add(p.userId);
+              out.push({
+                user_id:         p.userId,
+                username:        p.username,
+                full_name:       p.fullName || p.username,
+                role:            p.role,
+                department_name: p.departmentName,
+                current_cell:    p.currentCell
+              });
+            }
+          }
+          return out;
+        })()
       : [];
     return { sheet_id, users };
   }
