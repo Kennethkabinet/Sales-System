@@ -21,6 +21,20 @@ pool.query(`
   ALTER TABLE folders ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
 `).catch(err => console.error('[Migration] password_hash columns:', err.message));
 
+// Self-healing migration: active users heartbeat table for per-sheet presence polling
+pool.query(`
+  CREATE TABLE IF NOT EXISTS active_users (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sheet_id INTEGER NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+    last_active_timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, sheet_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_active_users_sheet_last_active
+  ON active_users (sheet_id, last_active_timestamp DESC);
+`).catch(err => console.error('[Migration] active_users table:', err.message));
+
 // GET /sheets - Get all sheets for user
 router.get('/', authenticate, requireSheetAccess, async (req, res) => {
   try {
@@ -436,6 +450,81 @@ router.get('/edit-requests/all', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Get all edit requests error:', err);
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get edit requests' } });
+  }
+});
+
+// POST /sheets/:id/active-users/heartbeat - Upsert caller as active for this sheet
+router.post('/:id/active-users/heartbeat', authenticate, requireSheetAccess, async (req, res) => {
+  try {
+    const sheetId = parseInt(req.params.id, 10);
+    if (Number.isNaN(sheetId) || sheetId <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'BAD_REQUEST', message: 'Invalid sheet id' }
+      });
+    }
+
+    await pool.query(`
+      INSERT INTO active_users (user_id, sheet_id, last_active_timestamp)
+      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id, sheet_id)
+      DO UPDATE SET last_active_timestamp = EXCLUDED.last_active_timestamp
+    `, [req.user.id, sheetId]);
+
+    res.json({
+      success: true,
+      message: 'Active user heartbeat updated',
+      sheet_id: sheetId,
+      user_id: req.user.id,
+      server_time: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Active users heartbeat error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to update active user heartbeat' }
+    });
+  }
+});
+
+// GET /sheets/:id/active-users - List active users in this sheet (last 10 seconds)
+router.get('/:id/active-users', authenticate, requireSheetAccess, async (req, res) => {
+  try {
+    const sheetId = parseInt(req.params.id, 10);
+    if (Number.isNaN(sheetId) || sheetId <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'BAD_REQUEST', message: 'Invalid sheet id' }
+      });
+    }
+
+    const result = await pool.query(`
+      SELECT
+        au.user_id,
+        au.sheet_id,
+        au.last_active_timestamp,
+        u.username,
+        u.full_name
+      FROM active_users au
+      INNER JOIN users u ON u.id = au.user_id
+      WHERE au.sheet_id = $1
+        AND au.last_active_timestamp > CURRENT_TIMESTAMP - INTERVAL '10 seconds'
+      ORDER BY au.last_active_timestamp DESC
+    `, [sheetId]);
+
+    res.json({
+      success: true,
+      sheet_id: sheetId,
+      total_active_users: result.rows.length,
+      users: result.rows,
+      server_time: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Get active users error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to get active users' }
+    });
   }
 });
 

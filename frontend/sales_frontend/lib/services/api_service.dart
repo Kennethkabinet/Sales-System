@@ -705,6 +705,20 @@ class ApiService {
     return await _get('${ApiEndpoints.sheets}/$sheetId/status');
   }
 
+  /// Heartbeat: mark current user as active in a sheet.
+  static Future<Map<String, dynamic>> heartbeatSheetActiveUser(
+      int sheetId) async {
+    return await _post(
+        '${ApiEndpoints.sheets}/$sheetId/active-users/heartbeat', {});
+  }
+
+  /// Get active users in a sheet (last 10 seconds).
+  static Future<List<Map<String, dynamic>>> getSheetActiveUsers(
+      int sheetId) async {
+    final response = await _get('${ApiEndpoints.sheets}/$sheetId/active-users');
+    return List<Map<String, dynamic>>.from(response['users'] as List? ?? []);
+  }
+
   static Future<Map<String, dynamic>> getSheetHistory(int sheetId,
       {int page = 1, int limit = 50}) async {
     return await _get(

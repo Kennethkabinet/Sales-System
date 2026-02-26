@@ -244,6 +244,8 @@ class _SheetScreenState extends State<SheetScreen> {
   final Set<String> _grantedCells = {};
   // number of pending edit-requests visible to admin
   int _pendingEditRequestCount = 0;
+  // Poll-based active users (DB-backed heartbeat)
+  List<Map<String, dynamic>> _activeSheetUsers = [];
 
   bool _isPresenceRoleSupported(String role) {
     final normalized = role.trim().toLowerCase();
@@ -311,6 +313,60 @@ class _SheetScreenState extends State<SheetScreen> {
     return result;
   }
 
+  Future<void> _heartbeatAndFetchActiveUsers() async {
+    final sheetId = _currentSheet?.id;
+    if (sheetId == null || !mounted) return;
+
+    try {
+      await ApiService.heartbeatSheetActiveUser(sheetId);
+      final users = await ApiService.getSheetActiveUsers(sheetId);
+      if (!mounted || _currentSheet?.id != sheetId) return;
+
+      final authId = Provider.of<AuthProvider>(context, listen: false).user?.id;
+      final normalized = users.map((u) {
+        final uid = u['user_id'] is num
+            ? (u['user_id'] as num).toInt()
+            : int.tryParse('${u['user_id'] ?? ''}') ?? -1;
+        final username = (u['username'] ?? '').toString();
+        final fullName = (u['full_name'] ?? '').toString();
+        return <String, dynamic>{
+          'user_id': uid,
+          'username': username,
+          'full_name': fullName,
+          'is_you': authId != null && uid == authId,
+        };
+      }).toList()
+        ..sort((a, b) {
+          final aYou = a['is_you'] == true;
+          final bYou = b['is_you'] == true;
+          if (aYou && !bYou) return -1;
+          if (bYou && !aYou) return 1;
+          return ('${a['username']}'.toLowerCase())
+              .compareTo('${b['username']}'.toLowerCase());
+        });
+
+      final newSig = normalized
+          .map((u) => '${u['user_id']}|${u['username']}|${u['is_you']}')
+          .toList();
+      final oldSig = _activeSheetUsers
+          .map((u) => '${u['user_id']}|${u['username']}|${u['is_you']}')
+          .toList();
+
+      if (!listEquals(newSig, oldSig)) {
+        setState(() => _activeSheetUsers = normalized);
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+            '[ActiveUsers] sheet=$sheetId total=${normalized.length} users=${normalized.map((u) => u['username']).join(', ')}');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[ActiveUsers] sync failed for sheet=$sheetId: $e');
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -327,6 +383,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // event self-corrects within 5 seconds.
       if (_currentSheet != null) {
         SocketService.instance.getPresence(_currentSheet!.id);
+        _heartbeatAndFetchActiveUsers();
       }
       // DB reload: only every 2nd tick (~10 s) to avoid hammering the server.
       if (_timerTick % 2 == 0 &&
@@ -872,6 +929,7 @@ class _SheetScreenState extends State<SheetScreen> {
       _presenceUsers = [];
       _cellPresenceUserIds.clear();
       _presenceInfoMap.clear();
+      _activeSheetUsers = [];
     }
 
     setState(() => _isLoading = true);
@@ -961,6 +1019,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // Announce presence in this sheet room via socket.
       final currentSheetId = _currentSheet!.id;
       SocketService.instance.joinSheet(currentSheetId);
+      _heartbeatAndFetchActiveUsers();
 
       // Request the full presence list immediately (0 ms) so we see
       // users who were already in the sheet BEFORE we joined, then
@@ -3834,6 +3893,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 _selectionEndCol = null;
                 _editingRow = null;
                 _editingCol = null;
+                _activeSheetUsers = [];
               });
             },
           ),
@@ -3994,6 +4054,66 @@ class _SheetScreenState extends State<SheetScreen> {
       );
     }
 
+    Widget activeUsersPanel() {
+      final authUser = authProv.user;
+      final users = _activeSheetUsers.isNotEmpty
+          ? _activeSheetUsers
+          : (authUser != null
+              ? [
+                  {
+                    'user_id': authUser.id,
+                    'username': authUser.username,
+                    'full_name': authUser.fullName,
+                    'is_you': true,
+                  }
+                ]
+              : <Map<String, dynamic>>[]);
+
+      if (users.isEmpty) return const SizedBox.shrink();
+
+      final labels = users.map((u) {
+        final uname = ((u['full_name'] ?? '').toString().trim().isNotEmpty
+                ? u['full_name']
+                : u['username'])
+            .toString();
+        return u['is_you'] == true ? '$uname (You)' : uname;
+      }).toList();
+
+      return Container(
+        constraints: const BoxConstraints(maxWidth: 220),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Active Users: ${users.length}',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF334155),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              labels.join(', '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 10,
+                color: Color(0xFF475569),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -4018,6 +4138,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   _selectionEndCol = null;
                   _editingRow = null;
                   _editingCol = null;
+                  _activeSheetUsers = [];
                 });
               },
               borderRadius: BorderRadius.circular(6),
@@ -4147,6 +4268,9 @@ class _SheetScreenState extends State<SheetScreen> {
             ),
           ),
           const SizedBox(width: 12),
+          // ─ Active users tracking panel (DB heartbeat) ─
+          activeUsersPanel(),
+          const SizedBox(width: 8),
           // ─ Presence avatars ─
           presenceRow(),
           const SizedBox(width: 4),
