@@ -4031,25 +4031,6 @@ class _SheetScreenState extends State<SheetScreen> {
               ),
             ),
           ],
-          if (kDebugMode) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE3F2FD),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF90CAF9), width: 1),
-              ),
-              child: Text(
-                'DBG S${_currentSheet?.id ?? '-'} ${effective.length}U (${_presenceUsers.length}/${_presenceInfoMap.length})',
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFF0D47A1),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
         ],
       );
     }
@@ -4071,16 +4052,118 @@ class _SheetScreenState extends State<SheetScreen> {
 
       if (users.isEmpty) return const SizedBox.shrink();
 
-      final labels = users.map((u) {
-        final uname = ((u['full_name'] ?? '').toString().trim().isNotEmpty
-                ? u['full_name']
-                : u['username'])
+      String initialsOf(String text) {
+        final parts = text
+            .trim()
+            .split(RegExp(r'\s+'))
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isEmpty) return '?';
+        if (parts.length == 1) {
+          final t = parts.first;
+          return t.length >= 2
+              ? t.substring(0, 2).toUpperCase()
+              : t.toUpperCase();
+        }
+        return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
+      }
+
+      String roleFor(Map<String, dynamic> user) {
+        final raw = (user['role'] ?? '').toString().trim();
+        if (raw.isNotEmpty) return raw;
+        final uid = user['user_id'];
+        final fromPresence = _presenceInfoMap[uid is int ? uid : -1]?.role;
+        if (fromPresence != null && fromPresence.trim().isNotEmpty) {
+          return fromPresence;
+        }
+        if (user['is_you'] == true) return authUser?.role ?? 'user';
+        return 'unknown';
+      }
+
+      Widget userBubble(Map<String, dynamic> user) {
+        final uid = user['user_id'];
+        final username = (user['username'] ?? '').toString();
+        final fullName = ((user['full_name'] ?? '').toString().trim().isNotEmpty
+                ? user['full_name']
+                : username)
             .toString();
-        return u['is_you'] == true ? '$uname (You)' : uname;
-      }).toList();
+        final role = roleFor(user);
+        final isYou = user['is_you'] == true;
+        final avatarUrl = (user['avatar_url'] ?? '').toString().trim();
+
+        final int hash = uid is int ? uid : username.hashCode;
+        final bg = kPresenceColors[hash.abs() % kPresenceColors.length];
+
+        return Tooltip(
+          message:
+              '${fullName}${isYou ? ' (You)' : ''}\nRole: ${role.isEmpty ? 'Unknown' : role[0].toUpperCase()}${role.length > 1 ? role.substring(1) : ''}',
+          child: Container(
+            margin: const EdgeInsets.only(right: 6),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isYou ? const Color(0xFF2563EB) : Colors.white,
+                      width: isYou ? 2.5 : 1.8,
+                    ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x1A000000),
+                        blurRadius: 4,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: CircleAvatar(
+                    backgroundColor: bg,
+                    backgroundImage:
+                        avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+                    child: avatarUrl.isNotEmpty
+                        ? null
+                        : Text(
+                            initialsOf(fullName),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                  ),
+                ),
+                if (isYou)
+                  Positioned(
+                    top: -6,
+                    right: -6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2563EB),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'You',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 7,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      }
 
       return Container(
-        constraints: const BoxConstraints(maxWidth: 220),
+        constraints: const BoxConstraints(maxWidth: 250),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: const Color(0xFFF8FAFC),
@@ -4100,13 +4183,13 @@ class _SheetScreenState extends State<SheetScreen> {
               ),
             ),
             const SizedBox(height: 2),
-            Text(
-              labels.join(', '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 10,
-                color: Color(0xFF475569),
+            SizedBox(
+              height: 32,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [for (final user in users) userBubble(user)],
+                ),
               ),
             ),
           ],
