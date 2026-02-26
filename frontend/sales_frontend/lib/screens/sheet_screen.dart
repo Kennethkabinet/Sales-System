@@ -223,6 +223,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // Timer for periodic status updates
   Timer? _statusTimer;
+  int _timerTick = 0; // counts 5-second ticks; every 2nd tick ≈ 10 s
   // Timer for debounced auto-save (fires 2 s after the last change)
   Timer? _autoSaveTimer;
 
@@ -244,21 +245,22 @@ class _SheetScreenState extends State<SheetScreen> {
     _loadSheets();
     _setupSheetPresenceCallbacks();
 
-    // Set up periodic status refresh (every 10 seconds)
-    // Also refreshes sheet data as a safety-net fallback so that if a socket
-    // event was ever missed the user sees the correct data within 10 s without
-    // having to navigate away.
-    _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    // Refresh presence every 5 s, and also refresh sheet data + status as
+    // a safety-net fallback for any missed socket events.
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _timerTick++;
       _refreshSheetStatus();
-      // Only do the background DB refresh when there are no local unsaved
-      // changes (to avoid overwriting in-progress edits) and we are not
-      // currently in the middle of a cell edit.
-      if (!_hasUnsavedChanges && _editingRow == null && _currentSheet != null) {
-        _reloadSheetDataOnly();
-      }
-      // Periodically refresh presence list so any missed events self-correct.
+      // Presence: request the full list every 5 s so any missed join/leave
+      // event self-corrects within 5 seconds.
       if (_currentSheet != null) {
         SocketService.instance.getPresence(_currentSheet!.id);
+      }
+      // DB reload: only every 2nd tick (~10 s) to avoid hammering the server.
+      if (_timerTick % 2 == 0 &&
+          !_hasUnsavedChanges &&
+          _editingRow == null &&
+          _currentSheet != null) {
+        _reloadSheetDataOnly();
       }
     });
 
@@ -592,21 +594,20 @@ class _SheetScreenState extends State<SheetScreen> {
       // Auto-inject today's date column for Inventory Tracker sheets.
       _autoInjectTodayColumnIfNeeded();
 
-      // Announce presence in this sheet room via socket
+      // Announce presence in this sheet room via socket.
       final currentSheetId = _currentSheet!.id;
       SocketService.instance.joinSheet(currentSheetId);
-      // Fallback: explicitly request presence after a short delay in case
-      // the join broadcast was missed (socket race condition safeguard).
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (mounted && _currentSheet?.id == currentSheetId) {
-          SocketService.instance.getPresence(currentSheetId);
-        }
-      });
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && _currentSheet?.id == currentSheetId) {
-          SocketService.instance.getPresence(currentSheetId);
-        }
-      });
+
+      // Request the full presence list immediately (0 ms) so we see
+      // users who were already in the sheet BEFORE we joined, then
+      // retry at increasing intervals to self-heal any missed events.
+      for (final ms in const [0, 300, 800, 2000, 5000]) {
+        Future.delayed(Duration(milliseconds: ms), () {
+          if (mounted && _currentSheet?.id == currentSheetId) {
+            SocketService.instance.getPresence(currentSheetId);
+          }
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -5632,7 +5633,9 @@ class _SheetScreenState extends State<SheetScreen> {
       final sid = _currentSheet?.id;
       if (sid != null) {
         SocketService.instance.joinSheet(sid);
-        // After all users have had time to rejoin, fetch the full list.
+        // Immediately request presence, then again after all reconnecting
+        // users have had time to re-join the room.
+        SocketService.instance.getPresence(sid);
         Future.delayed(const Duration(seconds: 2), () {
           if (mounted && _currentSheet?.id == sid) {
             SocketService.instance.getPresence(sid);
@@ -5644,23 +5647,23 @@ class _SheetScreenState extends State<SheetScreen> {
     socket.onPresenceUpdate = (data) {
       if (!mounted) return;
       try {
-        // Ignore presence updates for sheets other than the one currently open.
-        // Stale updates can arrive when the user just switched sheets.
-        final dynamic incomingId = data['sheet_id'];
-        if (incomingId != null && _currentSheet != null) {
-          final int? incoming = incomingId is int
-              ? incomingId
-              : int.tryParse(incomingId.toString());
-          if (incoming != null && incoming != _currentSheet!.id) {
-            print('[Presence] Ignoring stale presence_update for sheet $incoming (current: ${_currentSheet!.id})');
-            return;
-          }
+        // Filter: ignore updates for a different sheet than the one open.
+        // We normalise the id to int to tolerate num/double from JSON.
+        final dynamic incomingRaw = data['sheet_id'];
+        if (incomingRaw != null && _currentSheet != null) {
+          final int incoming = incomingRaw is int
+              ? incomingRaw
+              : incomingRaw is num
+                  ? incomingRaw.toInt()
+                  : int.tryParse(incomingRaw.toString()) ?? -1;
+          if (incoming != _currentSheet!.id)
+            return; // wrong sheet, skip silently
         }
 
         final rawList = data['users'];
         if (rawList == null) return;
 
-        // Parse and deduplicate by userId (in case backend sends duplicates).
+        // Parse + deduplicate by userId.
         final Map<int, CellPresence> seen = {};
         for (final raw in (rawList as List).whereType<Map>()) {
           final u = CellPresence.fromJson(Map<String, dynamic>.from(raw));
@@ -5670,12 +5673,12 @@ class _SheetScreenState extends State<SheetScreen> {
 
         setState(() {
           _presenceUsers = users;
-          // Keep _presenceInfoMap up to date for cell-highlight lookups
           for (final u in users) {
             _presenceInfoMap[u.userId] = u;
           }
         });
-        print('[Presence] Updated: ${users.map((u) => u.username).join(', ')}');
+        debugPrint(
+            '[Presence] sheet=${_currentSheet?.id} users=${users.map((u) => u.username).join(', ')}');
       } catch (e) {
         print('[Presence] Failed to parse presence_update: $e | data=$data');
       }
@@ -5687,22 +5690,43 @@ class _SheetScreenState extends State<SheetScreen> {
           ? (data['user_id'] as num).toInt()
           : (data['user_id'] as int? ?? -1);
       final cellRef = data['cell_ref'] as String? ?? '';
-      // Build a presence record from the event payload so we have name/color
-      // even if presence_update hasn't arrived yet.
       final cp = CellPresence(
         userId: userId,
         username: data['username'] as String? ?? 'User',
+        fullName: data['full_name'] as String?,
         role: data['role'] as String? ?? '',
         departmentName: data['department_name'] as String?,
         currentCell: cellRef,
       );
+
+      // Check BEFORE setState so we can act on it after.
+      final alreadyPresent = _presenceUsers.any((u) => u.userId == userId);
+
       setState(() {
         _presenceInfoMap[userId] = cp;
+        // ─── Ensure the user is in the presence panel ───────────────────────
+        // If presence_update was missed (e.g. race on join), the cell_focused
+        // event is our fallback signal that someone is actively in the sheet.
+        if (!alreadyPresent) {
+          _presenceUsers = [..._presenceUsers, cp];
+        } else {
+          // Refresh currentCell for the existing record
+          _presenceUsers = [
+            for (final u in _presenceUsers)
+              u.userId == userId ? u.copyWith(currentCell: cellRef) : u
+          ];
+        }
         for (final v in _cellPresenceUserIds.values) {
           v.remove(userId);
         }
         _cellPresenceUserIds.putIfAbsent(cellRef, () => <int>{}).add(userId);
       });
+
+      // If we just learned about a new user, immediately sync the full
+      // presence list so all their details (full name, role) are correct.
+      if (!alreadyPresent && _currentSheet != null) {
+        SocketService.instance.getPresence(_currentSheet!.id);
+      }
     };
 
     socket.onCellBlurred = (data) {

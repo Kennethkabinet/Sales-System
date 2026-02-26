@@ -434,6 +434,14 @@ class CollaborationHandler {
       // immediately even before the room broadcast propagates.
       socket.emit('presence_update', this._buildPresencePayload(sheet_id));
 
+      // Second broadcast after 1 s — catches clients that were mid-reconnect
+      // when the first broadcast fired and therefore missed it.
+      setTimeout(() => {
+        if (this.sheetPresence.has(sheet_id)) {
+          this._broadcastSheetPresence(sheet_id);
+        }
+      }, 1000);
+
       console.log(`${socket.user.username} joined sheet ${sheet_id} (${presenceMap.size} users now present)`);
     } catch (err) {
       console.error('Join sheet error:', err);
@@ -491,11 +499,28 @@ class CollaborationHandler {
     socket.to(`sheet-${sheet_id}`).emit('cell_focused', {
       user_id:         socket.user.id,
       username:        socket.user.username,
+      full_name:       socket.user.full_name || socket.user.username,
       role:            socket.user.role,
       department_name: socket.user.department_name,
       cell_ref,
       sheet_id
     });
+
+    // If the user focusing a cell was somehow not yet in the presence map
+    // (edge case: missed join_sheet), add them now and broadcast presence.
+    if (record === undefined) {
+      if (!this.sheetPresence.has(sheet_id)) this.sheetPresence.set(sheet_id, new Map());
+      this.sheetPresence.get(sheet_id).set(socket.id, {
+        userId:         socket.user.id,
+        username:       socket.user.username,
+        fullName:       socket.user.full_name || socket.user.username,
+        role:           socket.user.role,
+        departmentName: socket.user.department_name || null,
+        currentCell:    cell_ref,
+        joinedAt:       Date.now()
+      });
+      this._broadcastSheetPresence(sheet_id);
+    }
   }
 
   /**
