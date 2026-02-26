@@ -33,14 +33,21 @@ class CellPresence {
     this.currentCell,
   }) : fullName = fullName ?? username;
 
-  factory CellPresence.fromJson(Map<String, dynamic> j) => CellPresence(
-        userId: (j['user_id'] as num).toInt(),
-        username: j['username'] as String? ?? '',
-        fullName: j['full_name'] as String?,
-        role: j['role'] as String? ?? '',
-        departmentName: j['department_name'] as String?,
-        currentCell: j['current_cell'] as String?,
-      );
+  factory CellPresence.fromJson(Map<String, dynamic> j) {
+    final rawId = j['user_id'];
+    final userId = rawId is num
+        ? rawId.toInt()
+        : int.tryParse((rawId ?? '').toString()) ?? -1;
+
+    return CellPresence(
+      userId: userId,
+      username: j['username'] as String? ?? '',
+      fullName: j['full_name'] as String?,
+      role: j['role'] as String? ?? '',
+      departmentName: j['department_name'] as String?,
+      currentCell: j['current_cell'] as String?,
+    );
+  }
 
   /// Deterministic color assignment based on userId.
   Color get color => kPresenceColors[userId % kPresenceColors.length];

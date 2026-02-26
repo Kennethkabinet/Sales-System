@@ -1,4 +1,5 @@
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -243,6 +244,72 @@ class _SheetScreenState extends State<SheetScreen> {
   final Set<String> _grantedCells = {};
   // number of pending edit-requests visible to admin
   int _pendingEditRequestCount = 0;
+
+  bool _isPresenceRoleSupported(String role) {
+    final normalized = role.trim().toLowerCase();
+    return normalized.isEmpty ||
+        normalized == 'admin' ||
+        normalized == 'editor' ||
+        normalized == 'viewer' ||
+        normalized == 'manager' ||
+        normalized == 'user';
+  }
+
+  CellPresence _pickRicherPresence(CellPresence current, CellPresence next) {
+    int score(CellPresence u) {
+      var s = 0;
+      if (u.fullName.trim().isNotEmpty && u.fullName.trim() != u.username) s++;
+      if (u.role.trim().isNotEmpty) s++;
+      if ((u.departmentName ?? '').trim().isNotEmpty) s++;
+      if ((u.currentCell ?? '').trim().isNotEmpty) s++;
+      return s;
+    }
+
+    return score(next) >= score(current) ? next : current;
+  }
+
+  List<CellPresence> _buildEffectivePresenceUsers() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final authUser = authProvider.user;
+    final usersById = <int, CellPresence>{};
+
+    void upsert(CellPresence user) {
+      if (user.userId <= 0) return;
+      if (!_isPresenceRoleSupported(user.role)) return;
+      final existing = usersById[user.userId];
+      usersById[user.userId] =
+          existing == null ? user : _pickRicherPresence(existing, user);
+    }
+
+    for (final user in _presenceInfoMap.values) {
+      upsert(user);
+    }
+    for (final user in _presenceUsers) {
+      upsert(user);
+    }
+
+    if (authUser != null) {
+      upsert(CellPresence(
+        userId: authUser.id,
+        username: authUser.username,
+        role: authUser.role,
+        departmentName: authUser.departmentName,
+        currentCell: null,
+      ));
+    }
+
+    final authId = authUser?.id;
+    final result = usersById.values.toList()
+      ..sort((a, b) {
+        if (authId != null) {
+          if (a.userId == authId && b.userId != authId) return -1;
+          if (b.userId == authId && a.userId != authId) return 1;
+        }
+        return a.username.toLowerCase().compareTo(b.username.toLowerCase());
+      });
+
+    return result;
+  }
 
   @override
   void initState() {
@@ -3841,19 +3908,7 @@ class _SheetScreenState extends State<SheetScreen> {
     // ── Compact presence avatar row ──────────────────────────────────────────
     Widget presenceRow() {
       final authUser = authProv.user;
-      final List<CellPresence> effective = _presenceUsers.isNotEmpty
-          ? _presenceUsers
-          : (authUser != null
-              ? [
-                  CellPresence(
-                    userId: authUser.id,
-                    username: authUser.username,
-                    role: authUser.role,
-                    departmentName: authUser.departmentName,
-                    currentCell: null,
-                  )
-                ]
-              : []);
+      final effective = _buildEffectivePresenceUsers();
       if (effective.isEmpty) return const SizedBox.shrink();
       final authId = authUser?.id ?? -1;
       final me = effective.where((u) => u.userId == authId).firstOrNull;
@@ -3912,6 +3967,25 @@ class _SheetScreenState extends State<SheetScreen> {
                             fontSize: 11,
                             fontWeight: FontWeight.bold)),
                   ],
+                ),
+              ),
+            ),
+          ],
+          if (kDebugMode) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE3F2FD),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF90CAF9), width: 1),
+              ),
+              child: Text(
+                'DBG ${effective.length}U (${_presenceUsers.length}/${_presenceInfoMap.length})',
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF0D47A1),
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
@@ -6232,18 +6306,38 @@ class _SheetScreenState extends State<SheetScreen> {
         }
 
         final rawList = data['users'];
-        if (rawList == null) return;
+        if (rawList is! List) return;
 
-        // Parse + deduplicate by userId.
+        // Parse + deduplicate by userId. Skip malformed items so a single
+        // bad entry doesn't blank the entire presence panel.
         final Map<int, CellPresence> seen = {};
-        for (final raw in (rawList as List).whereType<Map>()) {
-          final u = CellPresence.fromJson(Map<String, dynamic>.from(raw));
-          seen.putIfAbsent(u.userId, () => u);
+        for (final raw in rawList.whereType<Map>()) {
+          try {
+            final payload = Map<String, dynamic>.from(raw);
+            final dynamic rawId = payload['user_id'];
+            final int? parsedId = rawId is num
+                ? rawId.toInt()
+                : int.tryParse((rawId ?? '').toString());
+            if (parsedId == null || parsedId <= 0) continue;
+            payload['user_id'] = parsedId;
+
+            final user = CellPresence.fromJson(payload);
+            if (!_isPresenceRoleSupported(user.role)) continue;
+
+            final existing = seen[user.userId];
+            seen[user.userId] =
+                existing == null ? user : _pickRicherPresence(existing, user);
+          } catch (userErr) {
+            debugPrint(
+                '[Presence] skipping invalid user payload: $userErr | raw=$raw');
+          }
         }
         final users = seen.values.toList();
 
         setState(() {
           _presenceUsers = users;
+          _presenceInfoMap
+              .removeWhere((userId, _) => !seen.containsKey(userId));
           for (final u in users) {
             _presenceInfoMap[u.userId] = u;
           }
@@ -6474,26 +6568,9 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Presence avatar row shown above the spreadsheet grid.
   Widget _buildPresencePanel() {
-    // Always show when a sheet is open; fall back to auth user if socket
-    // presence data hasn’t arrived yet (first open, solo user, etc.)
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final authUser = authProvider.user;
-
-    // Build the effective list: prefer socket-provided list (includes me)
-    // but always guarantee at least the current user is visible.
-    final List<CellPresence> effective = _presenceUsers.isNotEmpty
-        ? _presenceUsers
-        : (authUser != null
-            ? [
-                CellPresence(
-                  userId: authUser.id,
-                  username: authUser.username,
-                  role: authUser.role,
-                  departmentName: authUser.departmentName,
-                  currentCell: null,
-                )
-              ]
-            : []);
+    final effective = _buildEffectivePresenceUsers();
 
     if (effective.isEmpty) return const SizedBox.shrink();
 
