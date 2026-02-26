@@ -293,6 +293,40 @@ router.get('/folders', authenticate, async (req, res) => {
   }
 });
 
+// GET /sheets/edit-requests/all  – Admin: all edit requests across every sheet
+// NOTE: must be declared BEFORE /:id routes so Express doesn't treat
+//       'edit-requests' as a sheet id.
+router.get('/edit-requests/all', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    }
+
+    const { status } = req.query;
+    let query = `
+      SELECT er.*, u.username  AS requester_username,
+             rv.username AS reviewer_username,
+             s.name      AS sheet_name
+      FROM edit_requests er
+      LEFT JOIN users  u  ON er.requested_by = u.id
+      LEFT JOIN users  rv ON er.reviewed_by  = rv.id
+      LEFT JOIN sheets s  ON er.sheet_id     = s.id
+    `;
+    const params = [];
+    if (status) {
+      params.push(status);
+      query += ` WHERE er.status = $1`;
+    }
+    query += ' ORDER BY er.requested_at DESC';
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, requests: result.rows });
+  } catch (err) {
+    console.error('Get all edit requests error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get edit requests' } });
+  }
+});
+
 // GET /sheets/:id - Get sheet data
 router.get('/:id', authenticate, requireSheetAccess, async (req, res) => {
   try {
@@ -524,6 +558,24 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
     } catch (fileSaveError) {
       console.error('Auto-save to files error (non-blocking):', fileSaveError);
       // Don't fail the sheet save if file auto-save fails
+    }
+
+    // ── Notify all users currently viewing this sheet that a full save occurred ──
+    // This lets viewers refresh their local state without polling.
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`sheet-${id}`).emit('sheet_saved', {
+          sheet_id:    parseInt(id),
+          saved_by:    req.user.username,
+          saved_by_id: req.user.id,
+          columns,
+          timestamp:   new Date().toISOString()
+        });
+      }
+    } catch (broadcastErr) {
+      // Non-blocking
+      console.error('sheet_saved broadcast error:', broadcastErr.message);
     }
 
     res.json({
@@ -1261,6 +1313,220 @@ router.get('/:id/status', authenticate, requireSheetAccess, async (req, res) => 
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to get sheet status' }
     });
+  }
+});
+
+// ============================================================
+//  Edit Requests (Admin Approval Workflow for Locked Cells)
+// ============================================================
+
+// GET /sheets/:id/edit-requests  – Admin sees all requests for a sheet
+router.get('/:id/edit-requests', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.query; // optional filter: pending | approved | rejected
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    }
+
+    let query = `
+      SELECT er.*, u.username as requester_username,
+             rv.username as reviewer_username,
+             s.name as sheet_name
+      FROM edit_requests er
+      LEFT JOIN users u  ON er.requested_by = u.id
+      LEFT JOIN users rv ON er.reviewed_by  = rv.id
+      LEFT JOIN sheets s ON er.sheet_id     = s.id
+      WHERE er.sheet_id = $1
+    `;
+    const params = [id];
+    if (status) {
+      params.push(status);
+      query += ` AND er.status = $${params.length}`;
+    }
+    query += ' ORDER BY er.requested_at DESC';
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, requests: result.rows });
+  } catch (err) {
+    console.error('Get edit requests error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get edit requests' } });
+  }
+});
+
+// POST /sheets/:id/edit-requests  – Editor submits a request
+router.post('/:id/edit-requests', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { row_number, column_name, cell_reference, current_value, proposed_value } = req.body;
+
+    if (req.user.role === 'viewer') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Viewers cannot submit edit requests' } });
+    }
+
+    // Cancel duplicate pending request for same cell by same user
+    await pool.query(`
+      DELETE FROM edit_requests
+      WHERE sheet_id = $1 AND row_number = $2 AND column_name = $3
+        AND requested_by = $4 AND status = 'pending'
+    `, [id, row_number, column_name, req.user.id]);
+
+    // Fetch user's department name
+    const deptResult = await pool.query(`
+      SELECT d.name FROM users u LEFT JOIN departments d ON u.department_id = d.id WHERE u.id = $1
+    `, [req.user.id]);
+    const deptName = deptResult.rows[0]?.name || null;
+
+    const result = await pool.query(`
+      INSERT INTO edit_requests
+        (sheet_id, row_number, column_name, cell_reference, current_value,
+         proposed_value, requested_by, requester_role, requester_dept, status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+      RETURNING *
+    `, [id, row_number, column_name, cell_reference || null, current_value || null,
+        proposed_value || null, req.user.id, req.user.role, deptName]);
+
+    // Notify all online admins + anyone in the sheet room via socket.
+    const collab = req.app.get('collab');
+    if (collab) {
+      collab.io.to(`sheet-${id}`).to('admins').emit('edit_request_notification', {
+        request_id:     result.rows[0].id,
+        sheet_id:       parseInt(id),
+        row_number,
+        column_name,
+        cell_ref:       cell_reference || null,
+        current_value:  current_value  || null,
+        proposed_value: proposed_value || null,
+        requested_by:   req.user.username,
+        requester_role: req.user.role,
+        requester_dept: deptName,
+        requested_at:   result.rows[0].requested_at,
+      });
+    }
+
+    res.status(201).json({ success: true, request: result.rows[0] });
+  } catch (err) {
+    console.error('Submit edit request error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to submit edit request' } });
+  }
+});
+
+// PUT /sheets/:id/edit-requests/:reqId  – Admin approves or rejects
+router.put('/:id/edit-requests/:reqId', authenticate, async (req, res) => {
+  try {
+    const { id, reqId } = req.params;
+    const { approved, reject_reason } = req.body;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    }
+
+    const status     = approved ? 'approved' : 'rejected';
+    const expiresAt  = approved ? new Date(Date.now() + 10 * 60 * 1000) : null;
+
+    const result = await pool.query(`
+      UPDATE edit_requests
+      SET status        = $2,
+          reviewed_by   = $3,
+          reviewed_at   = CURRENT_TIMESTAMP,
+          reject_reason = $4,
+          expires_at    = $5
+      WHERE id = $1 AND sheet_id = $6 AND status = 'pending'
+      RETURNING *
+    `, [reqId, status, req.user.id, reject_reason || null, expiresAt, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Request not found or already resolved' } });
+    }
+
+    // Emit real-time events so the editor gets notified even when the admin
+    // resolves via the REST API instead of through the WebSocket flow.
+    const collab = req.app.get('collab');
+    if (collab) {
+      collab.emitResolveEvents(result.rows[0], approved, reject_reason, req.user.username);
+    }
+
+    res.json({ success: true, request: result.rows[0] });
+  } catch (err) {
+    console.error('Resolve edit request error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to resolve edit request' } });
+  }
+});
+
+// DELETE /sheets/edit-requests/:reqId  – Admin deletes a resolved (approved/rejected) edit request
+router.delete('/edit-requests/:reqId', authenticate, async (req, res) => {
+  try {
+    const { reqId } = req.params;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin only' } });
+    }
+
+    const result = await pool.query(`
+      DELETE FROM edit_requests
+      WHERE id = $1 AND status != 'pending'
+      RETURNING id
+    `, [reqId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Request not found or still pending — only resolved requests can be deleted' } });
+    }
+
+    res.json({ success: true, message: 'Edit request deleted.' });
+  } catch (err) {
+    console.error('Delete edit request error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to delete edit request' } });
+  }
+});
+
+// GET /sheets/:id/audit  – Sheet-level cell audit trail (admin + editor)
+router.get('/:id/audit', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 50, cell_reference } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    if (!['admin', 'editor'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin or editor only' } });
+    }
+
+    let baseWhere = 'WHERE al.sheet_id = $1';
+    const params = [id];
+
+    if (cell_reference) {
+      params.push(cell_reference);
+      baseWhere += ` AND al.cell_reference = $${params.length}`;
+    }
+
+    const result = await pool.query(`
+      SELECT al.id, al.action, al.cell_reference, al.field_name,
+             al.old_value, al.new_value, al.created_at,
+             al.role, al.department_name,
+             u.username, u.full_name
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      ${baseWhere}
+      ORDER BY al.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, parseInt(limit), offset]);
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) as total FROM audit_logs al ${baseWhere}`, params
+    );
+
+    res.json({
+      success: true,
+      logs: result.rows,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: parseInt(countResult.rows[0].total)
+      }
+    });
+  } catch (err) {
+    console.error('Sheet audit error:', err);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get sheet audit' } });
   }
 });
 

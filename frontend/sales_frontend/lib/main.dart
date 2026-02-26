@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/data_provider.dart';
@@ -10,6 +11,24 @@ import 'config/constants.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Suppress the known Flutter Windows bug where Alt/modifier key events fire
+  // with incorrect modifier flags, causing a harmless but noisy assertion:
+  // "Attempted to send a key down event when no keys are in keysPressed"
+  FlutterError.onError = (FlutterErrorDetails details) {
+    final msg = details.exceptionAsString();
+    if (msg.contains('Attempted to send a key down event when no keys are in keysPressed') ||
+        msg.contains('keysPressed.isNotEmpty')) {
+      return; // known Flutter Windows keyboard bug – safe to ignore
+    }
+    // All other errors: log normally
+    if (kDebugMode) {
+      FlutterError.presentError(details);
+    } else {
+      debugPrint('Flutter error: $msg');
+    }
+  };
+
   runApp(const MyApp());
 }
 
@@ -17,7 +36,8 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   // Global key to help with hot restart
-  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
@@ -40,9 +60,12 @@ class MyApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
+            seedColor: AppColors.primaryBlue,
+            primary: AppColors.primaryBlue,
+            secondary: AppColors.primaryRed,
             brightness: Brightness.light,
           ),
+          primaryColor: AppColors.primaryBlue,
           useMaterial3: true,
           cardTheme: CardThemeData(
             elevation: 2,
@@ -61,6 +84,8 @@ class MyApp extends StatelessWidget {
           ),
           elevatedButtonTheme: ElevatedButtonThemeData(
             style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryBlue,
+              foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(
                 horizontal: 24,
                 vertical: 12,
@@ -126,7 +151,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (auth.isAuthenticated) {
           // Role-based dashboard routing
           final userRole = auth.user?.role ?? '';
-          
+
           switch (userRole) {
             case 'admin':
               return const DashboardScreen(); // Full admin dashboard

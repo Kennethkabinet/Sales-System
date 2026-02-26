@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../config/constants.dart';
 import '../main.dart'; // For AuthWrapper
 
 class LoginScreen extends StatefulWidget {
@@ -41,7 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFDF5F0), // Light cream background
+      backgroundColor: AppColors.lightBlue,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
@@ -52,6 +53,46 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Brand title above card
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.diamond,
+                              size: 32,
+                              color: AppColors.primaryRed,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const Text(
+                          'Synergy Graphics',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.primaryBlue,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Management System',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.grayText,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
                     // Main card
                     Stack(
                       clipBehavior: Clip.none,
@@ -68,7 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             bottom: 40,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFCD5C5C), // Indian red / coral
+                            color: AppColors.primaryRed,
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Form(
@@ -194,12 +235,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                     onPressed:
                                         auth.isLoading ? null : _handleLogin,
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor:
-                                          const Color(0xFF3B5998), // Blue
+                                      backgroundColor: AppColors.primaryBlue,
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(6),
+                                        borderRadius: BorderRadius.circular(6),
                                       ),
                                       elevation: 2,
                                     ),
@@ -257,7 +296,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     return const Icon(
                                       Icons.diamond,
                                       size: 40,
-                                      color: Color(0xFFCD5C5C),
+                                      color: AppColors.primaryRed,
                                     );
                                   },
                                 ),

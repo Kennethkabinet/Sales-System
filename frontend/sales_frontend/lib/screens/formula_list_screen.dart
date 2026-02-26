@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/formula.dart';
+import '../config/constants.dart';
 
 class FormulaListScreen extends StatefulWidget {
   const FormulaListScreen({super.key});
@@ -33,8 +34,8 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
                 Text(
                   'Formulas',
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
                 ElevatedButton.icon(
                   onPressed: () => _showFormulaDialog(),
@@ -44,15 +45,15 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Info card
             Card(
-              color: Colors.blue[50],
+              color: AppColors.lightBlue,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    Icon(Icons.info_outline, color: Colors.blue[700]),
+                    Icon(Icons.info_outline, color: AppColors.primaryBlue),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -62,13 +63,13 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
                             'Supported Functions',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
-                              color: Colors.blue[700],
+                              color: AppColors.primaryBlue,
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             'SUM, AVG, MIN, MAX, COUNT, IF, ROUND, PERCENTAGE, GROWTH',
-                            style: TextStyle(color: Colors.blue[600]),
+                            style: TextStyle(color: AppColors.primaryBlue),
                           ),
                         ],
                       ),
@@ -91,11 +92,13 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.functions, size: 64, color: Colors.grey[400]),
+                          Icon(Icons.functions,
+                              size: 64, color: Colors.grey[400]),
                           const SizedBox(height: 16),
                           Text(
                             'No formulas yet',
-                            style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                            style: TextStyle(
+                                fontSize: 18, color: Colors.grey[600]),
                           ),
                           const SizedBox(height: 8),
                           Text(
@@ -129,8 +132,10 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
 
   Future<void> _showFormulaDialog([Formula? formula]) async {
     final nameController = TextEditingController(text: formula?.name ?? '');
-    final expressionController = TextEditingController(text: formula?.expression ?? '');
-    final descriptionController = TextEditingController(text: formula?.description ?? '');
+    final expressionController =
+        TextEditingController(text: formula?.expression ?? '');
+    final descriptionController =
+        TextEditingController(text: formula?.description ?? '');
 
     final result = await showDialog<bool>(
       context: context,
@@ -183,7 +188,8 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    _buildExample('SUM(price * qty)', 'Total of price × quantity'),
+                    _buildExample(
+                        'SUM(price * qty)', 'Total of price × quantity'),
                     _buildExample('AVG(sales)', 'Average of sales column'),
                     _buildExample('IF(stock < 10, "Low", "OK")', 'Conditional'),
                     _buildExample('GROWTH(current, previous)', 'Growth %'),
@@ -200,9 +206,11 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              if (nameController.text.isEmpty || expressionController.text.isEmpty) {
+              if (nameController.text.isEmpty ||
+                  expressionController.text.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Name and expression are required')),
+                  const SnackBar(
+                      content: Text('Name and expression are required')),
                 );
                 return;
               }
@@ -241,15 +249,15 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.blue[100],
+              color: AppColors.lightBlue,
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
               formula,
-              style: TextStyle(
+              style: const TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 12,
-                color: Colors.blue[800],
+                color: AppColors.primaryBlue,
               ),
             ),
           ),
@@ -332,7 +340,8 @@ class _FormulaCard extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           formula.description!,
-                          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 13),
                         ),
                       ],
                     ],

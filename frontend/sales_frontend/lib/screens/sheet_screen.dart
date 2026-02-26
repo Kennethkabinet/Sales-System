@@ -8,6 +8,9 @@ import 'dart:async';
 import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
 import '../services/api_service.dart';
+import '../services/socket_service.dart';
+import '../models/collaboration.dart';
+import '../config/constants.dart';
 
 /// Sheet model for spreadsheet data
 class SheetModel {
@@ -90,8 +93,10 @@ class _FormulaEntry {
 
 class SheetScreen extends StatefulWidget {
   final bool readOnly;
+  final VoidCallback? onNavigateToEditRequests;
 
-  const SheetScreen({super.key, this.readOnly = false});
+  const SheetScreen(
+      {super.key, this.readOnly = false, this.onNavigateToEditRequests});
 
   @override
   State<SheetScreen> createState() => _SheetScreenState();
@@ -218,16 +223,39 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // Timer for periodic status updates
   Timer? _statusTimer;
+  // Timer for debounced auto-save (fires 2 s after the last change)
+  Timer? _autoSaveTimer;
+
+  // ── V2 Collaboration: real-time presence & edit requests ──
+  List<CellPresence> _presenceUsers = [];
+  // cellRef (e.g. "B4") -> set of userId's currently on that cell
+  final Map<String, Set<int>> _cellPresenceUserIds = {};
+  // userId -> CellPresence lookup (populated from both presence_update & cell_focused)
+  final Map<int, CellPresence> _presenceInfoMap = {};
+  // cells for which THIS user has been granted temp edit access
+  final Set<String> _grantedCells = {};
+  // number of pending edit-requests visible to admin
+  int _pendingEditRequestCount = 0;
 
   @override
   void initState() {
     super.initState();
     _initializeSheet();
     _loadSheets();
+    _setupSheetPresenceCallbacks();
 
     // Set up periodic status refresh (every 10 seconds)
+    // Also refreshes sheet data as a safety-net fallback so that if a socket
+    // event was ever missed the user sees the correct data within 10 s without
+    // having to navigate away.
     _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _refreshSheetStatus();
+      // Only do the background DB refresh when there are no local unsaved
+      // changes (to avoid overwriting in-progress edits) and we are not
+      // currently in the middle of a cell edit.
+      if (!_hasUnsavedChanges && _editingRow == null && _currentSheet != null) {
+        _reloadSheetDataOnly();
+      }
     });
 
     // Sync column headers horizontal scroll with main grid horizontal scroll
@@ -279,7 +307,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Lock sheet for editing
   Future<void> _lockSheet() async {
-    if (_currentSheet == null) return;
+    if (_currentSheet == null || !mounted) return;
 
     setState(() => _isLoading = true);
 
@@ -292,7 +320,7 @@ class _SheetScreenState extends State<SheetScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Sheet locked for editing'),
-            backgroundColor: Colors.blue,
+            backgroundColor: AppColors.primaryBlue,
           ),
         );
       }
@@ -306,13 +334,13 @@ class _SheetScreenState extends State<SheetScreen> {
         );
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   /// Unlock sheet
   Future<void> _unlockSheet() async {
-    if (_currentSheet == null) return;
+    if (_currentSheet == null || !mounted) return;
 
     setState(() => _isLoading = true);
 
@@ -320,7 +348,7 @@ class _SheetScreenState extends State<SheetScreen> {
       await ApiService.unlockSheet(_currentSheet!.id);
       await _refreshSheetStatus();
 
-      setState(() => _isEditingSession = false);
+      if (mounted) setState(() => _isEditingSession = false);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -340,16 +368,17 @@ class _SheetScreenState extends State<SheetScreen> {
         );
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   /// Start edit session
   Future<void> _startEditSession() async {
-    if (_currentSheet == null) return;
+    if (_currentSheet == null || !mounted) return;
 
     try {
       await ApiService.startEditSession(_currentSheet!.id);
+      if (!mounted) return;
       setState(() => _isEditingSession = true);
 
       // Start periodic heartbeat
@@ -377,10 +406,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Refresh sheet status (locks and active editors)
   Future<void> _refreshSheetStatus() async {
-    if (_currentSheet == null) return;
+    if (_currentSheet == null || !mounted) return;
 
     try {
       final response = await ApiService.getSheetStatus(_currentSheet!.id);
+      if (!mounted) return;
       final status = response['status'];
 
       setState(() {
@@ -429,6 +459,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Future<void> _loadSheets() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
     });
@@ -438,6 +469,7 @@ class _SheetScreenState extends State<SheetScreen> {
         folderId: _currentSheetFolderId,
         rootOnly: _currentSheetFolderId == null,
       );
+      if (!mounted) return;
       setState(() {
         _sheets = (response['sheets'] as List?)
                 ?.map((s) => SheetModel.fromJson(s))
@@ -450,6 +482,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -457,10 +490,25 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Future<void> _loadSheetData(int sheetId) async {
+    if (!mounted) return;
+
+    // ── Leave the previous sheet room so the backend cleans up presence ──────
+    if (_currentSheet != null && _currentSheet!.id != sheetId) {
+      SocketService.instance.leaveSheet(_currentSheet!.id);
+    }
+
+    // ── Clear stale presence data so old avatars don't linger ────────────────
+    if (_currentSheet?.id != sheetId) {
+      _presenceUsers = [];
+      _cellPresenceUserIds.clear();
+      _presenceInfoMap.clear();
+    }
+
     setState(() => _isLoading = true);
 
     try {
       final response = await ApiService.getSheetData(sheetId);
+      if (!mounted) return;
       final sheet = SheetModel.fromJson(response['sheet']);
 
       setState(() {
@@ -536,9 +584,27 @@ class _SheetScreenState extends State<SheetScreen> {
       // Refresh collaborative editing status
       await _refreshSheetStatus();
 
+      if (!mounted) return;
       // Auto-inject today's date column for Inventory Tracker sheets.
-      if (mounted) _autoInjectTodayColumnIfNeeded();
+      _autoInjectTodayColumnIfNeeded();
+
+      // Announce presence in this sheet room via socket
+      final currentSheetId = _currentSheet!.id;
+      SocketService.instance.joinSheet(currentSheetId);
+      // Fallback: explicitly request presence after a short delay in case
+      // the join broadcast was missed (socket race condition safeguard).
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted && _currentSheet?.id == currentSheetId) {
+          SocketService.instance.getPresence(currentSheetId);
+        }
+      });
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted && _currentSheet?.id == currentSheetId) {
+          SocketService.instance.getPresence(currentSheetId);
+        }
+      });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -564,6 +630,7 @@ class _SheetScreenState extends State<SheetScreen> {
         } catch (_) {}
       }
 
+      if (!mounted) return;
       setState(() {
         _sheets.insert(0, sheet);
         _currentSheet = sheet;
@@ -598,6 +665,7 @@ class _SheetScreenState extends State<SheetScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -805,6 +873,7 @@ class _SheetScreenState extends State<SheetScreen> {
         } catch (_) {}
       }
 
+      if (!mounted) return;
       setState(() {
         _sheets.insert(0, sheet);
         _currentSheet = sheet;
@@ -1198,6 +1267,13 @@ class _SheetScreenState extends State<SheetScreen> {
         _saveStatus = 'unsaved';
       });
     }
+    // Debounced auto-save: persist to DB 2 s after the last change so that
+    // users who reload the sheet always see up-to-date data even when the
+    // editor has not pressed the manual Save button.
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && _hasUnsavedChanges) _saveSheet();
+    });
   }
 
   Future<void> _saveSheet() async {
@@ -1383,6 +1459,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
     try {
       await ApiService.renameSheet(sheet.id, newName.trim());
+      if (!mounted) return;
 
       // Update sheet name in the local list
       final index = _sheets.indexWhere((s) => s.id == sheet.id);
@@ -1408,6 +1485,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _currentSheet = _sheets[index];
       }
 
+      if (!mounted) return;
       setState(() => _isLoading = false);
 
       if (mounted) {
@@ -1419,7 +1497,7 @@ class _SheetScreenState extends State<SheetScreen> {
         );
       }
     } catch (e) {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1503,6 +1581,7 @@ class _SheetScreenState extends State<SheetScreen> {
         await ApiService.deleteSheet(id);
       } catch (_) {}
     }
+    if (!mounted) return;
     setState(() => _selectedSheetIds.clear());
     await _loadSheets();
   }
@@ -1555,15 +1634,18 @@ class _SheetScreenState extends State<SheetScreen> {
         await ApiService.moveSheetToFolder(id, targetId);
       } catch (_) {}
     }
+    if (!mounted) return;
     setState(() => _selectedSheetIds.clear());
     await _loadSheets();
   }
 
   Future<void> _deleteSheet(int sheetId) async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
     try {
       await ApiService.deleteSheet(sheetId);
+      if (!mounted) return;
 
       // If the deleted sheet was the current sheet, clear it
       if (_currentSheet?.id == sheetId) {
@@ -1926,6 +2008,16 @@ class _SheetScreenState extends State<SheetScreen> {
     final role = authProvider.user?.role ?? '';
     if (role == 'viewer') return;
 
+    // Inventory Tracker: block editing of historical past-date columns for non-admins
+    if (role != 'admin' && _isInventoryHistoricalCell(row, col)) {
+      final cellRef = _getCellReference(row, col);
+      if (!_grantedCells.contains(cellRef)) {
+        _showEditRequestDialog(row, col);
+        return;
+      }
+      // Has temp access — allow the edit; access removed after save via _saveEditWithGrantedCell
+    }
+
     // Prevent editing if sheet is locked by another user
     if (_isLocked &&
         _lockedByUser != null &&
@@ -1940,12 +2032,36 @@ class _SheetScreenState extends State<SheetScreen> {
       return;
     }
 
+    // Block editing if another user is currently focused on this cell
+    final cellRef = _getCellReference(row, col);
+    final authId = authProvider.user?.id ?? -1;
+    final occupants = (_cellPresenceUserIds[cellRef] ?? <int>{})
+        .where((id) => id != authId)
+        .toList();
+    if (occupants.isNotEmpty) {
+      final name =
+          _presenceInfoMap[occupants.first]?.username ?? 'Another user';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$name is currently editing this cell'),
+          backgroundColor: Colors.orange[700],
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _editingRow = row;
       _editingCol = col;
       _originalCellValue = _data[row][_columns[col]] ?? '';
       _editController.text = _originalCellValue;
     });
+    // Broadcast cell focus to other collaborators
+    if (_currentSheet != null) {
+      SocketService.instance
+          .cellFocus(_currentSheet!.id, _getCellReference(row, col));
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
@@ -1953,23 +2069,47 @@ class _SheetScreenState extends State<SheetScreen> {
 
   void _saveEdit() {
     if (_editingRow != null && _editingCol != null) {
+      final savedRow = _editingRow!;
+      final savedCol = _editingCol!;
+      final cellRef = _getCellReference(savedRow, savedCol);
+      final colName = _columns[savedCol];
       final newValue = _editController.text;
       final changed = newValue != _originalCellValue;
       setState(() {
-        _data[_editingRow!][_columns[_editingCol!]] = newValue;
+        _data[savedRow][colName] = newValue;
         _editingRow = null;
         _editingCol = null;
         _updateFormulaBar();
+        // Consume single-use temp access for this cell
+        _grantedCells.remove(cellRef);
       });
+      if (_currentSheet != null) {
+        SocketService.instance.cellBlur(_currentSheet!.id, cellRef);
+        // ── Real-time broadcast: push the new value to all other users immediately ──
+        if (changed) {
+          SocketService.instance.cellUpdate(
+            _currentSheet!.id,
+            savedRow,
+            colName,
+            newValue,
+          );
+        }
+      }
       if (changed) _markDirty();
     }
   }
 
   void _cancelEdit() {
+    final cellRef = (_editingRow != null && _editingCol != null)
+        ? _getCellReference(_editingRow!, _editingCol!)
+        : null;
     setState(() {
       _editingRow = null;
       _editingCol = null;
     });
+    if (cellRef != null && _currentSheet != null) {
+      SocketService.instance.cellBlur(_currentSheet!.id, cellRef);
+    }
   }
 
   // =============== Excel-like Selection Helpers ===============
@@ -2449,6 +2589,11 @@ class _SheetScreenState extends State<SheetScreen> {
   @override
   void dispose() {
     _statusTimer?.cancel();
+    _autoSaveTimer?.cancel(); // stop pending auto-save
+    if (_currentSheet != null) {
+      SocketService.instance.leaveSheet(_currentSheet!.id);
+    }
+    SocketService.instance.clearCallbacks();
     _editController.dispose();
     _formulaBarController.dispose();
     _inventorySearchController.dispose();
@@ -2462,12 +2607,11 @@ class _SheetScreenState extends State<SheetScreen> {
     super.dispose();
   }
 
-  // ─── Theme colors (clean modern palette) ───
-  static const Color _kSidebarBg =
-      Color(0xFF1A73E8); // accent blue – active states
-  static const Color _kContentBg = Color(0xFFFFFFFF); // pure white base
-  static const Color _kNavy = Color(0xFF202124); // near-black text
-  static const Color _kBlue = Color(0xFF1A73E8); // accent blue – buttons
+  // ─── Theme colors (Blue & Red brand palette) ───
+  static const Color _kSidebarBg = AppColors.primaryBlue; // primary blue
+  static const Color _kContentBg = AppColors.white; // pure white base
+  static const Color _kNavy = AppColors.darkText; // near-black text
+  static const Color _kBlue = AppColors.primaryBlue; // primary blue
 
   @override
   Widget build(BuildContext context) {
@@ -2492,6 +2636,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 _buildFormulaBar(),
                 // ── Status bar for lock info ──
                 if (_currentSheet != null) _buildStatusBar(),
+                // ── Presence panel (who else is viewing/editing) ──
+                _buildPresencePanel(),
                 // ── Spreadsheet grid ──
                 Expanded(
                   child: _isLoading
@@ -2938,7 +3084,7 @@ class _SheetScreenState extends State<SheetScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.blue.shade100),
+            border: Border.all(color: AppColors.lightBlue),
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
@@ -2998,7 +3144,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   final sheet = entry.value;
                   final isSelected = _selectedSheetIds.contains(sheet.id);
                   final rowBg = isSelected
-                      ? Colors.blue.shade50
+                      ? AppColors.lightBlue
                       : idx.isEven
                           ? Colors.white
                           : const Color(0xFFF9FBF9);
@@ -3284,10 +3430,12 @@ class _SheetScreenState extends State<SheetScreen> {
                 height: 11,
                 child: CircularProgressIndicator(
                     strokeWidth: 1.5,
-                    valueColor: AlwaysStoppedAnimation(Colors.blue[600]!))),
+                    valueColor:
+                        const AlwaysStoppedAnimation(AppColors.primaryBlue))),
             const SizedBox(width: 5),
             Text('Saving…',
-                style: TextStyle(fontSize: 11, color: Colors.blue[600])),
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.primaryBlue)),
           ]);
         case 'unsaved':
           return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -3723,11 +3871,11 @@ class _SheetScreenState extends State<SheetScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E3A6E).withOpacity(0.1),
+                  color: AppColors.primaryBlue.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child:
-                    const Icon(Icons.tune, color: Color(0xFF1E3A6E), size: 20),
+                child: const Icon(Icons.tune,
+                    color: AppColors.primaryBlue, size: 20),
               ),
               const SizedBox(width: 10),
               const Text('Critical Alert Threshold',
@@ -3810,7 +3958,7 @@ class _SheetScreenState extends State<SheetScreen> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3A6E),
+                backgroundColor: AppColors.primaryBlue,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
@@ -3882,7 +4030,7 @@ class _SheetScreenState extends State<SheetScreen> {
                             style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1E3A6E)),
+                                color: AppColors.primaryBlue),
                           ),
                           Text(
                             criticalRows.isEmpty
@@ -3944,7 +4092,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E3A6E),
+                      color: AppColors.primaryBlue,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Row(
@@ -4018,7 +4166,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                       style: const TextStyle(
                                           fontWeight: FontWeight.bold,
                                           fontSize: 13,
-                                          color: Color(0xFF1E3A6E)),
+                                          color: AppColors.primaryBlue),
                                     ),
                                     if ((r['QC Code'] ?? '').isNotEmpty)
                                       Text(
@@ -4037,7 +4185,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
                                       fontSize: 13,
-                                      color: Color(0xFF1E3A6E),
+                                      color: AppColors.primaryBlue,
                                       fontWeight: FontWeight.w600),
                                 ),
                               ),
@@ -4809,6 +4957,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ── Formula ribbon tab label ──
+  // ignore: unused_element
   Widget _buildFormulaRibbon(bool isViewer) {
     return Row(
       children: [
@@ -4823,6 +4972,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ── Column formula builder bar (shown below ribbon when Formula tab active) ──
+  // ignore: unused_element
   Widget _buildColumnFormulaBar(bool isViewer) {
     final canEdit = !isViewer && !widget.readOnly && _canEditSheet();
     final cols = _columns;
@@ -5464,6 +5614,569 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ═══════════════════════════════════════════════════════
+  //  V2 Real-time Collaboration Methods
+  // ═══════════════════════════════════════════════════════
+
+  /// Wire up all V2 socket callbacks for presence, cell highlights, and edit requests.
+  void _setupSheetPresenceCallbacks() {
+    final socket = SocketService.instance;
+
+    // Re-join the sheet room whenever the socket (re)connects so presence
+    // updates are received even after a disconnect/reconnect cycle.
+    socket.onConnect = () {
+      if (!mounted) return;
+      if (_currentSheet != null) {
+        SocketService.instance.joinSheet(_currentSheet!.id);
+      }
+    };
+
+    socket.onPresenceUpdate = (data) {
+      if (!mounted) return;
+      try {
+        final rawList = data['users'];
+        if (rawList == null) return;
+        final users = (rawList as List)
+            .whereType<Map>()
+            .map((u) => CellPresence.fromJson(Map<String, dynamic>.from(u)))
+            .toList();
+        setState(() {
+          _presenceUsers = users;
+          // Keep _presenceInfoMap up to date for cell-highlight lookups
+          for (final u in users) {
+            _presenceInfoMap[u.userId] = u;
+          }
+        });
+      } catch (e) {
+        print('[Presence] Failed to parse presence_update: $e | data=$data');
+      }
+    };
+
+    socket.onCellFocused = (data) {
+      if (!mounted) return;
+      final userId = data['user_id'] is num
+          ? (data['user_id'] as num).toInt()
+          : (data['user_id'] as int? ?? -1);
+      final cellRef = data['cell_ref'] as String? ?? '';
+      // Build a presence record from the event payload so we have name/color
+      // even if presence_update hasn't arrived yet.
+      final cp = CellPresence(
+        userId: userId,
+        username: data['username'] as String? ?? 'User',
+        role: data['role'] as String? ?? '',
+        departmentName: data['department_name'] as String?,
+        currentCell: cellRef,
+      );
+      setState(() {
+        _presenceInfoMap[userId] = cp;
+        for (final v in _cellPresenceUserIds.values) {
+          v.remove(userId);
+        }
+        _cellPresenceUserIds.putIfAbsent(cellRef, () => <int>{}).add(userId);
+      });
+    };
+
+    socket.onCellBlurred = (data) {
+      if (!mounted) return;
+      final userId = data['user_id'] is num
+          ? (data['user_id'] as num).toInt()
+          : (data['user_id'] as int? ?? -1);
+      setState(() {
+        for (final v in _cellPresenceUserIds.values) {
+          v.remove(userId);
+        }
+      });
+    };
+
+    socket.onGrantTempAccess = (data) {
+      if (!mounted) return;
+      final cellRef = data['cell_ref'] as String? ?? '';
+      // The proposed value has already been applied server-side and broadcast
+      // via cell_updated. Show a confirmation so the editor knows it went through.
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Admin approved your edit request for cell $cellRef. '
+            'The value has been applied.'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 6),
+      ));
+    };
+
+    socket.onEditRequestNotification = (data) {
+      if (!mounted) return;
+      setState(() => _pendingEditRequestCount++);
+    };
+
+    socket.onEditRequestResolved = (data) {
+      if (!mounted) return;
+      setState(() {
+        if (_pendingEditRequestCount > 0) _pendingEditRequestCount--;
+      });
+    };
+
+    socket.onEditRequestSubmitted = (data) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Edit request submitted. Waiting for admin approval.'),
+        backgroundColor: Colors.blue,
+      ));
+    };
+
+    // ── Real-time cell sync: apply a remote user’s cell edit instantly ──
+    socket.onCellUpdated = (data) {
+      if (!mounted) return;
+      try {
+        final sheetId = data['sheet_id'] is num
+            ? (data['sheet_id'] as num).toInt()
+            : (int.tryParse(data['sheet_id']?.toString() ?? ''));
+        final rowIndex = data['row_index'] is num
+            ? (data['row_index'] as num).toInt()
+            : (int.tryParse(data['row_index']?.toString() ?? ''));
+        final colName = data['column_name'] as String? ?? '';
+        final value = data['value']?.toString() ?? '';
+        if (sheetId == null || rowIndex == null || colName.isEmpty) return;
+        if (_currentSheet?.id != sheetId) return;
+        if (rowIndex < 0) return;
+
+        setState(() {
+          // Expand _data if the incoming row is beyond current size (> 100 rows)
+          while (_data.length <= rowIndex) {
+            final emptyRow = <String, String>{};
+            for (final c in _columns) {
+              emptyRow[c] = '';
+            }
+            _data.add(emptyRow);
+            _rowLabels.add('${_data.length}');
+          }
+          // If the column doesn't exist in this client's view yet, add it
+          if (!_columns.contains(colName)) {
+            _columns.add(colName);
+            for (final r in _data) {
+              r.putIfAbsent(colName, () => '');
+            }
+          }
+          _data[rowIndex][colName] = value;
+        });
+        // Recalculate computed columns (e.g. Total Quantity) after remote edits
+        if (_isInventoryTrackerSheet()) {
+          _recalcInventoryTotals();
+        }
+      } catch (e) {
+        debugPrint('[onCellUpdated] error – falling back to full reload: $e');
+        _reloadSheetDataOnly();
+      }
+    };
+
+    // ── Full HTTP-save notification: another user explicitly saved the sheet ──
+    // Re-sync this client's data from DB so the latest version is shown.
+    socket.onSheetSaved = (data) {
+      if (!mounted) return;
+      final savedSheetId = data['sheet_id'] is num
+          ? (data['sheet_id'] as num).toInt()
+          : data['sheet_id'] as int?;
+      final savedById = data['saved_by_id'] is num
+          ? (data['saved_by_id'] as num).toInt()
+          : data['saved_by_id'] as int?;
+      if (savedSheetId == null || _currentSheet?.id != savedSheetId) return;
+
+      // The user who saved already has the correct local data – skip reload.
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      if (savedById != null && savedById == authProvider.user?.id) return;
+
+      // Don't disrupt a cell that is currently being edited.
+      if (_editingRow != null) return;
+
+      // Pull the latest persisted data from the server.
+      _reloadSheetDataOnly();
+    };
+  }
+
+  /// Re-fetch only the row/column data for the current sheet without
+  /// resetting the socket room, presence list, or any other UI state.
+  /// Used when another user's full save is broadcast via [sheet_saved].
+  Future<void> _reloadSheetDataOnly() async {
+    if (_currentSheet == null || !mounted) return;
+    try {
+      final response = await ApiService.getSheetData(_currentSheet!.id);
+      if (!mounted) return;
+      final sheet = SheetModel.fromJson(response['sheet']);
+      if (!mounted) return;
+      setState(() {
+        if (sheet.columns.isNotEmpty) {
+          _columns = List<String>.from(sheet.columns);
+        }
+        if (sheet.rows.isNotEmpty) {
+          final newData = sheet.rows.map((r) {
+            final row = <String, String>{};
+            for (final col in _columns) {
+              row[col] = r[col]?.toString() ?? '';
+            }
+            return row;
+          }).toList();
+          while (newData.length < 100) {
+            final row = <String, String>{};
+            for (final col in _columns) {
+              row[col] = '';
+            }
+            newData.add(row);
+          }
+          _data = newData;
+          _rowLabels = List.generate(_data.length, (i) => '${i + 1}');
+        }
+        // Recompute inventory totals if this is a tracker sheet
+        if (_isInventoryTrackerSheet()) _recalcInventoryTotals();
+        // Mark as saved – the server version is now the authoritative copy
+        _saveStatus = 'saved';
+        _hasUnsavedChanges = false;
+      });
+    } catch (e) {
+      debugPrint('[SheetScreen] _reloadSheetDataOnly error: $e');
+    }
+  }
+
+  /// Returns true when [row]/[col] is an inventory past-date column that is locked for editors.
+  bool _isInventoryHistoricalCell(int row, int col) {
+    if (!_isInventoryTrackerSheet()) return false;
+    if (col < 0 || col >= _columns.length) return false;
+    final colName = _columns[col];
+    if (!colName.startsWith('DATE:')) return false;
+    final parts = colName.split(':');
+    if (parts.length < 3) return false;
+    final cellDate = DateTime.tryParse(parts[1]); // 'YYYY-MM-DD'
+    if (cellDate == null) return false;
+    final now = DateTime.now();
+    final todayMidnight = DateTime(now.year, now.month, now.day);
+    return cellDate.isBefore(todayMidnight);
+  }
+
+  /// Presence avatar row shown above the spreadsheet grid.
+  Widget _buildPresencePanel() {
+    // Always show when a sheet is open; fall back to auth user if socket
+    // presence data hasn’t arrived yet (first open, solo user, etc.)
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final authUser = authProvider.user;
+
+    // Build the effective list: prefer socket-provided list (includes me)
+    // but always guarantee at least the current user is visible.
+    final List<CellPresence> effective = _presenceUsers.isNotEmpty
+        ? _presenceUsers
+        : (authUser != null
+            ? [
+                CellPresence(
+                  userId: authUser.id,
+                  username: authUser.username,
+                  role: authUser.role,
+                  departmentName: authUser.departmentName,
+                  currentCell: null,
+                )
+              ]
+            : []);
+
+    if (effective.isEmpty) return const SizedBox.shrink();
+
+    final authId = authUser?.id ?? -1;
+    final me = effective.where((u) => u.userId == authId).firstOrNull;
+    final others = effective.where((u) => u.userId != authId).toList();
+
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          const Icon(Icons.group_outlined, size: 14, color: Colors.grey),
+          const SizedBox(width: 6),
+          const Text('In this sheet:',
+              style: TextStyle(fontSize: 11, color: Colors.grey)),
+          const SizedBox(width: 10),
+
+          // ─── "You" avatar ───
+          if (me != null)
+            _PresenceAvatar(
+              presence: me,
+              isMe: true,
+              label: 'You',
+            ),
+          if (me != null && others.isNotEmpty) const SizedBox(width: 2),
+
+          // ─── Others (overlapping stack style) ───
+          ...others.take(9).map((u) => Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: _PresenceAvatar(presence: u, isMe: false),
+              )),
+
+          // ─── Overflow count ───
+          if (others.length > 9)
+            Container(
+              margin: const EdgeInsets.only(left: 2),
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              alignment: Alignment.center,
+              child: Text('+${others.length - 9}',
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[700])),
+            ),
+
+          const Spacer(),
+
+          // ─── Admin: pending edit-requests badge ───
+          if (_pendingEditRequestCount > 0)
+            InkWell(
+              onTap:
+                  widget.onNavigateToEditRequests ?? _showPendingEditRequests,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                    color: Colors.orange[700],
+                    borderRadius: BorderRadius.circular(12)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_open, size: 12, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text('$_pendingEditRequestCount pending',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Shows a dialog for editors to request unlock of a locked historical cell.
+  Future<void> _showEditRequestDialog(int row, int col) async {
+    final cellRef = _getCellReference(row, col);
+    final colName = _columns[col];
+    final currentVal = _data[row][colName] ?? '';
+    final proposedCtrl = TextEditingController(text: currentVal);
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.lock_outline, color: Colors.orange),
+          const SizedBox(width: 8),
+          Text('Edit Request — $cellRef'),
+        ]),
+        content: SingleChildScrollView(
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Column: $colName',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                Text(
+                    'Current value: ${currentVal.isEmpty ? "(empty)" : currentVal}',
+                    style: const TextStyle(fontSize: 12)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: proposedCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'Proposed new value',
+                      border: OutlineInputBorder()),
+                  autofocus: true,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'This is a historical (past-date) record. An admin must approve '
+                  'your request before you can edit it.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.send, size: 16),
+            label: const Text('Submit Request'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryBlue,
+                foregroundColor: Colors.white),
+          ),
+        ],
+      ),
+    );
+
+    if (submitted == true && mounted && _currentSheet != null) {
+      final proposedValue = proposedCtrl.text;
+      // Show immediate feedback so the user knows the request was sent.
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Sending edit request…'),
+        duration: Duration(seconds: 2),
+        backgroundColor: Colors.blueGrey,
+      ));
+      try {
+        // HTTP is the reliable path — saves to DB and notifies admins via
+        // socket even if the editor's own socket is momentarily reconnecting.
+        await ApiService.submitEditRequest(
+          sheetId: _currentSheet!.id,
+          rowNumber: row + 1,
+          columnName: colName,
+          cellReference: cellRef,
+          currentValue: currentVal,
+          proposedValue: proposedValue,
+        );
+        // Also emit via socket for instant delivery if already connected.
+        SocketService.instance.requestEdit(
+          sheetId: _currentSheet!.id,
+          rowNumber: row + 1,
+          columnName: colName,
+          cellRef: cellRef,
+          currentValue: currentVal,
+          proposedValue: proposedValue,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text('Edit request submitted. Waiting for admin approval.'),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 5),
+          ));
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Failed to submit request: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ));
+        }
+      }
+    }
+    proposedCtrl.dispose();
+  }
+
+  /// Admin: load and review pending edit requests for this sheet.
+  Future<void> _showPendingEditRequests() async {
+    if (_currentSheet == null) return;
+    try {
+      final requests = await ApiService.getEditRequests(_currentSheet!.id,
+          status: 'pending');
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Row(children: [
+            const Icon(Icons.lock_open, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Pending Edit Requests'),
+          ]),
+          content: SizedBox(
+            width: 480,
+            child: requests.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No pending requests.'))
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: requests.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final req = requests[i];
+                      return ListTile(
+                        title: Text(
+                            '${req['requester_username'] ?? 'Unknown'} — Cell ${req['cell_reference'] ?? req['column_name']}'),
+                        subtitle: Text('Column: ${req['column_name']}\n'
+                            'Proposed: ${req['proposed_value'] ?? '(not specified)'}\n'
+                            'Requested: ${req['requested_at'] ?? ''}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.check_circle,
+                                  color: Colors.green),
+                              tooltip: 'Approve',
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                // Use socket so backend immediately emits
+                                // `edit_request_resolved` + `grant_temp_access`
+                                // to the requesting editor in real-time.
+                                SocketService.instance.resolveEditRequest(
+                                  requestId: req['id'] as int,
+                                  approved: true,
+                                );
+                                if (mounted) {
+                                  setState(() {
+                                    if (_pendingEditRequestCount > 0) {
+                                      _pendingEditRequestCount--;
+                                    }
+                                  });
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('Request approved.'),
+                                        backgroundColor: Colors.green),
+                                  );
+                                }
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.cancel, color: Colors.red),
+                              tooltip: 'Reject',
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                SocketService.instance.resolveEditRequest(
+                                  requestId: req['id'] as int,
+                                  approved: false,
+                                  rejectReason: 'Rejected by admin',
+                                );
+                                if (mounted) {
+                                  setState(() {
+                                    if (_pendingEditRequestCount > 0) {
+                                      _pendingEditRequestCount--;
+                                    }
+                                  });
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('Request rejected.'),
+                                        backgroundColor: Colors.red),
+                                  );
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close')),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to load requests: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
   //  Inventory Tracker – Dynamic Date Column Feature
   // ═══════════════════════════════════════════════════════
 
@@ -5774,7 +6487,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     hintStyle:
                         const TextStyle(fontSize: 13, color: Color(0xFFAAAAAA)),
                     prefixIcon: const Icon(Icons.search,
-                        size: 18, color: Color(0xFF1E3A6E)),
+                        size: 18, color: AppColors.primaryBlue),
                     suffixIcon: _inventorySearchQuery.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.close,
@@ -5802,7 +6515,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: const BorderSide(
-                          color: Color(0xFF1E3A6E), width: 1.5),
+                          color: AppColors.primaryBlue, width: 1.5),
                     ),
                   ),
                   style: const TextStyle(fontSize: 13),
@@ -5829,8 +6542,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 }).length;
                 return Text(
                   '$hits result${hits == 1 ? '' : 's'}',
-                  style:
-                      const TextStyle(fontSize: 12, color: Color(0xFF1E3A6E)),
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.primaryBlue),
                 );
               }),
             ]),
@@ -5986,7 +6699,7 @@ class _SheetScreenState extends State<SheetScreen> {
     bool canDelete = false,
   }) {
     const Color darkNavy = Color(0xFF152D57);
-    const Color navy = Color(0xFF1E3A6E);
+    const Color navy = AppColors.primaryBlue;
     const Color midBlue = Color(0xFF2A4F8F);
     const Color subBlue = Color(0xFF3661A6);
     const Color todayCol = Color(0xFFC0392B);
@@ -6168,9 +6881,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // usedPercent = how much of Maintaining has been consumed
       // Red when ≥ 80% used (≤ 20% remaining)
       final usedPct = (maintaining - total) / maintaining;
-      return usedPct >= 0.80
-          ? const Color(0xFFC0392B)
-          : const Color(0xFF1E3A6E);
+      return usedPct >= 0.80 ? const Color(0xFFC0392B) : AppColors.primaryBlue;
     }
 
     Widget dataCell({
@@ -6203,6 +6914,24 @@ class _SheetScreenState extends State<SheetScreen> {
 
       final bool isDateInOut = colKey.startsWith('DATE:');
 
+      // Presence: is another user focused on this exact cell?
+      final String cellRef =
+          colIdx >= 0 ? _getCellReference(rowIndex, colIdx) : '';
+      final Set<int> cellOccupantIds = cellRef.isNotEmpty
+          ? (_cellPresenceUserIds[cellRef] ?? <int>{})
+              .where((id) =>
+                  id !=
+                  (Provider.of<AuthProvider>(context, listen: false).user?.id ??
+                      -1))
+              .toSet()
+          : <int>{};
+      final CellPresence? cellOccupant = cellOccupantIds.isNotEmpty
+          ? (_presenceInfoMap[cellOccupantIds.first] ??
+              _presenceUsers
+                  .where((u) => u.userId == cellOccupantIds.first)
+                  .firstOrNull)
+          : null;
+
       // Display rules:
       //  • No Maintaining set       → show empty for IN/OUT and Total Quantity
       //  • Maintaining set, no data → show '0' for date IN/OUT cells
@@ -6230,60 +6959,112 @@ class _SheetScreenState extends State<SheetScreen> {
         onDoubleTap: (editable && !autoCalc && colIdx >= 0)
             ? () => _startEditing(rowIndex, colIdx)
             : null,
-        child: Container(
-          width: width,
-          height: _cellHeight,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: bgColor(),
-            border: Border(
-              right: BorderSide(color: Colors.grey[300]!, width: 1),
-              bottom: BorderSide(color: Colors.grey[300]!, width: 1),
-            ),
-          ),
-          child: isEditing
-              ? TextField(
-                  controller: _editController,
-                  focusNode: _focusNode,
-                  autofocus: true,
-                  textAlign: TextAlign.center,
-                  keyboardType: isDateInOut
-                      ? const TextInputType.numberWithOptions(signed: false)
-                      : TextInputType.text,
-                  style: const TextStyle(fontSize: 12),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  onChanged: isDateInOut
-                      ? (val) {
-                          // Live-update _data and recalc Total Quantity while typing.
-                          final prev = _data[rowIndex][colKey] ?? '';
-                          setState(() {
-                            _data[rowIndex][colKey] = val;
-                          });
-                          _recalcInventoryTotals();
-                          if (val != prev) _markDirty();
-                        }
-                      : null,
-                  onSubmitted: (_) {
-                    _saveEdit();
-                    _recalcInventoryTotals();
-                    _saveSheet();
-                  },
-                )
-              : Text(
-                  displayValue,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: totalQtyFgColor ??
-                        (autoCalc ? const Color(0xFF1E3A6E) : Colors.black87),
-                    fontWeight: autoCalc ? FontWeight.w600 : FontWeight.normal,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
+        child: Stack(
+          children: [
+            Container(
+              width: width,
+              height: _cellHeight,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: bgColor(),
+                border: Border(
+                  right: BorderSide(color: Colors.grey[300]!, width: 1),
+                  bottom: BorderSide(color: Colors.grey[300]!, width: 1),
                 ),
+              ),
+              child: isEditing
+                  ? TextField(
+                      controller: _editController,
+                      focusNode: _focusNode,
+                      autofocus: true,
+                      textAlign: TextAlign.center,
+                      keyboardType: isDateInOut
+                          ? const TextInputType.numberWithOptions(signed: false)
+                          : TextInputType.text,
+                      style: const TextStyle(fontSize: 12),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      onChanged: isDateInOut
+                          ? (val) {
+                              // Live-update _data and recalc while typing
+                              final prev = _data[rowIndex][colKey] ?? '';
+                              setState(() {
+                                _data[rowIndex][colKey] = val;
+                              });
+                              _recalcInventoryTotals();
+                              if (val != prev) {
+                                _markDirty();
+                                // ── Immediately broadcast to other users ──
+                                if (_currentSheet != null) {
+                                  SocketService.instance.cellUpdate(
+                                    _currentSheet!.id,
+                                    rowIndex,
+                                    colKey,
+                                    val,
+                                  );
+                                }
+                              }
+                            }
+                          : null,
+                      onSubmitted: (_) {
+                        _saveEdit();
+                        _recalcInventoryTotals();
+                        _saveSheet();
+                      },
+                    )
+                  : Text(
+                      displayValue,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: totalQtyFgColor ??
+                            (autoCalc ? AppColors.primaryBlue : Colors.black87),
+                        fontWeight:
+                            autoCalc ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+            ),
+            // ── Presence overlay: show colored border + initials avatar ──
+            if (cellOccupant != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Tooltip(
+                    message: '${cellOccupant.username} is here',
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: cellOccupant.color.withOpacity(0.15),
+                        border:
+                            Border.all(color: cellOccupant.color, width: 1.5),
+                      ),
+                      child: Align(
+                        alignment: Alignment.topRight,
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 1, right: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: cellOccupant.color,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            cellOccupant.initials,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     }
@@ -6324,7 +7105,10 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Date IN/OUT pairs
     for (final date in visibleDates) {
-      final canEditDate = !isViewer && (isAdminOrEditor || date == todayStr);
+      // Any non-viewer can double-tap a date cell.
+      // _startEditing will route them: historical → edit-request dialog,
+      // today → direct edit (unless locked).  Admins bypass the dialog.
+      final canEditDate = !isViewer;
       cells.add(dataCell(
         colKey: 'DATE:$date:IN',
         width: _invSubColW,
@@ -6506,6 +7290,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Get cell row/col from a position within the DATA CELLS area only
   /// (excludes column header and row number column).
+  // ignore: unused_element
   Map<String, int>? _getCellFromDataAreaPosition(Offset localPosition) {
     final double x = localPosition.dx / _zoomLevel;
     final double y = localPosition.dy / _zoomLevel;
@@ -6590,7 +7375,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         right: BorderSide(color: Colors.grey[200]!, width: 1),
                         top: isActive
                             ? const BorderSide(
-                                color: Color(0xFF1A73E8), width: 2)
+                                color: AppColors.primaryBlue, width: 2)
                             : BorderSide.none,
                       ),
                     ),
@@ -6600,9 +7385,8 @@ class _SheetScreenState extends State<SheetScreen> {
                         fontSize: 12,
                         fontWeight:
                             isActive ? FontWeight.w600 : FontWeight.w400,
-                        color: isActive
-                            ? const Color(0xFF1A73E8)
-                            : Colors.grey[600],
+                        color:
+                            isActive ? AppColors.primaryBlue : Colors.grey[600],
                       ),
                     ),
                   ),
@@ -6706,16 +7490,25 @@ class _SheetScreenState extends State<SheetScreen> {
                 if (_selectedRow != null &&
                     _selectedCol != null &&
                     !isReadOnly) {
+                  final int row = _selectedRow!;
                   final colKey = _columns[_selectedCol!];
-                  final oldVal = _data[_selectedRow!][colKey] ?? '';
+                  final oldVal = _data[row][colKey] ?? '';
                   setState(() {
-                    _data[_selectedRow!][colKey] = value;
+                    _data[row][colKey] = value;
                     _editingRow = null;
                     _editingCol = null;
                   });
                   if (value != oldVal) {
                     _markDirty();
                     _saveSheet();
+                    if (_currentSheet != null) {
+                      SocketService.instance.cellUpdate(
+                        _currentSheet!.id,
+                        row,
+                        colKey,
+                        value,
+                      );
+                    }
                   }
                   _spreadsheetFocusNode.requestFocus();
                 }
@@ -6729,6 +7522,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // =============== Excel-like Spreadsheet ===============
 
+  // ignore: unused_element
   Widget _buildSpreadsheetGrid() {
     // Calculate total width
     double totalWidth = _rowNumWidth;
@@ -6859,7 +7653,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           right: BorderSide(color: Colors.grey[300]!, width: 1),
                         ),
                         color: isColSelected
-                            ? const Color(0xFFD2E3FC)
+                            ? AppColors.lightBlue
                             : const Color(0xFFF8F8F8),
                       ),
                       child: Text(
@@ -6868,7 +7662,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
                           color: isColSelected
-                              ? const Color(0xFF1A73E8)
+                              ? AppColors.primaryBlue
                               : Colors.grey[700],
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -6948,9 +7742,8 @@ class _SheetScreenState extends State<SheetScreen> {
             right: BorderSide(color: Colors.grey[300]!, width: 1),
             bottom: BorderSide(color: Colors.grey[300]!, width: 1),
           ),
-          color: isRowInSelection
-              ? const Color(0xFFD2E3FC)
-              : const Color(0xFFF8F8F8),
+          color:
+              isRowInSelection ? AppColors.lightBlue : const Color(0xFFF8F8F8),
         ),
         child: Center(
           child: Text(
@@ -6959,7 +7752,7 @@ class _SheetScreenState extends State<SheetScreen> {
               fontSize: 11,
               fontWeight: isRowInSelection ? FontWeight.w600 : FontWeight.w400,
               color: isRowInSelection
-                  ? const Color(0xFF1A73E8)
+                  ? AppColors.primaryBlue
                   : const Color(0xFF9AA0A6),
             ),
             overflow: TextOverflow.ellipsis,
@@ -6972,6 +7765,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   Widget _buildDataRow(int rowIndex, {bool includeRowNum = true}) {
     final bounds = _getSelectionBounds();
+    // ignore: unused_local_variable
     final isRowInSelection = _selectedRow != null &&
         rowIndex >= bounds['minRow']! &&
         rowIndex <= bounds['maxRow']!;
@@ -7182,7 +7976,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         child: Container(
                           decoration: BoxDecoration(
                             border: Border.all(
-                              color: const Color(0xFF1A73E8),
+                              color: AppColors.primaryBlue,
                               width: 2,
                             ),
                           ),
@@ -7198,24 +7992,90 @@ class _SheetScreenState extends State<SheetScreen> {
                             border: Border(
                               top: _isSelectionEdge(rowIndex, colIndex, 'top')
                                   ? const BorderSide(
-                                      color: Color(0xFF1A73E8), width: 1.5)
+                                      color: AppColors.primaryBlue, width: 1.5)
                                   : BorderSide.none,
                               bottom:
                                   _isSelectionEdge(rowIndex, colIndex, 'bottom')
                                       ? const BorderSide(
-                                          color: Color(0xFF1A73E8), width: 1.5)
+                                          color: AppColors.primaryBlue,
+                                          width: 1.5)
                                       : BorderSide.none,
                               left: _isSelectionEdge(rowIndex, colIndex, 'left')
                                   ? const BorderSide(
-                                      color: Color(0xFF1A73E8), width: 1.5)
+                                      color: AppColors.primaryBlue, width: 1.5)
                                   : BorderSide.none,
                               right:
                                   _isSelectionEdge(rowIndex, colIndex, 'right')
                                       ? const BorderSide(
-                                          color: Color(0xFF1A73E8), width: 1.5)
+                                          color: AppColors.primaryBlue,
+                                          width: 1.5)
                                       : BorderSide.none,
                             ),
                           ),
+                        ),
+                      ),
+                    ),
+                  // ── Presence indicator: full highlight when another user is on this cell ──
+                  Builder(builder: (_) {
+                    final cellRef = _getCellReference(rowIndex, colIndex);
+                    final userIds = _cellPresenceUserIds[cellRef];
+                    if (userIds == null || userIds.isEmpty)
+                      return const SizedBox.shrink();
+                    final firstId = userIds.first;
+                    final presenceUser = _presenceInfoMap[firstId] ??
+                        _presenceUsers
+                            .where((u) => u.userId == firstId)
+                            .firstOrNull;
+                    final color = presenceUser?.color ?? Colors.green;
+                    final initials = presenceUser?.initials ?? '?';
+                    final name = presenceUser?.username ?? 'User';
+                    return Positioned.fill(
+                      child: IgnorePointer(
+                        child: Tooltip(
+                          message: '$name is editing',
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.15),
+                              border: Border.all(color: color, width: 1.5),
+                            ),
+                            child: Align(
+                              alignment: Alignment.topRight,
+                              child: Container(
+                                margin: const EdgeInsets.only(top: 1, right: 2),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 3, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: color,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  initials,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                  // ── Lock icon overlay for historical inventory cells ──
+                  if (_isInventoryHistoricalCell(rowIndex, colIndex) &&
+                      !_grantedCells
+                          .contains(_getCellReference(rowIndex, colIndex)))
+                    Positioned(
+                      top: 2,
+                      right: 2,
+                      child: IgnorePointer(
+                        child: Tooltip(
+                          message:
+                              'Historical record — request admin unlock to edit',
+                          child: Icon(Icons.lock,
+                              size: 10, color: Colors.grey[500]),
                         ),
                       ),
                     ),
@@ -7405,7 +8265,7 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                           style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF1E3A6E)),
+                              color: AppColors.primaryBlue),
                         ),
                         Text(
                           'Start your sheet with a pre-defined structure. You can customise it afterwards.',
@@ -7592,6 +8452,273 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  _PresenceAvatar — bubble shown in the presence panel for each
+//  collaborator who currently has this sheet open.
+//
+//  • Coloured circle with initials
+//  • Green "active / online" dot at bottom-right
+//  • "You" label badge on the current user's avatar
+//  • Hover → rich tooltip: name, role, department, current cell
+// ═══════════════════════════════════════════════════════════════
+class _PresenceAvatar extends StatefulWidget {
+  final CellPresence presence;
+  final bool isMe;
+  final String? label; // override display label (e.g. "You")
+
+  const _PresenceAvatar({
+    required this.presence,
+    required this.isMe,
+    this.label,
+  });
+
+  @override
+  State<_PresenceAvatar> createState() => _PresenceAvatarState();
+}
+
+class _PresenceAvatarState extends State<_PresenceAvatar> {
+  bool _hovered = false;
+  OverlayEntry? _overlay;
+  final _key = GlobalKey();
+
+  CellPresence get p => widget.presence;
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlay?.remove();
+    _overlay = null;
+  }
+
+  void _showOverlay() {
+    _removeOverlay();
+    final box = _key.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final offset = box.localToGlobal(Offset.zero);
+    final size = box.size;
+
+    _overlay = OverlayEntry(
+      builder: (_) => Positioned(
+        left: offset.dx - 8,
+        top: offset.dy + size.height + 6,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 160, maxWidth: 220),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E2533),
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── Name row ──
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF22C55E), // green dot = active
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        widget.isMe ? '${p.username} (You)' : p.username,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // ── Role ──
+                _TooltipRow(
+                  icon: Icons.shield_outlined,
+                  text: p.role.isEmpty ? 'Unknown role' : p.role,
+                ),
+                // ── Department ──
+                if (p.departmentName != null)
+                  _TooltipRow(
+                    icon: Icons.business,
+                    text: p.departmentName!,
+                  ),
+                // ── Currently editing cell ──
+                if (p.currentCell != null) ...[
+                  const SizedBox(height: 4),
+                  _TooltipRow(
+                    icon: Icons.edit_outlined,
+                    text: 'Editing cell ${p.currentCell}',
+                    highlight: true,
+                  ),
+                ] else ...[
+                  const SizedBox(height: 4),
+                  _TooltipRow(
+                    icon: Icons.visibility_outlined,
+                    text: 'Viewing',
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(_overlay!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      key: _key,
+      onEnter: (_) {
+        setState(() => _hovered = true);
+        _showOverlay();
+      },
+      onExit: (_) {
+        setState(() => _hovered = false);
+        _removeOverlay();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: _hovered ? Colors.white : Colors.white,
+            width: 2.5,
+          ),
+          boxShadow: _hovered
+              ? [
+                  BoxShadow(
+                    color: p.color.withOpacity(0.55),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  )
+                ]
+              : [],
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // ── Main circle ──
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: p.color,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                p.initials,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0,
+                ),
+              ),
+            ),
+            // ── Green active dot (bottom-right) ──
+            Positioned(
+              bottom: 0,
+              right: 0,
+              child: Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF22C55E),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+              ),
+            ),
+            // ── "You" label (top-right) for current user ──
+            if (widget.isMe)
+              Positioned(
+                top: -6,
+                right: -6,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBlue,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('You',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 7,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Single row inside the hover tooltip card.
+class _TooltipRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final bool highlight;
+  const _TooltipRow(
+      {required this.icon, required this.text, this.highlight = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 11,
+              color:
+                  highlight ? const Color(0xFF86EFAC) : Colors.grey.shade400),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 11,
+                color:
+                    highlight ? const Color(0xFF86EFAC) : Colors.grey.shade300,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

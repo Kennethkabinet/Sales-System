@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../config/constants.dart';
 import 'login_screen.dart';
 import 'sheet_screen.dart';
 
@@ -16,12 +17,12 @@ class ViewerDashboard extends StatefulWidget {
 class _ViewerDashboardState extends State<ViewerDashboard> {
   bool _showSettings = false;
 
-  static const Color _kAccent = Color(0xFF1A73E8);
-  static const Color _kNavy = Color(0xFF202124);
-  static const Color _kGray = Color(0xFF5F6368);
-  static const Color _kBg = Color(0xFFFFFFFF);
-  static const Color _kBorder = Color(0xFFE8EAED);
-  static const Color _kAvatBg = Color(0xFFE8F0FE);
+  static const Color _kAccent = AppColors.primaryBlue;
+  static const Color _kNavy = AppColors.darkText;
+  static const Color _kGray = AppColors.grayText;
+  static const Color _kBg = AppColors.white;
+  static const Color _kBorder = AppColors.border;
+  static const Color _kAvatBg = AppColors.lightBlue;
 
   @override
   Widget build(BuildContext context) {
@@ -44,12 +45,21 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
             child: Row(
               children: [
                 // App Title
-                const Icon(Icons.visibility, size: 22, color: _kAccent),
-                const SizedBox(width: 10),
+                SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: Image.asset(
+                    'assets/images/logo.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.diamond, size: 22, color: _kAccent),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 const Text(
-                  'Sheet Viewer',
+                  'Synergy Graphics',
                   style: TextStyle(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: _kNavy,
                   ),

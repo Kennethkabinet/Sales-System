@@ -21,8 +21,12 @@ const io = new Server(server, {
   }
 });
 
-// Initialize collaboration handler
-new CollaborationHandler(io);
+// Initialize collaboration handler and store it so HTTP routes can emit
+const collab = new CollaborationHandler(io);
+app.set('collab', collab);
+
+// Make io accessible to routes (used to broadcast sheet_saved events)
+app.set('io', io);
 
 // Middleware
 app.use(cors());

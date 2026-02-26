@@ -1,6 +1,33 @@
+import 'package:flutter/material.dart';
+
+/// App brand colours – Blue & Red theme
+///
+/// Primary Blue  : 0xFF1565C0  (Material Blue 800)
+/// Primary Red   : 0xFFD32F2F  (Material Red 700)
+class AppColors {
+  // ── Primary brand colours ──────────────────────────────────────
+  static const Color primaryBlue = Color(0xFF1565C0); // main blue
+  static const Color primaryRed = Color(0xFFD32F2F); // main red
+
+  // ── Lighter tints (backgrounds, chips) ────────────────────────
+  static const Color lightBlue = Color(0xFFE3F2FD); // blue-tinted bg
+  static const Color lightRed = Color(0xFFFFEBEE); // red-tinted bg
+
+  // ── Header gradient ────────────────────────────────────────────
+  static const Color gradientStart = Color(0xFF1565C0); // blue
+  static const Color gradientEnd = Color(0xFFD32F2F); // red
+
+  // ── Neutrals ──────────────────────────────────────────────────
+  static const Color white = Color(0xFFFFFFFF);
+  static const Color darkText = Color(0xFF202124);
+  static const Color grayText = Color(0xFF5F6368);
+  static const Color border = Color(0xFFE8EAED);
+  static const Color bgLight = Color(0xFFF8F9FA);
+}
+
 /// App configuration constants
 class AppConfig {
-  static const String appName = 'Sales & Inventory System';
+  static const String appName = 'Synergy Graphics';
   static const String appVersion = '1.0.0';
 
   // API Configuration

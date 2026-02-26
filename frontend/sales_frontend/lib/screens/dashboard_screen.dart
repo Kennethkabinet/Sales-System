@@ -3,17 +3,19 @@ import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
+import '../config/constants.dart';
+import '../services/socket_service.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
+import 'edit_requests_screen.dart';
 import 'sheet_screen.dart';
 import 'user_management_screen.dart';
 import 'settings_screen.dart';
 
-// ─── Theme colors (clean modern palette) ───
-const Color _kSidebarBg = Color(0xFF1A73E8); // accent blue (active states)
-const Color _kContentBg = Color(0xFFFFFFFF); // white base
-const Color _kNavy = Color(0xFF202124); // near-black text
+// ─── Theme colors (Blue & Red brand palette) ───
+const Color _kSidebarBg = AppColors.primaryBlue; // primary blue
+const Color _kContentBg = AppColors.white; // white base
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,6 +27,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedIndex = 0;
   bool _sidebarExpanded = true;
+  int _pendingEditRequestCount = 0;
 
   @override
   void initState() {
@@ -32,6 +35,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<DataProvider>().loadDashboard();
     });
+
+    // Persistent admin listener — active regardless of which tab is selected.
+    // Works even when the Sheets tab (SheetScreen) is unmounted.
+    SocketService.instance.onAdminEditNotification = (data) {
+      if (!mounted) return;
+      setState(() => _pendingEditRequestCount++);
+      final requester = data['requested_by'] as String? ?? 'Someone';
+      final cellRef = data['cell_ref'] as String? ?? '';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$requester requests edit access for cell $cellRef'),
+        backgroundColor: Colors.orange[800],
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Review',
+          textColor: Colors.white,
+          onPressed: () =>
+              setState(() => _selectedIndex = _editRequestsTabIndex),
+        ),
+      ));
+    };
+  }
+
+  @override
+  void dispose() {
+    // Remove the persistent callback so it doesn't outlive this widget.
+    SocketService.instance.onAdminEditNotification = null;
+    super.dispose();
+  }
+
+  /// Returns the nav index of the Edit Requests page for the current user.
+  int get _editRequestsTabIndex {
+    // Pages order: Dashboard(0), Sheets(1), Files(2), Audit(3), Users(4),
+    // EditRequests(5), Settings(6)  — Files is always in the list for admin.
+    return 5;
   }
 
   @override
@@ -43,10 +80,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Build pages list
     final pages = <Widget>[
       const _DashboardContent(),
-      const SheetScreen(),
+      SheetScreen(
+        onNavigateToEditRequests: () {
+          setState(() {
+            _selectedIndex = _editRequestsTabIndex;
+            _pendingEditRequestCount = 0;
+          });
+        },
+      ),
       if (!isViewer) const FileListScreen(),
       const AuditHistoryScreen(),
       if (isAdmin) const UserManagementScreen(),
+      if (isAdmin) const EditRequestsScreen(),
       if (isAdmin) const SettingsScreen(),
     ];
 
@@ -63,6 +108,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     nextIdx++;
     if (isAdmin) {
       navItems.add(_NavItem(Icons.people_alt_outlined, 'Users', nextIdx));
+      nextIdx++;
+    }
+    if (isAdmin) {
+      navItems
+          .add(_NavItem(Icons.lock_open_outlined, 'Edit Requests', nextIdx));
       nextIdx++;
     }
     if (isAdmin) {
@@ -86,21 +136,67 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             child: Column(
               children: [
-                // Hamburger
+                // Header: logo + brand name + hamburger
                 Container(
                   height: 56,
-                  alignment: _sidebarExpanded
-                      ? Alignment.centerLeft
-                      : Alignment.center,
                   padding: EdgeInsets.only(
-                    left: _sidebarExpanded ? 16 : 0,
-                    top: 8,
+                    left: _sidebarExpanded ? 12 : 0,
+                    right: _sidebarExpanded ? 4 : 0,
+                    top: 4,
+                    bottom: 4,
                   ),
-                  child: IconButton(
-                    icon:
-                        Icon(Icons.menu, color: Colors.grey.shade600, size: 24),
-                    onPressed: () =>
-                        setState(() => _sidebarExpanded = !_sidebarExpanded),
+                  child: Row(
+                    mainAxisAlignment: _sidebarExpanded
+                        ? MainAxisAlignment.start
+                        : MainAxisAlignment.center,
+                    children: [
+                      // Logo
+                      SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.diamond,
+                              size: 22,
+                              color: AppColors.primaryRed,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (_sidebarExpanded) ...[
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Synergy Graphics',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primaryBlue,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.menu,
+                              color: Colors.grey.shade600, size: 22),
+                          onPressed: () => setState(
+                              () => _sidebarExpanded = !_sidebarExpanded),
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 32, minHeight: 32),
+                        ),
+                      ] else
+                        GestureDetector(
+                          onTap: () => setState(
+                              () => _sidebarExpanded = !_sidebarExpanded),
+                          behavior: HitTestBehavior.opaque,
+                          child: const SizedBox(width: 32, height: 32),
+                        ),
+                    ],
                   ),
                 ),
 
@@ -202,7 +298,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           CircleAvatar(
             radius: 20,
-            backgroundColor: const Color(0xFFE8F0FE),
+            backgroundColor: AppColors.lightBlue,
             child: Icon(Icons.person, color: _kSidebarBg, size: 22),
           ),
           const SizedBox(width: 10),
@@ -245,11 +341,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Material(
         color: selected ? Colors.white : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.hardEdge,
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: () {
             if (item.index >= 0) {
-              setState(() => _selectedIndex = item.index);
+              setState(() {
+                _selectedIndex = item.index;
+                // Clear badge when admin opens the Edit Requests page
+                if (item.label == 'Edit Requests') {
+                  _pendingEditRequestCount = 0;
+                }
+              });
             }
           },
           child: Padding(
@@ -269,9 +372,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 if (_sidebarExpanded) ...[
                   const SizedBox(width: 12),
-                  Expanded(
+                  Flexible(
                     child: Text(
                       item.label,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: selected ? _kSidebarBg : const Color(0xFF5F6368),
                         fontWeight:
@@ -280,6 +384,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
+                  // Badge for Edit Requests
+                  if (item.label == 'Edit Requests' &&
+                      _pendingEditRequestCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.orange[700],
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$_pendingEditRequestCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                 ],
               ],
             ),
@@ -309,7 +432,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ElevatedButton(
                   onPressed: () => Navigator.pop(ctx, true),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _kSidebarBg,
+                    backgroundColor: AppColors.primaryRed,
                     foregroundColor: Colors.white,
                   ),
                   child: const Text('Logout'),
@@ -396,7 +519,7 @@ class _DashboardContent extends StatelessWidget {
                           title: 'Total Files',
                           value: stats?.totalFiles.toString() ?? '0',
                           icon: Icons.folder_outlined,
-                          color: _kNavy,
+                          color: AppColors.primaryBlue,
                           width: cardWidth,
                         ),
                         const SizedBox(width: 16),
@@ -404,7 +527,7 @@ class _DashboardContent extends StatelessWidget {
                           title: 'Total Records',
                           value: stats?.totalRecords.toString() ?? '0',
                           icon: Icons.menu,
-                          color: _kNavy,
+                          color: AppColors.primaryRed,
                           width: cardWidth,
                         ),
                         const SizedBox(width: 16),
@@ -412,7 +535,7 @@ class _DashboardContent extends StatelessWidget {
                           title: 'Active Users',
                           value: stats?.activeUsers.toString() ?? '0',
                           icon: Icons.people_alt_outlined,
-                          color: _kNavy,
+                          color: AppColors.primaryBlue,
                           width: cardWidth,
                         ),
                         const SizedBox(width: 16),
@@ -420,7 +543,7 @@ class _DashboardContent extends StatelessWidget {
                           title: 'Recent Changes',
                           value: stats?.recentChanges.toString() ?? '0',
                           icon: Icons.edit_outlined,
-                          color: _kNavy,
+                          color: AppColors.primaryRed,
                           width: cardWidth,
                         ),
                       ],
@@ -646,11 +769,11 @@ class _FileTypesChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = [
-      Colors.blue,
-      Colors.green,
-      Colors.orange,
-      Colors.purple,
-      Colors.red
+      AppColors.primaryBlue,
+      AppColors.primaryRed,
+      const Color(0xFF42A5F5), // light blue
+      const Color(0xFFEF5350), // light red
+      const Color(0xFF1E88E5), // medium blue
     ];
 
     return PieChart(
@@ -727,13 +850,13 @@ class _ActionChip extends StatelessWidget {
     Color color;
     switch (action.toLowerCase()) {
       case 'create':
-        color = Colors.green;
+        color = AppColors.primaryBlue;
         break;
       case 'update':
-        color = Colors.blue;
+        color = const Color(0xFF1976D2); // blue 700
         break;
       case 'delete':
-        color = Colors.red;
+        color = AppColors.primaryRed;
         break;
       default:
         color = Colors.grey;

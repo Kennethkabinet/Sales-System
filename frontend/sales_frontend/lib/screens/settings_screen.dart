@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../config/constants.dart';
 
-// ── Colour constants (clean modern palette) ──
-const Color _kAccent = Color(0xFF1A73E8);
-const Color _kNavyS = Color(0xFF202124);
-const Color _kGray = Color(0xFF5F6368);
-const Color _kBorder = Color(0xFFE8EAED);
-const Color _kBg = Color(0xFFF8F9FA);
+// ── Colour constants (Blue & Red brand palette) ──
+const Color _kAccent = AppColors.primaryBlue;
+const Color _kNavyS = AppColors.darkText;
+const Color _kGray = AppColors.grayText;
+const Color _kBorder = AppColors.border;
+const Color _kBg = AppColors.bgLight;
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -132,7 +133,7 @@ class _SectionTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: Material(
-        color: selected ? const Color(0xFFE8F0FE) : Colors.transparent,
+        color: selected ? AppColors.lightBlue : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: onTap,
@@ -245,7 +246,7 @@ class _AccountSectionState extends State<_AccountSection> {
             children: [
               CircleAvatar(
                 radius: 30,
-                backgroundColor: const Color(0xFFE8F0FE),
+                backgroundColor: AppColors.lightBlue,
                 child: Icon(Icons.person, color: _kAccent, size: 32),
               ),
               const SizedBox(width: 16),
@@ -399,7 +400,8 @@ class _SecuritySectionState extends State<_SecuritySection> {
                 const Expanded(
                   child: Text(
                     'Use a strong password of at least 8 characters with a mix of letters and numbers.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF1A73E8)),
+                    style:
+                        TextStyle(fontSize: 12, color: AppColors.primaryBlue),
                   ),
                 ),
               ],
@@ -861,10 +863,10 @@ class _RoleBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (role.toLowerCase()) {
-      'admin' => const Color(0xFF1A73E8),
-      'editor' => const Color(0xFF34A853),
+      'admin' => AppColors.primaryBlue,
+      'editor' => AppColors.primaryRed,
       'manager' => const Color(0xFF9334E6),
-      _ => const Color(0xFF5F6368),
+      _ => AppColors.grayText,
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

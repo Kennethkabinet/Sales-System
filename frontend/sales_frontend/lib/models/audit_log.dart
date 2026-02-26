@@ -17,6 +17,12 @@ class AuditLog {
   final Map<String, dynamic>? metadata;
   final DateTime? timestamp;
 
+  // V2 collaboration fields
+  final int? sheetId;
+  final String? cellReference;
+  final String? role;
+  final String? departmentName;
+
   // Alias for username
   String? get userName => username;
 
@@ -37,6 +43,10 @@ class AuditLog {
     this.ipAddress,
     this.metadata,
     this.timestamp,
+    this.sheetId,
+    this.cellReference,
+    this.role,
+    this.departmentName,
   });
 
   factory AuditLog.fromJson(Map<String, dynamic> json) {
@@ -56,9 +66,15 @@ class AuditLog {
       description: json['description'],
       ipAddress: json['ip_address'],
       metadata: json['metadata'],
-      timestamp: json['timestamp'] != null 
-          ? DateTime.tryParse(json['timestamp']) 
-          : (json['created_at'] != null ? DateTime.tryParse(json['created_at']) : null),
+      timestamp: json['timestamp'] != null
+          ? DateTime.tryParse(json['timestamp'])
+          : (json['created_at'] != null
+              ? DateTime.tryParse(json['created_at'])
+              : null),
+      sheetId: json['sheet_id'],
+      cellReference: json['cell_reference'],
+      role: json['role'],
+      departmentName: json['department_name'],
     );
   }
 
@@ -121,11 +137,13 @@ class AuditSummary {
       thisWeek: summary['this_week'] ?? 0,
       byAction: Map<String, int>.from(summary['by_action'] ?? {}),
       byUser: (summary['by_user'] as List?)
-          ?.map((e) => UserActivityCount.fromJson(e))
-          .toList() ?? [],
+              ?.map((e) => UserActivityCount.fromJson(e))
+              .toList() ??
+          [],
       recentActivity: (summary['recent_activity'] as List?)
-          ?.map((e) => RecentActivity.fromJson(e))
-          .toList() ?? [],
+              ?.map((e) => RecentActivity.fromJson(e))
+              .toList() ??
+          [],
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../config/constants.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/data_provider.dart';
@@ -372,9 +373,9 @@ class _FileListScreenState extends State<FileListScreen> {
     switch (type?.toLowerCase()) {
       case 'xlsx':
       case 'xls':
-        return Colors.green;
+        return AppColors.primaryRed;
       case 'csv':
-        return Colors.blue;
+        return AppColors.primaryBlue;
       default:
         return Colors.grey;
     }
@@ -466,7 +467,7 @@ class _FileListScreenState extends State<FileListScreen> {
               final file = entry.value;
               final isSelected = _selectedFileIds.contains(file.id);
               final rowBg = isSelected
-                  ? Colors.blue.shade50
+                  ? AppColors.lightBlue
                   : idx.isEven
                       ? Colors.white
                       : const Color(0xFFF9FBF9);
@@ -545,7 +546,7 @@ class _FileListScreenState extends State<FileListScreen> {
                               Tooltip(
                                 message: 'Auto-saved from Sheet',
                                 child: Icon(Icons.sync,
-                                    size: 13, color: Colors.blue[300]),
+                                    size: 13, color: AppColors.primaryBlue),
                               ),
                             ],
                           ],
@@ -862,12 +863,15 @@ class _FileListScreenState extends State<FileListScreen> {
             children: [
               Icon(Icons.home,
                   size: 18,
-                  color: crumbs.isEmpty ? Colors.grey[800] : Colors.blue),
+                  color: crumbs.isEmpty
+                      ? Colors.grey[800]
+                      : AppColors.primaryBlue),
               const SizedBox(width: 4),
               Text(
                 'My Files',
                 style: TextStyle(
-                  color: crumbs.isEmpty ? Colors.grey[800] : Colors.blue,
+                  color:
+                      crumbs.isEmpty ? Colors.grey[800] : AppColors.primaryBlue,
                   fontWeight:
                       crumbs.isEmpty ? FontWeight.bold : FontWeight.normal,
                 ),
@@ -887,7 +891,9 @@ class _FileListScreenState extends State<FileListScreen> {
             child: Text(
               crumbs[i]['name'] as String,
               style: TextStyle(
-                color: i == crumbs.length - 1 ? Colors.grey[800] : Colors.blue,
+                color: i == crumbs.length - 1
+                    ? Colors.grey[800]
+                    : AppColors.primaryBlue,
                 fontWeight: i == crumbs.length - 1
                     ? FontWeight.bold
                     : FontWeight.normal,
@@ -1003,6 +1009,7 @@ class _FolderCard extends StatelessWidget {
 
 // ============== File Card ==============
 
+// ignore: unused_element
 class _FileCard extends StatelessWidget {
   final FileModel file;
   final VoidCallback onTap;

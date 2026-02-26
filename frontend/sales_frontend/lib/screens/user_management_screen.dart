@@ -3,10 +3,11 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../models/user.dart';
+import '../config/constants.dart';
 
-// ── Colour constants (clean modern palette) ──
-const Color _kContentBg = Color(0xFFFFFFFF); // white base
-const Color _kNavy = Color(0xFF202124); // near-black text
+// ── Colour constants (Blue & Red brand palette) ──
+const Color _kContentBg = AppColors.white;
+const Color _kNavy = AppColors.darkText;
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -97,12 +98,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.blue[50],
+                              color: AppColors.lightBlue,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Icon(
                               Icons.person_add,
-                              color: Colors.blue[700],
+                              color: AppColors.primaryBlue,
                               size: 24,
                             ),
                           ),
@@ -512,14 +513,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 child: Row(
                                   children: [
                                     Icon(Icons.add,
-                                        size: 16, color: Colors.blue[700]),
+                                        size: 16, color: AppColors.primaryBlue),
                                     const SizedBox(width: 4),
                                     Text(
                                       'New',
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w500,
-                                        color: Colors.blue[700],
+                                        color: AppColors.primaryBlue,
                                       ),
                                     ),
                                   ],
@@ -544,14 +545,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 child: Row(
                                   children: [
                                     Icon(Icons.settings,
-                                        size: 16, color: Colors.blue[700]),
+                                        size: 16, color: AppColors.primaryBlue),
                                     const SizedBox(width: 4),
                                     Text(
                                       'Manage',
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w500,
-                                        color: Colors.blue[700],
+                                        color: AppColors.primaryBlue,
                                       ),
                                     ),
                                   ],
@@ -674,7 +675,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 }
                               },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue[600],
+                                backgroundColor: AppColors.primaryBlue,
                                 foregroundColor: Colors.white,
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 16),
@@ -717,9 +718,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? Colors.blue[600] : Colors.white,
+            color: isSelected ? AppColors.primaryBlue : Colors.white,
             border: Border.all(
-              color: isSelected ? Colors.blue[600]! : Colors.grey[300]!,
+              color: isSelected ? AppColors.primaryBlue : Colors.grey[300]!,
               width: isSelected ? 2 : 1,
             ),
             borderRadius: BorderRadius.circular(8),
@@ -756,10 +757,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.blue[50],
+                color: AppColors.lightBlue,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(Icons.business, color: Colors.blue[700], size: 20),
+              child:
+                  Icon(Icons.business, color: AppColors.primaryBlue, size: 20),
             ),
             const SizedBox(width: 12),
             const Text(
@@ -877,7 +879,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue[600],
+              backgroundColor: AppColors.primaryBlue,
               foregroundColor: Colors.white,
             ),
             child: const Text('Save Department'),
@@ -906,7 +908,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    color: Colors.blue[50],
+                    color: AppColors.lightBlue,
                     borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(16),
                       topRight: Radius.circular(16),
@@ -917,12 +919,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.blue[100],
+                          color: AppColors.lightBlue,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
                           Icons.business,
-                          color: Colors.blue[700],
+                          color: AppColors.primaryBlue,
                           size: 24,
                         ),
                       ),
@@ -1128,7 +1130,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
-                          color: Colors.blue[700],
+                          color: AppColors.primaryBlue,
                         ),
                       ),
                     ),
@@ -2223,11 +2225,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Color _getRoleColor(String role) {
     switch (role.toLowerCase()) {
       case 'admin':
-        return Colors.purple;
+        return AppColors.primaryBlue;
       case 'editor':
-        return Colors.orange;
+        return AppColors.primaryRed;
       case 'viewer':
-        return Colors.blue;
+        return const Color(0xFF42A5F5); // lighter blue for viewer
       default:
         return Colors.grey;
     }

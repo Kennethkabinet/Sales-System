@@ -5,11 +5,12 @@ import 'package:provider/provider.dart';
 import '../models/inventory.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../config/constants.dart';
 
 // ─── Theme colours ─────────────────────────────────────────────────────────────
-const Color _kNavy = Color(0xFF1E3A6E);
-const Color _kAccent = Color(0xFFCD5C5C);
-const Color _kContentBg = Color(0xFFFDF5F0);
+const Color _kNavy = AppColors.primaryBlue; // primary blue for headings
+const Color _kAccent = AppColors.primaryRed; // primary red for accents
+const Color _kContentBg = AppColors.lightRed; // light red background
 const Color _kWarning = Color(0xFFFFF3CD);
 const Color _kWarningText = Color(0xFF856404);
 const Color _kCritical = Color(0xFFFFE0E0);

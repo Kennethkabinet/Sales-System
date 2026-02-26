@@ -79,13 +79,38 @@ class ApiService {
   }
 
   static Map<String, dynamic> _handleResponse(http.Response response) {
-    final body = jsonDecode(response.body);
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return body;
-    } else {
+    final rawBody = response.body.trim();
+    if (rawBody.isEmpty) {
       throw ApiException(
-        code: body['error']?['code'] ?? 'ERROR',
-        message: body['error']?['message'] ?? 'Request failed',
+        code: 'EMPTY_RESPONSE',
+        message:
+            'Server returned an empty response (status ${response.statusCode}). '
+            'The backend may be down or restarting.',
+        statusCode: response.statusCode,
+      );
+    }
+    late final dynamic body;
+    try {
+      body = jsonDecode(rawBody);
+    } catch (_) {
+      throw ApiException(
+        code: 'INVALID_JSON',
+        message:
+            'Server returned invalid JSON (status ${response.statusCode}).',
+        statusCode: response.statusCode,
+      );
+    }
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (body is Map<String, dynamic>) return body;
+      return {'data': body};
+    } else {
+      final errMap = body is Map ? body : null;
+      final errBlock = errMap != null && errMap['error'] is Map
+          ? errMap['error'] as Map
+          : null;
+      throw ApiException(
+        code: (errBlock?['code'] as String?) ?? 'ERROR',
+        message: (errBlock?['message'] as String?) ?? 'Request failed',
         statusCode: response.statusCode,
       );
     }
@@ -655,6 +680,73 @@ class ApiService {
       {int page = 1, int limit = 50}) async {
     return await _get(
         '${ApiEndpoints.sheets}/$sheetId/history?page=$page&limit=$limit');
+  }
+
+  // ── Edit Requests (Admin Approval Workflow) ──
+
+  /// Get edit requests for a sheet (admin only).
+  /// [status]: 'pending' | 'approved' | 'rejected' | null (all)
+  static Future<List<Map<String, dynamic>>> getEditRequests(int sheetId,
+      {String? status}) async {
+    String url = '${ApiEndpoints.sheets}/$sheetId/edit-requests';
+    if (status != null) url += '?status=$status';
+    final response = await _get(url);
+    return List<Map<String, dynamic>>.from(response['requests'] as List);
+  }
+
+  /// Admin fetches all edit requests across every sheet.
+  static Future<List<Map<String, dynamic>>> getAllEditRequests(
+      {String? status}) async {
+    String url = '${ApiEndpoints.sheets}/edit-requests/all';
+    if (status != null) url += '?status=$status';
+    final response = await _get(url);
+    return List<Map<String, dynamic>>.from(response['requests'] as List);
+  }
+
+  /// Submit an edit request for a locked inventory cell.
+  static Future<Map<String, dynamic>> submitEditRequest({
+    required int sheetId,
+    required int rowNumber,
+    required String columnName,
+    String? cellReference,
+    String? currentValue,
+    String? proposedValue,
+  }) async {
+    return await _post('${ApiEndpoints.sheets}/$sheetId/edit-requests', {
+      'row_number': rowNumber,
+      'column_name': columnName,
+      if (cellReference != null) 'cell_reference': cellReference,
+      if (currentValue != null) 'current_value': currentValue,
+      if (proposedValue != null) 'proposed_value': proposedValue,
+    });
+  }
+
+  /// Admin approves or rejects an edit request.
+  static Future<Map<String, dynamic>> respondToEditRequest({
+    required int sheetId,
+    required int requestId,
+    required bool approved,
+    String? rejectReason,
+  }) async {
+    return await _put(
+        '${ApiEndpoints.sheets}/$sheetId/edit-requests/$requestId', {
+      'approved': approved,
+      if (rejectReason != null) 'reject_reason': rejectReason,
+    });
+  }
+
+  /// Admin deletes a resolved (approved or rejected) edit request.
+  static Future<void> deleteEditRequest(int requestId) async {
+    await _delete('${ApiEndpoints.sheets}/edit-requests/$requestId');
+  }
+
+  /// Get sheet-level cell audit trail.
+  static Future<Map<String, dynamic>> getSheetAudit(int sheetId,
+      {int page = 1, int limit = 50, String? cellReference}) async {
+    String url =
+        '${ApiEndpoints.sheets}/$sheetId/audit?page=$page&limit=$limit';
+    if (cellReference != null) url += '&cell_reference=$cellReference';
+    return await _get(url);
   }
 
   // ============== Inventory ==============

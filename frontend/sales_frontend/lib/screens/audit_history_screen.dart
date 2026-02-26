@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
+import '../config/constants.dart';
 
-// ── Colour constants (clean modern palette) ──
-const Color _kContentBg = Color(0xFFFFFFFF); // white base
-const Color _kNavy = Color(0xFF202124); // near-black text
+// ── Colour constants (Blue & Red brand palette) ──
+const Color _kContentBg = AppColors.white;
+const Color _kNavy = AppColors.primaryBlue; // blue for nav/active states
 
 class AuditHistoryScreen extends StatefulWidget {
   const AuditHistoryScreen({super.key});
@@ -20,6 +21,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   String _timeFilter = 'All Time';
   DateTime? _startDate;
   DateTime? _endDate;
+  String? _deptFilter; // V2: department filter
+  String _cellRefFilter = ''; // V2: cell reference filter (e.g. "B4")
 
   // Pagination state
   int _currentPage = 1;
@@ -90,21 +93,37 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                     );
                   }
 
-                  // Calculate pagination
-                  final totalItems = data.auditLogs.length;
-                  final totalPages = (totalItems / _itemsPerPage).ceil();
+                  // ── V2 client-side filtering for dept & cell ref ──
+                  var filteredLogs = data.auditLogs;
+                  if (_deptFilter != null && _deptFilter!.isNotEmpty) {
+                    filteredLogs = filteredLogs
+                        .where((l) => l.departmentName == _deptFilter)
+                        .toList();
+                  }
+                  if (_cellRefFilter.isNotEmpty) {
+                    filteredLogs = filteredLogs
+                        .where((l) =>
+                            l.cellReference != null &&
+                            l.cellReference!.toUpperCase() == _cellRefFilter)
+                        .toList();
+                  }
+
+                  final filteredTotal = filteredLogs.length;
+                  final filteredPages = filteredTotal == 0
+                      ? 1
+                      : (filteredTotal / _itemsPerPage).ceil();
 
                   // Ensure current page is valid
-                  if (_currentPage > totalPages && totalPages > 0) {
+                  if (_currentPage > filteredPages && filteredPages > 0) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
-                      setState(() => _currentPage = totalPages);
+                      setState(() => _currentPage = filteredPages);
                     });
                   }
 
                   final startIndex = (_currentPage - 1) * _itemsPerPage;
                   final endIndex =
-                      (startIndex + _itemsPerPage).clamp(0, totalItems);
-                  final paginatedLogs = data.auditLogs.sublist(
+                      (startIndex + _itemsPerPage).clamp(0, filteredTotal);
+                  final paginatedLogs = filteredLogs.sublist(
                     startIndex,
                     endIndex,
                   );
@@ -126,7 +145,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                       const SizedBox(height: 16),
 
                       // Pagination controls
-                      _buildPaginationControls(totalItems, totalPages),
+                      _buildPaginationControls(filteredTotal, filteredPages),
                     ],
                   );
                 },
@@ -149,109 +168,179 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade200),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Action filter
-          Expanded(
-            child: _buildDropdown<String?>(
-              value: _actionFilter,
-              hint: 'All Actions',
-              items: const [
-                DropdownMenuItem(value: null, child: Text('All Actions')),
-                DropdownMenuItem(value: 'CREATE', child: Text('Create')),
-                DropdownMenuItem(value: 'UPDATE', child: Text('Update')),
-                DropdownMenuItem(value: 'DELETE', child: Text('Delete')),
-                DropdownMenuItem(value: 'LOGIN', child: Text('Login')),
-                DropdownMenuItem(value: 'LOGOUT', child: Text('Logout')),
-                DropdownMenuItem(value: 'EXPORT', child: Text('Export')),
-              ],
-              onChanged: (v) {
-                setState(() => _actionFilter = v);
-                _applyFilters();
-              },
-            ),
-          ),
-          const SizedBox(width: 16),
-
-          // Entity filter
-          Expanded(
-            child: _buildDropdown<String?>(
-              value: _entityFilter,
-              hint: 'All Entities',
-              items: const [
-                DropdownMenuItem(value: null, child: Text('All Entities')),
-                DropdownMenuItem(value: 'users', child: Text('Users')),
-                DropdownMenuItem(value: 'file', child: Text('Files')),
-                DropdownMenuItem(value: 'row', child: Text('Rows')),
-                DropdownMenuItem(value: 'formula', child: Text('Formulas')),
-                DropdownMenuItem(value: 'sheets', child: Text('Sheets')),
-              ],
-              onChanged: (v) {
-                setState(() => _entityFilter = v);
-                _applyFilters();
-              },
-            ),
-          ),
-          const SizedBox(width: 16),
-
-          // Time filter
-          Expanded(
-            child: _buildDropdown<String>(
-              value: _timeFilter,
-              hint: 'All Time',
-              items: const [
-                DropdownMenuItem(value: 'All Time', child: Text('All Time')),
-                DropdownMenuItem(value: 'Today', child: Text('Today')),
-                DropdownMenuItem(value: 'This Week', child: Text('This Week')),
-                DropdownMenuItem(
-                    value: 'This Month', child: Text('This Month')),
-                DropdownMenuItem(value: 'Custom', child: Text('Custom Range…')),
-              ],
-              onChanged: (v) async {
-                if (v == 'Custom') {
-                  await _selectDateRange();
-                } else {
-                  setState(() {
-                    _timeFilter = v ?? 'All Time';
-                    _computeDateRange();
-                  });
-                  _applyFilters();
-                }
-              },
-            ),
-          ),
-          const SizedBox(width: 16),
-
-          // Clear button
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: _clearFilters,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.close, size: 16, color: Colors.grey[700]),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Clear',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+          Row(
+            children: [
+              // Action filter
+              Expanded(
+                child: _buildDropdown<String?>(
+                  value: _actionFilter,
+                  hint: 'All Actions',
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('All Actions')),
+                    DropdownMenuItem(value: 'CREATE', child: Text('Create')),
+                    DropdownMenuItem(value: 'UPDATE', child: Text('Update')),
+                    DropdownMenuItem(value: 'DELETE', child: Text('Delete')),
+                    DropdownMenuItem(value: 'LOGIN', child: Text('Login')),
+                    DropdownMenuItem(value: 'LOGOUT', child: Text('Logout')),
+                    DropdownMenuItem(value: 'EXPORT', child: Text('Export')),
                   ],
+                  onChanged: (v) {
+                    setState(() => _actionFilter = v);
+                    _applyFilters();
+                  },
                 ),
               ),
-            ),
+              const SizedBox(width: 16),
+
+              // Entity filter
+              Expanded(
+                child: _buildDropdown<String?>(
+                  value: _entityFilter,
+                  hint: 'All Entities',
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('All Entities')),
+                    DropdownMenuItem(value: 'users', child: Text('Users')),
+                    DropdownMenuItem(value: 'file', child: Text('Files')),
+                    DropdownMenuItem(value: 'row', child: Text('Rows')),
+                    DropdownMenuItem(value: 'formula', child: Text('Formulas')),
+                    DropdownMenuItem(value: 'sheets', child: Text('Sheets')),
+                  ],
+                  onChanged: (v) {
+                    setState(() => _entityFilter = v);
+                    _applyFilters();
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+
+              // Time filter
+              Expanded(
+                child: _buildDropdown<String>(
+                  value: _timeFilter,
+                  hint: 'All Time',
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'All Time', child: Text('All Time')),
+                    DropdownMenuItem(value: 'Today', child: Text('Today')),
+                    DropdownMenuItem(
+                        value: 'This Week', child: Text('This Week')),
+                    DropdownMenuItem(
+                        value: 'This Month', child: Text('This Month')),
+                    DropdownMenuItem(
+                        value: 'Custom', child: Text('Custom Range…')),
+                  ],
+                  onChanged: (v) async {
+                    if (v == 'Custom') {
+                      await _selectDateRange();
+                    } else {
+                      setState(() {
+                        _timeFilter = v ?? 'All Time';
+                        _computeDateRange();
+                      });
+                      _applyFilters();
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+
+              // Clear button
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: _clearFilters,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.close, size: 16, color: Colors.grey[700]),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Clear',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // ── V2 Filters: department scope + cell reference ──
+          Row(
+            children: [
+              // Department filter
+              Expanded(
+                flex: 2,
+                child: _buildDropdown<String?>(
+                  value: _deptFilter,
+                  hint: 'All Departments',
+                  items: const [
+                    DropdownMenuItem(
+                        value: null, child: Text('All Departments')),
+                    DropdownMenuItem(value: 'IT', child: Text('IT')),
+                    DropdownMenuItem(value: 'Finance', child: Text('Finance')),
+                    DropdownMenuItem(value: 'HR', child: Text('HR')),
+                    DropdownMenuItem(
+                        value: 'Operations', child: Text('Operations')),
+                    DropdownMenuItem(value: 'Sales', child: Text('Sales')),
+                  ],
+                  onChanged: (v) {
+                    setState(() => _deptFilter = v);
+                    _applyFilters();
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+              // Cell reference search
+              Expanded(
+                flex: 1,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(24),
+                    color: Colors.white,
+                  ),
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Cell (e.g. B4)',
+                      hintStyle:
+                          TextStyle(color: Colors.grey[400], fontSize: 12),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                      prefixIcon: Icon(Icons.grid_on,
+                          size: 15, color: Colors.grey[400]),
+                      prefixIconConstraints:
+                          const BoxConstraints(minWidth: 30, maxWidth: 30),
+                    ),
+                    style: const TextStyle(fontSize: 13),
+                    onChanged: (v) {
+                      setState(() => _cellRefFilter = v.trim().toUpperCase());
+                      _applyFilters();
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              const Expanded(flex: 2, child: SizedBox.shrink()),
+            ],
           ),
         ],
       ),
@@ -492,6 +581,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
       _timeFilter = 'All Time';
       _startDate = null;
       _endDate = null;
+      _deptFilter = null;
+      _cellRefFilter = '';
       _currentPage = 1; // Reset to first page
     });
     _applyFilters();
@@ -610,23 +701,23 @@ class _AuditLogTileState extends State<_AuditLogTile> {
     switch (action) {
       case 'LOGIN':
       case 'LOGOUT':
-        bgColor = const Color(0xFF2E7D32); // dark green
+        bgColor = AppColors.primaryBlue;
         icon = action == 'LOGOUT' ? Icons.logout : Icons.login;
         break;
       case 'UPDATE':
-        bgColor = const Color(0xFF00695C); // teal
+        bgColor = const Color(0xFF1976D2); // blue 700
         icon = Icons.edit_note;
         break;
       case 'CREATE':
-        bgColor = const Color(0xFF2E7D32);
+        bgColor = AppColors.primaryBlue;
         icon = Icons.add_circle_outline;
         break;
       case 'DELETE':
-        bgColor = const Color(0xFFC62828);
+        bgColor = AppColors.primaryRed;
         icon = Icons.delete_outline;
         break;
       case 'EXPORT':
-        bgColor = const Color(0xFF6A1B9A);
+        bgColor = const Color(0xFF0D47A1); // deep blue
         icon = Icons.download;
         break;
       default:
@@ -821,6 +912,25 @@ class _AuditLogTileState extends State<_AuditLogTile> {
               ),
             ],
           ),
+          // ── V2 fields: role, dept, cell ref ──
+          if (log.role != null ||
+              log.departmentName != null ||
+              log.cellReference != null) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              children: [
+                if (log.role != null)
+                  _V2Badge(icon: Icons.shield_outlined, label: log.role!),
+                if (log.departmentName != null)
+                  _V2Badge(icon: Icons.business, label: log.departmentName!),
+                if (log.cellReference != null)
+                  _V2Badge(
+                      icon: Icons.grid_on, label: 'Cell ${log.cellReference}'),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -843,5 +953,36 @@ class _AuditLogTileState extends State<_AuditLogTile> {
       return value.entries.map((e) => '${e.key}: ${e.value}').join('\n');
     }
     return value.toString();
+  }
+}
+
+/// Small badge chip used in the V2 expanded detail row to show role/dept/cell ref.
+class _V2Badge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _V2Badge({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFC7D2FE)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: AppColors.primaryBlue),
+          const SizedBox(width: 4),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.primaryBlue,
+                  fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
   }
 }
