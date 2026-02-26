@@ -17,7 +17,8 @@ void main() {
   // "Attempted to send a key down event when no keys are in keysPressed"
   FlutterError.onError = (FlutterErrorDetails details) {
     final msg = details.exceptionAsString();
-    if (msg.contains('Attempted to send a key down event when no keys are in keysPressed') ||
+    if (msg.contains(
+            'Attempted to send a key down event when no keys are in keysPressed') ||
         msg.contains('keysPressed.isNotEmpty')) {
       return; // known Flutter Windows keyboard bug – safe to ignore
     }
