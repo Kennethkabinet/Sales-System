@@ -28,6 +28,13 @@ class CollaborationHandler {
     this.startLockCleanup();
   }
 
+  _normalizeSheetId(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const id = Math.trunc(n);
+    return id > 0 ? id : null;
+  }
+
   /**
    * Setup authentication middleware for socket connections
    */
@@ -108,7 +115,7 @@ class CollaborationHandler {
 
       // ── V2 get_presence: client explicitly requests current presence list ──
       socket.on('get_presence', (d) => {
-        const sid = (d && d.sheet_id) ? d.sheet_id : null;
+        const sid = this._normalizeSheetId(d?.sheet_id);
         if (!sid) return;
         socket.emit('presence_update', this._buildPresencePayload(sid));
       });
@@ -376,26 +383,28 @@ class CollaborationHandler {
    */
   async handleJoinSheet(socket, { sheet_id }) {
     try {
-      const roomName = `sheet-${sheet_id}`;
+      const sid = this._normalizeSheetId(sheet_id);
+      if (!sid) return;
+      const roomName = `sheet-${sid}`;
 
       // Leave previous sheet if any
       const user = this.activeUsers.get(socket.id);
-      if (user?.currentSheet && user.currentSheet !== sheet_id) {
+      if (user?.currentSheet && user.currentSheet !== sid) {
         await this.handleLeaveSheet(socket, { sheet_id: user.currentSheet });
       }
 
       socket.join(roomName);
 
-      if (!this.sheetRooms.has(sheet_id)) {
-        this.sheetRooms.set(sheet_id, new Set());
+      if (!this.sheetRooms.has(sid)) {
+        this.sheetRooms.set(sid, new Set());
       }
-      this.sheetRooms.get(sheet_id).add(socket.id);
+      this.sheetRooms.get(sid).add(socket.id);
 
-      if (!this.sheetPresence.has(sheet_id)) {
-        this.sheetPresence.set(sheet_id, new Map());
+      if (!this.sheetPresence.has(sid)) {
+        this.sheetPresence.set(sid, new Map());
       }
 
-      const presenceMap = this.sheetPresence.get(sheet_id);
+      const presenceMap = this.sheetPresence.get(sid);
 
       // ── Evict any stale socket entries for the same userId ─────────────────
       // This handles reconnects / multiple tabs: the old socketId entry would
@@ -406,7 +415,7 @@ class CollaborationHandler {
         if (p.userId === socket.user.id && sid !== socket.id) {
           presenceMap.delete(sid);
           // Also clean up the sheetRooms set
-          const roomSet = this.sheetRooms.get(sheet_id);
+          const roomSet = this.sheetRooms.get(sid);
           if (roomSet) roomSet.delete(sid);
         }
       }
@@ -422,27 +431,27 @@ class CollaborationHandler {
       });
 
       if (user) {
-        user.currentSheet = sheet_id;
+        user.currentSheet = sid;
         user.currentCell  = null;
       }
 
       // Broadcast updated presence list to ALL users in the sheet (including
       // already-present users so they see the newly joined user).
-      this._broadcastSheetPresence(sheet_id);
+      this._broadcastSheetPresence(sid);
 
       // Also emit directly to the joining socket so it gets the full list
       // immediately even before the room broadcast propagates.
-      socket.emit('presence_update', this._buildPresencePayload(sheet_id));
+      socket.emit('presence_update', this._buildPresencePayload(sid));
 
       // Second broadcast after 1 s — catches clients that were mid-reconnect
       // when the first broadcast fired and therefore missed it.
       setTimeout(() => {
-        if (this.sheetPresence.has(sheet_id)) {
-          this._broadcastSheetPresence(sheet_id);
+        if (this.sheetPresence.has(sid)) {
+          this._broadcastSheetPresence(sid);
         }
       }, 1000);
 
-      console.log(`${socket.user.username} joined sheet ${sheet_id} (${presenceMap.size} users now present)`);
+      console.log(`${socket.user.username} joined sheet ${sid} (${presenceMap.size} users now present)`);
     } catch (err) {
       console.error('Join sheet error:', err);
       socket.emit('error', { code: 'JOIN_SHEET_ERROR', message: 'Failed to join sheet' });
@@ -454,19 +463,21 @@ class CollaborationHandler {
    */
   async handleLeaveSheet(socket, { sheet_id }) {
     try {
-      const roomName = `sheet-${sheet_id}`;
+      const sid = this._normalizeSheetId(sheet_id);
+      if (!sid) return;
+      const roomName = `sheet-${sid}`;
       socket.leave(roomName);
 
-      const sheetMembers = this.sheetRooms.get(sheet_id);
+      const sheetMembers = this.sheetRooms.get(sid);
       if (sheetMembers) {
         sheetMembers.delete(socket.id);
-        if (sheetMembers.size === 0) this.sheetRooms.delete(sheet_id);
+        if (sheetMembers.size === 0) this.sheetRooms.delete(sid);
       }
 
-      const presence = this.sheetPresence.get(sheet_id);
+      const presence = this.sheetPresence.get(sid);
       if (presence) {
         presence.delete(socket.id);
-        if (presence.size === 0) this.sheetPresence.delete(sheet_id);
+        if (presence.size === 0) this.sheetPresence.delete(sid);
       }
 
       const user = this.activeUsers.get(socket.id);
@@ -475,7 +486,7 @@ class CollaborationHandler {
         user.currentCell  = null;
       }
 
-      this._broadcastSheetPresence(sheet_id);
+      this._broadcastSheetPresence(sid);
     } catch (err) {
       console.error('Leave sheet error:', err);
     }
@@ -486,7 +497,9 @@ class CollaborationHandler {
    * Broadcasts cell_focused to all others in the sheet.
    */
   handleCellFocus(socket, { sheet_id, cell_ref }) {
-    const presence = this.sheetPresence.get(sheet_id);
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid) return;
+    const presence = this.sheetPresence.get(sid);
     if (!presence) return;
 
     const record = presence.get(socket.id);
@@ -496,21 +509,21 @@ class CollaborationHandler {
     if (user) user.currentCell = cell_ref;
 
     // Broadcast to others (not sender)
-    socket.to(`sheet-${sheet_id}`).emit('cell_focused', {
+    socket.to(`sheet-${sid}`).emit('cell_focused', {
       user_id:         socket.user.id,
       username:        socket.user.username,
       full_name:       socket.user.full_name || socket.user.username,
       role:            socket.user.role,
       department_name: socket.user.department_name,
       cell_ref,
-      sheet_id
+      sheet_id: sid
     });
 
     // If the user focusing a cell was somehow not yet in the presence map
     // (edge case: missed join_sheet), add them now and broadcast presence.
     if (record === undefined) {
-      if (!this.sheetPresence.has(sheet_id)) this.sheetPresence.set(sheet_id, new Map());
-      this.sheetPresence.get(sheet_id).set(socket.id, {
+      if (!this.sheetPresence.has(sid)) this.sheetPresence.set(sid, new Map());
+      this.sheetPresence.get(sid).set(socket.id, {
         userId:         socket.user.id,
         username:       socket.user.username,
         fullName:       socket.user.full_name || socket.user.username,
@@ -519,7 +532,7 @@ class CollaborationHandler {
         currentCell:    cell_ref,
         joinedAt:       Date.now()
       });
-      this._broadcastSheetPresence(sheet_id);
+      this._broadcastSheetPresence(sid);
     }
   }
 
@@ -527,7 +540,9 @@ class CollaborationHandler {
    * User blurs away from a cell.
    */
   handleCellBlur(socket, { sheet_id, cell_ref }) {
-    const presence = this.sheetPresence.get(sheet_id);
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid) return;
+    const presence = this.sheetPresence.get(sid);
     if (!presence) return;
 
     const record = presence.get(socket.id);
@@ -536,10 +551,10 @@ class CollaborationHandler {
     const user = this.activeUsers.get(socket.id);
     if (user) user.currentCell = null;
 
-    socket.to(`sheet-${sheet_id}`).emit('cell_blurred', {
+    socket.to(`sheet-${sid}`).emit('cell_blurred', {
       user_id:  socket.user.id,
       cell_ref,
-      sheet_id
+      sheet_id: sid
     });
   }
 
@@ -554,12 +569,13 @@ class CollaborationHandler {
    * DB row_number is 1-based → rowNumber = row_index + 1.
    */
   async handleCellUpdate(socket, { sheet_id, row_index, column_name, value }) {
-    if (!sheet_id || row_index === undefined || !column_name) return;
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid || row_index === undefined || !column_name) return;
 
     const payload = {
       user_id:     socket.user.id,
       username:    socket.user.username,
-      sheet_id,
+      sheet_id: sid,
       row_index,   // 0-based row index matching Flutter _data array
       column_name,
       value: value ?? ''
@@ -567,7 +583,7 @@ class CollaborationHandler {
 
     // ── Broadcast FIRST so other users see the change instantly ──────────────
     // DB write happens after; a slow query must not block the real-time update.
-    socket.to(`sheet-${sheet_id}`).emit('cell_updated', payload);
+    socket.to(`sheet-${sid}`).emit('cell_updated', payload);
 
     // ── Persist cell value to PostgreSQL (non-blocking) ──────────────────────
     const rowNumber = row_index + 1; // convert 0-based → 1-based for DB
@@ -578,11 +594,11 @@ class CollaborationHandler {
       DO UPDATE SET
         data       = sheet_data.data || jsonb_build_object($3::text, $4::text),
         updated_at = CURRENT_TIMESTAMP
-    `, [sheet_id, rowNumber, column_name, value ?? ''])
+    `, [sid, rowNumber, column_name, value ?? ''])
     .then(() =>
       pool.query(
         'UPDATE sheets SET last_edited_by = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [socket.user.id, sheet_id]
+        [socket.user.id, sid]
       )
     )
     .catch(dbErr =>
@@ -594,7 +610,8 @@ class CollaborationHandler {
    * Build a presence payload object for a sheet.
    */
   _buildPresencePayload(sheet_id) {
-    const presence = this.sheetPresence.get(sheet_id);
+    const sid = this._normalizeSheetId(sheet_id);
+    const presence = sid ? this.sheetPresence.get(sid) : null;
     const users = presence
       ? (() => {
           // Deduplicate by userId (safety net — join handler already evicts
@@ -617,7 +634,7 @@ class CollaborationHandler {
           return out;
         })()
       : [];
-    return { sheet_id, users };
+    return { sheet_id: sid, users };
   }
 
   /**
@@ -625,7 +642,9 @@ class CollaborationHandler {
    * Payload: { sheet_id, users: [...] }
    */
   _broadcastSheetPresence(sheet_id) {
-    this.io.to(`sheet-${sheet_id}`).emit('presence_update', this._buildPresencePayload(sheet_id));
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid) return;
+    this.io.to(`sheet-${sid}`).emit('presence_update', this._buildPresencePayload(sid));
   }
 
   // ═══════════════════════════════════════════════════════
