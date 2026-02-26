@@ -3981,7 +3981,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 border: Border.all(color: const Color(0xFF90CAF9), width: 1),
               ),
               child: Text(
-                'DBG ${effective.length}U (${_presenceUsers.length}/${_presenceInfoMap.length})',
+                'DBG S${_currentSheet?.id ?? '-'} ${effective.length}U (${_presenceUsers.length}/${_presenceInfoMap.length})',
                 style: const TextStyle(
                   fontSize: 10,
                   color: Color(0xFF0D47A1),
