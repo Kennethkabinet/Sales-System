@@ -656,6 +656,35 @@ class ApiService {
     });
   }
 
+  /// Set or remove a sheet password (Admin/Editor only; pass null to remove)
+  static Future<Map<String, dynamic>> setSheetPassword(
+      int sheetId, String? password) async {
+    return await _put(
+        '${ApiEndpoints.sheets}/$sheetId/set-password', {'password': password});
+  }
+
+  /// Set or remove a folder password (Admin/Editor only; pass null to remove)
+  static Future<Map<String, dynamic>> setFolderPassword(
+      int folderId, String? password) async {
+    return await _put('${ApiEndpoints.sheets}/folders/$folderId/set-password',
+        {'password': password});
+  }
+
+  /// Verify sheet password — returns success:true if correct
+  static Future<Map<String, dynamic>> verifySheetPassword(
+      int sheetId, String password) async {
+    return await _post('${ApiEndpoints.sheets}/$sheetId/verify-password',
+        {'password': password});
+  }
+
+  /// Verify folder password — returns success:true if correct
+  static Future<Map<String, dynamic>> verifyFolderPassword(
+      int folderId, String password) async {
+    return await _post(
+        '${ApiEndpoints.sheets}/folders/$folderId/verify-password',
+        {'password': password});
+  }
+
   /// Lock sheet for editing
   static Future<Map<String, dynamic>> lockSheet(int sheetId) async {
     return await _post('${ApiEndpoints.sheets}/$sheetId/lock', {});

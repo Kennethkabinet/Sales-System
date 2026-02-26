@@ -10,9 +10,16 @@ const {
 } = require('../middleware/rbac');
 const auditService = require('../services/auditService');
 const XLSX = require('xlsx');
+const bcrypt = require('bcrypt');
 
 // Multer memory storage for sheet file imports
 const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+// Self-healing migration: add password_hash columns for folder/sheet password protection
+pool.query(`
+  ALTER TABLE sheets ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+  ALTER TABLE folders ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+`).catch(err => console.error('[Migration] password_hash columns:', err.message));
 
 // GET /sheets - Get all sheets for user
 router.get('/', authenticate, requireSheetAccess, async (req, res) => {
@@ -148,9 +155,51 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
     let folderQueryParams = [];
     let fpIdx = 1;
     const isAdmin = req.user.role === 'admin';
+    const isViewer = req.user.role === 'viewer';
     const parentCondition = (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '')
       ? `fo.parent_id = $${fpIdx++}` : 'fo.parent_id IS NULL';
-    if (!isAdmin) {
+    if (isAdmin) {
+      // Admins see all folders
+      folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
+              (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
+       FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
+       WHERE fo.is_active = TRUE AND ${parentCondition}
+       ORDER BY fo.name ASC`;
+      if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
+        folderQueryParams.push(parseInt(folderIdParam));
+      }
+    } else if (isViewer) {
+      // Viewers see only folders that contain (directly or via nested sub-folders) at
+      // least one sheet with shown_to_viewers = TRUE. A recursive CTE walks UP the
+      // folder tree from the leaf folders that own visible sheets so that all ancestor
+      // folders are also surfaced for navigation purposes.
+      folderQuery = `
+        WITH RECURSIVE visible_folder_ids AS (
+          -- Base: folders that directly contain at least one viewer-visible sheet
+          SELECT DISTINCT s.folder_id AS id
+          FROM sheets s
+          WHERE s.is_active = TRUE AND s.shown_to_viewers = TRUE AND s.folder_id IS NOT NULL
+          UNION
+          -- Recursive: parent folders of already-identified visible folders
+          SELECT fo.parent_id
+          FROM folders fo
+          INNER JOIN visible_folder_ids vf ON fo.id = vf.id
+          WHERE fo.parent_id IS NOT NULL AND fo.is_active = TRUE
+        )
+        SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
+               (SELECT COUNT(*) FROM sheets s2
+                WHERE s2.folder_id = fo.id AND s2.is_active = TRUE AND s2.shown_to_viewers = TRUE) as sheet_count
+        FROM folders fo
+        LEFT JOIN users u ON fo.created_by = u.id
+        WHERE fo.is_active = TRUE
+          AND fo.id IN (SELECT id FROM visible_folder_ids)
+          AND ${parentCondition}
+        ORDER BY fo.name ASC`;
+      if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
+        folderQueryParams.push(parseInt(folderIdParam));
+      }
+    } else {
+      // Editors and regular users see folders they own
       folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
               (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
        FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
@@ -160,17 +209,30 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
         folderQueryParams.push(parseInt(folderIdParam));
       }
       folderQueryParams.push(req.user.id);
-    } else {
-      folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
-              (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
-       FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
-       WHERE fo.is_active = TRUE AND ${parentCondition}
-       ORDER BY fo.name ASC`;
-      if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
-        folderQueryParams.push(parseInt(folderIdParam));
-      }
     }
     const foldersResult = await pool.query(folderQuery, folderQueryParams);
+
+    // Augment rows with has_password — never send the actual hash to the client
+    const sheetIds = sheetsResult.rows.map(r => r.id);
+    if (sheetIds.length > 0) {
+      const pwResult = await pool.query(
+        `SELECT id, (password_hash IS NOT NULL) as has_password FROM sheets WHERE id = ANY($1)`,
+        [sheetIds]
+      );
+      const pwMap = {};
+      pwResult.rows.forEach(r => { pwMap[r.id] = r.has_password; });
+      sheetsResult.rows.forEach(r => { r.has_password = pwMap[r.id] || false; });
+    }
+    const folderIds = foldersResult.rows.map(f => f.id);
+    if (folderIds.length > 0) {
+      const fpwResult = await pool.query(
+        `SELECT id, (password_hash IS NOT NULL) as has_password FROM folders WHERE id = ANY($1)`,
+        [folderIds]
+      );
+      const fpwMap = {};
+      fpwResult.rows.forEach(r => { fpwMap[r.id] = r.has_password; });
+      foldersResult.rows.forEach(r => { r.has_password = fpwMap[r.id] || false; });
+    }
 
     res.json({
       success: true,
@@ -290,6 +352,56 @@ router.get('/folders', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get sheet folders error:', error);
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get folders' } });
+  }
+});
+
+// PUT /sheets/folders/:folderId/set-password - Set or remove a folder password (Admin/Editor)
+router.put('/folders/:folderId/set-password', authenticate, async (req, res) => {
+  try {
+    if (!['admin', 'editor'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only admins and editors can set folder passwords' } });
+    }
+    const { folderId } = req.params;
+    const { password } = req.body;
+    const passwordHash = (password && password.trim().length > 0)
+      ? await bcrypt.hash(password.trim(), 10)
+      : null;
+    const result = await pool.query(
+      `UPDATE folders SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = TRUE RETURNING id, name`,
+      [passwordHash, folderId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Folder not found' } });
+    }
+    res.json({ success: true, message: password ? 'Folder password set' : 'Folder password removed', has_password: !!passwordHash });
+  } catch (error) {
+    console.error('Set folder password error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to set folder password' } });
+  }
+});
+
+// POST /sheets/folders/:folderId/verify-password - Verify folder password
+router.post('/folders/:folderId/verify-password', authenticate, async (req, res) => {
+  try {
+    const { folderId } = req.params;
+    const { password } = req.body;
+    const result = await pool.query(
+      `SELECT password_hash FROM folders WHERE id = $1 AND is_active = TRUE`,
+      [folderId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Folder not found' } });
+    }
+    const { password_hash } = result.rows[0];
+    if (!password_hash) return res.json({ success: true }); // No password set
+    const valid = await bcrypt.compare(password || '', password_hash);
+    if (!valid) {
+      return res.status(401).json({ success: false, error: { code: 'WRONG_PASSWORD', message: 'Incorrect password' } });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Verify folder password error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to verify folder password' } });
   }
 });
 
@@ -1073,13 +1185,13 @@ router.post('/:id/import', authenticate, requireSheetEditAccess, async (req, res
   }
 });
 
-// PUT /sheets/:id/visibility - Toggle sheet visibility to viewers (Admin only)
+// PUT /sheets/:id/visibility - Toggle sheet visibility to viewers (Admin or Editor)
 router.put('/:id/visibility', authenticate, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'editor'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        error: { code: 'FORBIDDEN', message: 'Only admins can control sheet visibility' }
+        error: { code: 'FORBIDDEN', message: 'Only admins and editors can control sheet visibility' }
       });
     }
 
@@ -1124,6 +1236,63 @@ router.put('/:id/visibility', authenticate, async (req, res) => {
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to update sheet visibility' }
     });
+  }
+});
+
+// PUT /sheets/:id/set-password - Set or remove a sheet password (Admin/Editor)
+router.put('/:id/set-password', authenticate, async (req, res) => {
+  try {
+    if (!['admin', 'editor'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only admins and editors can set sheet passwords' } });
+    }
+    const { id } = req.params;
+    const { password } = req.body;
+    const passwordHash = (password && password.trim().length > 0)
+      ? await bcrypt.hash(password.trim(), 10)
+      : null;
+    const result = await pool.query(
+      `UPDATE sheets SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active = TRUE RETURNING id, name`,
+      [passwordHash, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Sheet not found' } });
+    }
+    await auditService.log({
+      userId: req.user.id,
+      action: password ? 'SET_PASSWORD' : 'REMOVE_PASSWORD',
+      entityType: 'sheets',
+      entityId: parseInt(id),
+      metadata: { sheet_name: result.rows[0].name }
+    });
+    res.json({ success: true, message: password ? 'Sheet password set' : 'Sheet password removed', has_password: !!passwordHash });
+  } catch (error) {
+    console.error('Set sheet password error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to set sheet password' } });
+  }
+});
+
+// POST /sheets/:id/verify-password - Verify sheet password
+router.post('/:id/verify-password', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+    const result = await pool.query(
+      `SELECT password_hash FROM sheets WHERE id = $1 AND is_active = TRUE`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Sheet not found' } });
+    }
+    const { password_hash } = result.rows[0];
+    if (!password_hash) return res.json({ success: true }); // No password set
+    const valid = await bcrypt.compare(password || '', password_hash);
+    if (!valid) {
+      return res.status(401).json({ success: false, error: { code: 'WRONG_PASSWORD', message: 'Incorrect password' } });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Verify sheet password error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to verify sheet password' } });
   }
 });
 

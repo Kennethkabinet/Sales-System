@@ -21,6 +21,7 @@ class SheetModel {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final bool shownToViewers;
+  final bool hasPassword;
   final int? lockedBy;
   final String? lockedByName;
   final DateTime? lockedAt;
@@ -35,6 +36,7 @@ class SheetModel {
     this.createdAt,
     this.updatedAt,
     this.shownToViewers = false,
+    this.hasPassword = false,
     this.lockedBy,
     this.lockedByName,
     this.lockedAt,
@@ -59,6 +61,7 @@ class SheetModel {
           ? DateTime.parse(json['updated_at'])
           : null,
       shownToViewers: json['shown_to_viewers'] ?? false,
+      hasPassword: json['has_password'] ?? false,
       lockedBy: json['locked_by'],
       lockedByName: json['locked_by_name'],
       lockedAt:
@@ -229,6 +232,9 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // ── V2 Collaboration: real-time presence & edit requests ──
   List<CellPresence> _presenceUsers = [];
+  // Password protection: track items unlocked this session
+  final Set<int> _unlockedFolderIds = {};
+  final Set<int> _unlockedSheetIds = {};
   // cellRef (e.g. "B4") -> set of userId's currently on that cell
   final Map<String, Set<int>> _cellPresenceUserIds = {};
   // userId -> CellPresence lookup (populated from both presence_update & cell_focused)
@@ -307,6 +313,297 @@ class _SheetScreenState extends State<SheetScreen> {
             backgroundColor: Colors.red,
           ),
         );
+      }
+    }
+  }
+
+  // ── Password protection helpers ──
+
+  /// Show dialog to enter password; returns true if verification passed.
+  Future<bool> _showVerifyPasswordDialog(String title) async {
+    final controller = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Enter password',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => Navigator.of(ctx).pop(true),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Unlock')),
+        ],
+      ),
+    );
+    if (result != true) return false;
+    return controller
+        .text.isNotEmpty; // actual verification done via API in callers
+  }
+
+  /// Show dialog to set (or remove) a password. Returns null if cancelled,
+  /// empty string to remove, or a non-empty string to set.
+  Future<String?> _showSetPasswordDialog({
+    required String title,
+    required bool hasPassword,
+  }) async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hasPassword)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'A password is already set. Enter a new one to change it, or leave blank to remove it.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Anyone opening this item will need to enter this password.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                ),
+              ),
+            TextField(
+              controller: controller,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'New password (blank to remove)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel')),
+          if (hasPassword)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(''),
+              child: const Text('Remove Password',
+                  style: TextStyle(color: Colors.red)),
+            ),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setSheetPassword(SheetModel sheet) async {
+    final newPw = await _showSetPasswordDialog(
+        title: 'Set Password — ${sheet.name}', hasPassword: sheet.hasPassword);
+    if (newPw == null) return; // cancelled
+    try {
+      final res = await ApiService.setSheetPassword(
+          sheet.id, newPw.isEmpty ? null : newPw);
+      if (res['success'] == true) {
+        await _loadSheets();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(newPw.isEmpty ? 'Password removed' : 'Password set'),
+            backgroundColor: Colors.green,
+          ));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _setFolderPassword(Map<String, dynamic> folder) async {
+    final hasPassword = folder['has_password'] == true;
+    final newPw = await _showSetPasswordDialog(
+        title: 'Set Password — ${folder['name']}', hasPassword: hasPassword);
+    if (newPw == null) return;
+    try {
+      final res = await ApiService.setFolderPassword(
+          folder['id'] as int, newPw.isEmpty ? null : newPw);
+      if (res['success'] == true) {
+        await _loadSheets();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(newPw.isEmpty ? 'Password removed' : 'Password set'),
+            backgroundColor: Colors.green,
+          ));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _openFolderWithPasswordCheck(Map<String, dynamic> folder) async {
+    final id = folder['id'] as int;
+    final hasPassword = folder['has_password'] == true;
+    final role = context.read<AuthProvider>().user?.role;
+    // Only admins bypass the password check.
+    if (!hasPassword || role == 'admin' || _unlockedFolderIds.contains(id)) {
+      _navigateIntoSheetFolder(id, folder['name'] as String);
+      return;
+    }
+    final controller = TextEditingController();
+    String? errorText;
+    bool? confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setStateDialog) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.lock, size: 20),
+              SizedBox(width: 8),
+              Text('Password Required'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                  '"${folder['name']}" is protected. Enter its password to open it.'),
+              const SizedBox(height: 14),
+              TextField(
+                controller: controller,
+                obscureText: true,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Password',
+                  border: const OutlineInputBorder(),
+                  errorText: errorText,
+                ),
+                onSubmitted: (_) => Navigator.of(ctx2).pop(true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx2).pop(false),
+                child: const Text('Cancel')),
+            ElevatedButton(
+                onPressed: () => Navigator.of(ctx2).pop(true),
+                child: const Text('Open')),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final res = await ApiService.verifyFolderPassword(id, controller.text);
+      if (res['success'] == true) {
+        _unlockedFolderIds.add(id);
+        _navigateIntoSheetFolder(id, folder['name'] as String);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Incorrect password'),
+              backgroundColor: Colors.red));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Incorrect password'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _openSheetWithPasswordCheck(SheetModel sheet) async {
+    if (!sheet.hasPassword || _unlockedSheetIds.contains(sheet.id)) {
+      _loadSheetData(sheet.id);
+      return;
+    }
+    final role = context.read<AuthProvider>().user?.role;
+    // Only admins bypass the password check.
+    if (role == 'admin') {
+      _loadSheetData(sheet.id);
+      return;
+    }
+    final controller = TextEditingController();
+    bool? confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.lock, size: 20),
+            SizedBox(width: 8),
+            Text('Password Required'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+                '"${sheet.name}" is protected. Enter its password to open it.'),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Password',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => Navigator.of(ctx).pop(true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Open')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final res =
+          await ApiService.verifySheetPassword(sheet.id, controller.text);
+      if (res['success'] == true) {
+        _unlockedSheetIds.add(sheet.id);
+        _loadSheetData(sheet.id);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Incorrect password'),
+              backgroundColor: Colors.red));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Incorrect password'), backgroundColor: Colors.red));
       }
     }
   }
@@ -1420,8 +1717,9 @@ class _SheetScreenState extends State<SheetScreen> {
       initialValue: currentLabel,
     );
 
-    if (newLabel == null || newLabel.isEmpty || newLabel == currentLabel)
+    if (newLabel == null || newLabel.isEmpty || newLabel == currentLabel) {
       return;
+    }
 
     setState(() {
       _rowLabels[rowIndex] = newLabel;
@@ -1458,7 +1756,9 @@ class _SheetScreenState extends State<SheetScreen> {
 
     if (newName == null ||
         newName.trim().isEmpty ||
-        newName.trim() == sheet.name) return;
+        newName.trim() == sheet.name) {
+      return;
+    }
 
     setState(() => _isLoading = true);
 
@@ -2349,9 +2649,9 @@ class _SheetScreenState extends State<SheetScreen> {
     int depth = 0;
     for (int i = expr.length - 1; i >= 0; i--) {
       final c = expr[i];
-      if (c == ')')
+      if (c == ')') {
         depth++;
-      else if (c == '(')
+      } else if (c == '(')
         depth--;
       else if (depth == 0 && (c == '+' || c == '-') && i > 0) {
         final left = _evalExpr(expr.substring(0, i));
@@ -2363,9 +2663,9 @@ class _SheetScreenState extends State<SheetScreen> {
     depth = 0;
     for (int i = expr.length - 1; i >= 0; i--) {
       final c = expr[i];
-      if (c == ')')
+      if (c == ')') {
         depth++;
-      else if (c == '(')
+      } else if (c == '(')
         depth--;
       else if (depth == 0 && (c == '*' || c == '/')) {
         final left = _evalExpr(expr.substring(0, i));
@@ -2631,18 +2931,12 @@ class _SheetScreenState extends State<SheetScreen> {
             backgroundColor: _kContentBg,
             body: Column(
               children: [
-                // ── Red header bar ──
-                _buildRedHeader(),
-                // ── Sheet name + Save bar ──
+                // ── Sheet name bar (back btn • name • search • presence) ──
                 _buildSheetNameBar(),
                 // ── Ribbon toolbar ──
                 _buildRibbonToolbar(),
                 // ── Formula bar ──
                 _buildFormulaBar(),
-                // ── Status bar for lock info ──
-                if (_currentSheet != null) _buildStatusBar(),
-                // ── Presence panel (who else is viewing/editing) ──
-                _buildPresencePanel(),
                 // ── Spreadsheet grid ──
                 Expanded(
                   child: _isLoading
@@ -2814,13 +3108,16 @@ class _SheetScreenState extends State<SheetScreen> {
               runSpacing: 12,
               children: _sheetFolders.map((folder) {
                 final folderRole = auth.user?.role ?? '';
+                final canManageFolder = folderRole == 'admin' ||
+                    folderRole == 'editor' ||
+                    folderRole == 'manager';
                 final canDeleteFolder =
                     folderRole == 'admin' || folderRole == 'manager';
+                final folderHasPassword = folder['has_password'] == true;
                 return Stack(
                   children: [
                     InkWell(
-                      onTap: () => _navigateIntoSheetFolder(
-                          folder['id'] as int, folder['name'] as String),
+                      onTap: () => _openFolderWithPasswordCheck(folder),
                       borderRadius: BorderRadius.circular(10),
                       child: Container(
                         width: 160,
@@ -2832,8 +3129,26 @@ class _SheetScreenState extends State<SheetScreen> {
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.folder,
-                                color: Colors.amber[700], size: 32),
+                            Stack(
+                              children: [
+                                Icon(Icons.folder,
+                                    color: Colors.amber[700], size: 32),
+                                if (folderHasPassword)
+                                  Positioned(
+                                    right: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      width: 13,
+                                      height: 13,
+                                      decoration: BoxDecoration(
+                                          color: Colors.orange[700],
+                                          shape: BoxShape.circle),
+                                      child: const Icon(Icons.lock,
+                                          size: 9, color: Colors.white),
+                                    ),
+                                  ),
+                              ],
+                            ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Column(
@@ -2859,7 +3174,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         ),
                       ),
                     ),
-                    if (canDeleteFolder)
+                    if (canManageFolder)
                       Positioned(
                         top: 4,
                         right: 4,
@@ -2870,20 +3185,40 @@ class _SheetScreenState extends State<SheetScreen> {
                           iconSize: 16,
                           onSelected: (value) {
                             if (value == 'delete') _confirmDeleteFolder(folder);
+                            if (value == 'set_password') {
+                              _setFolderPassword(folder);
+                            }
                           },
                           itemBuilder: (_) => [
-                            const PopupMenuItem(
-                              value: 'delete',
+                            PopupMenuItem(
+                              value: 'set_password',
                               child: Row(
                                 children: [
-                                  Icon(Icons.delete_outline,
-                                      size: 16, color: Colors.red),
-                                  SizedBox(width: 8),
-                                  Text('Delete Folder',
-                                      style: TextStyle(color: Colors.red)),
+                                  Icon(Icons.lock_outline,
+                                      size: 16,
+                                      color: folderHasPassword
+                                          ? Colors.orange
+                                          : Colors.grey[600]),
+                                  const SizedBox(width: 8),
+                                  Text(folderHasPassword
+                                      ? 'Change Password'
+                                      : 'Set Password'),
                                 ],
                               ),
                             ),
+                            if (canDeleteFolder)
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete_outline,
+                                        size: 16, color: Colors.red),
+                                    SizedBox(width: 8),
+                                    Text('Delete Folder',
+                                        style: TextStyle(color: Colors.red)),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -3019,7 +3354,7 @@ class _SheetScreenState extends State<SheetScreen> {
     final timeAgo = _timeAgo(sheet.updatedAt ?? sheet.createdAt);
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () => _loadSheetData(sheet.id),
+      onTap: () => _openSheetWithPasswordCheck(sheet),
       child: Container(
         width: 160,
         padding: const EdgeInsets.all(14),
@@ -3182,7 +3517,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 12, vertical: 10),
                           child: InkWell(
-                            onTap: () => _loadSheetData(sheet.id),
+                            onTap: () => _openSheetWithPasswordCheck(sheet),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -3201,11 +3536,22 @@ class _SheetScreenState extends State<SheetScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      sheet.name,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 13),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          sheet.name,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 13),
+                                        ),
+                                        if (sheet.hasPassword) ...[
+                                          const SizedBox(width: 6),
+                                          Icon(Icons.lock,
+                                              size: 13,
+                                              color: Colors.orange[700]),
+                                        ],
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -3277,20 +3623,26 @@ class _SheetScreenState extends State<SheetScreen> {
                                           size: 18, color: Colors.grey[500]),
                                       padding: EdgeInsets.zero,
                                       onSelected: (value) {
-                                        if (value == 'open')
-                                          _loadSheetData(sheet.id);
-                                        if (value == 'rename')
+                                        if (value == 'open') {
+                                          _openSheetWithPasswordCheck(sheet);
+                                        }
+                                        if (value == 'rename') {
                                           _renameSheet(sheet);
-                                        if (value == 'move')
+                                        }
+                                        if (value == 'move') {
                                           _showMoveSheetToFolderDialog(sheet);
+                                        }
+                                        if (value == 'set_password') {
+                                          _setSheetPassword(sheet);
+                                        }
                                       },
-                                      itemBuilder: (_) => const [
-                                        PopupMenuItem(
+                                      itemBuilder: (_) => [
+                                        const PopupMenuItem(
                                             value: 'open', child: Text('Open')),
-                                        PopupMenuItem(
+                                        const PopupMenuItem(
                                             value: 'rename',
                                             child: Text('Rename')),
-                                        PopupMenuItem(
+                                        const PopupMenuItem(
                                           value: 'move',
                                           child: Row(
                                             children: [
@@ -3301,6 +3653,22 @@ class _SheetScreenState extends State<SheetScreen> {
                                                   color: Colors.blueGrey),
                                               SizedBox(width: 8),
                                               Text('Move to Folder'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'set_password',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.lock_outline,
+                                                  size: 16,
+                                                  color: sheet.hasPassword
+                                                      ? Colors.orange
+                                                      : Colors.grey[600]),
+                                              const SizedBox(width: 8),
+                                              Text(sheet.hasPassword
+                                                  ? 'Change Password'
+                                                  : 'Set Password'),
                                             ],
                                           ),
                                         ),
@@ -3421,9 +3789,14 @@ class _SheetScreenState extends State<SheetScreen> {
   //  Sheet Name + Save Bar
   // ═══════════════════════════════════════════════════════
   Widget _buildSheetNameBar() {
-    final isViewer =
-        (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') ==
-            'viewer';
+    final authProv = Provider.of<AuthProvider>(context, listen: false);
+    final role = authProv.user?.role ?? '';
+    final isViewer = role == 'viewer';
+    final currentUsername = authProv.user?.username ?? '';
+    final isLockedByMe =
+        _isLocked && _lockedByUser != null && _lockedByUser == currentUsername;
+    final isLockedByOther =
+        _isLocked && _lockedByUser != null && _lockedByUser != currentUsername;
 
     // ── Inline save-status chip ──────────────────────────────────────────────
     Widget saveChip() {
@@ -3438,9 +3811,8 @@ class _SheetScreenState extends State<SheetScreen> {
                     valueColor:
                         const AlwaysStoppedAnimation(AppColors.primaryBlue))),
             const SizedBox(width: 5),
-            Text('Saving…',
-                style: const TextStyle(
-                    fontSize: 11, color: AppColors.primaryBlue)),
+            const Text('Saving…',
+                style: TextStyle(fontSize: 11, color: AppColors.primaryBlue)),
           ]);
         case 'unsaved':
           return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -3452,7 +3824,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     color: Colors.orange[800],
                     fontWeight: FontWeight.w500)),
           ]);
-        default: // 'saved'
+        default:
           return Row(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.check_circle_outline,
                 size: 13, color: Color(0xFF2D9B5A)),
@@ -3466,29 +3838,170 @@ class _SheetScreenState extends State<SheetScreen> {
       }
     }
 
+    // ── Compact presence avatar row ──────────────────────────────────────────
+    Widget presenceRow() {
+      final authUser = authProv.user;
+      final List<CellPresence> effective = _presenceUsers.isNotEmpty
+          ? _presenceUsers
+          : (authUser != null
+              ? [
+                  CellPresence(
+                    userId: authUser.id,
+                    username: authUser.username,
+                    role: authUser.role,
+                    departmentName: authUser.departmentName,
+                    currentCell: null,
+                  )
+                ]
+              : []);
+      if (effective.isEmpty) return const SizedBox.shrink();
+      final authId = authUser?.id ?? -1;
+      final me = effective.where((u) => u.userId == authId).firstOrNull;
+      final others = effective.where((u) => u.userId != authId).toList();
+      final visibleOthers = others.take(6).toList();
+      final overflowCount = others.length - visibleOthers.length;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (me != null) _PresenceAvatar(presence: me, isMe: true),
+          for (int i = 0; i < visibleOthers.length; i++) ...[
+            const SizedBox(width: 8),
+            _PresenceAvatar(
+              presence: visibleOthers[i],
+              isMe: false,
+              zIndex: visibleOthers.length - i,
+            ),
+          ],
+          if (overflowCount > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              alignment: Alignment.center,
+              child: Text('+$overflowCount',
+                  style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[700])),
+            ),
+          ],
+          if (_pendingEditRequestCount > 0) ...[
+            const SizedBox(width: 8),
+            InkWell(
+              onTap:
+                  widget.onNavigateToEditRequests ?? _showPendingEditRequests,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                    color: Colors.orange[700],
+                    borderRadius: BorderRadius.circular(12)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_open, size: 12, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text('$_pendingEditRequestCount pending',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
     return Container(
-      height: 40,
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
+        ),
+      ),
       child: Row(
         children: [
-          Icon(Icons.description, size: 18, color: Colors.green[700]),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              _currentSheet?.name ?? 'Untitled',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[800],
+          // ─ Back arrow (separate button) ─
+          Tooltip(
+            message: 'Back to Work Sheets',
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  _currentSheet = null;
+                  _selectedRow = null;
+                  _selectedCol = null;
+                  _selectionEndRow = null;
+                  _selectionEndCol = null;
+                  _editingRow = null;
+                  _editingCol = null;
+                });
+              },
+              borderRadius: BorderRadius.circular(6),
+              child: const Padding(
+                padding: EdgeInsets.all(5),
+                child: Icon(Icons.arrow_back_ios_new,
+                    size: 18, color: Color(0xFF5F6368)),
               ),
-              overflow: TextOverflow.ellipsis,
             ),
           ),
+          const SizedBox(width: 4),
+          // ─ Document icon (decorative) ─
+          Icon(Icons.description, size: 22, color: Colors.green[700]),
+          const SizedBox(width: 6),
+          // ─ Sheet name + editor hint ─
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 200),
+                child: Text(
+                  _currentSheet?.name ?? 'Untitled',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[800],
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isLockedByMe)
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.edit, size: 10, color: Colors.green[700]),
+                  const SizedBox(width: 3),
+                  Text('You are editing',
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.w500)),
+                ])
+              else if (isLockedByOther)
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.lock, size: 10, color: Colors.orange),
+                  const SizedBox(width: 3),
+                  Text('$_lockedByUser is editing',
+                      style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.orange,
+                          fontWeight: FontWeight.w500)),
+                ]),
+            ],
+          ),
           const SizedBox(width: 10),
-          // Save status shown for all non-viewer users
+          // ─ Save chip ─
           if (!widget.readOnly && !isViewer) saveChip(),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
+          // ─ Save button ─
           if (!widget.readOnly && !isViewer)
             ElevatedButton.icon(
               onPressed:
@@ -3508,6 +4021,61 @@ class _SheetScreenState extends State<SheetScreen> {
                     borderRadius: BorderRadius.circular(6)),
               ),
             ),
+          // ─ Center: QB Code / Product Name search bar ─
+          Expanded(
+            child: Center(
+              child: SizedBox(
+                width: 260,
+                height: 32,
+                child: TextField(
+                  controller: _inventorySearchController,
+                  decoration: InputDecoration(
+                    hintText: 'Product Name or QB Code…',
+                    hintStyle:
+                        const TextStyle(fontSize: 12, color: Color(0xFFAAAAAA)),
+                    prefixIcon: const Icon(Icons.search,
+                        size: 16, color: AppColors.primaryBlue),
+                    suffixIcon: _inventorySearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close,
+                                size: 14, color: Color(0xFF888888)),
+                            onPressed: () => setState(() {
+                              _inventorySearchQuery = '';
+                              _inventorySearchController.clear();
+                            }),
+                          )
+                        : null,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                    filled: true,
+                    fillColor: const Color(0xFFF5F5F5),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide:
+                          const BorderSide(color: Color(0xFFCCCCCC), width: 1),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide:
+                          const BorderSide(color: Color(0xFFCCCCCC), width: 1),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                          color: AppColors.primaryBlue, width: 1.5),
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                  onChanged: (v) =>
+                      setState(() => _inventorySearchQuery = v.trim()),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // ─ Presence avatars ─
+          presenceRow(),
+          const SizedBox(width: 4),
         ],
       ),
     );
@@ -3705,7 +4273,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 _isLocked ? 'Unlock' : 'Lock',
                 _isLocked ? (isLockedByMe ? _unlockSheet : null) : _lockSheet,
               ),
-              if (role == 'admin' && _currentSheet != null)
+              if ((role == 'admin' || role == 'editor') &&
+                  _currentSheet != null)
                 _buildRibbonButton(
                   _currentSheet!.shownToViewers
                       ? Icons.visibility
@@ -4297,8 +4866,9 @@ class _SheetScreenState extends State<SheetScreen> {
           ),
         if (canCollab) const SizedBox(width: 6),
 
-        // ── Show / Hide button (admin only) ──
-        if (userRole == 'admin' && _currentSheet != null)
+        // ── Show / Hide button (admin and editor) ──
+        if ((userRole == 'admin' || userRole == 'editor') &&
+            _currentSheet != null)
           _buildRibbonButton(
             _currentSheet!.shownToViewers
                 ? Icons.visibility
@@ -5656,8 +6226,9 @@ class _SheetScreenState extends State<SheetScreen> {
               : incomingRaw is num
                   ? incomingRaw.toInt()
                   : int.tryParse(incomingRaw.toString()) ?? -1;
-          if (incoming != _currentSheet!.id)
+          if (incoming != _currentSheet!.id) {
             return; // wrong sheet, skip silently
+          }
         }
 
         final rawList = data['users'];
@@ -5932,12 +6503,6 @@ class _SheetScreenState extends State<SheetScreen> {
     // Number of others to show (cap at 8 + overflow badge)
     final visibleOthers = others.take(8).toList();
     final overflowCount = others.length - visibleOthers.length;
-    // Width of overlapping stack: first avatar full width + each extra at 22px offset
-    const double _avatarSize = 34.0;
-    const double _overlapStep = 22.0;
-    final double othersWidth = visibleOthers.isEmpty
-        ? 0
-        : _avatarSize + (visibleOthers.length - 1) * _overlapStep;
 
     return Container(
       height: 48,
@@ -5964,26 +6529,17 @@ class _SheetScreenState extends State<SheetScreen> {
             const SizedBox(width: 6)
           ],
 
-          // ─── Others – overlapping stack ───
-          if (visibleOthers.isNotEmpty)
-            SizedBox(
-              height: _avatarSize,
-              width: othersWidth,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  for (int i = 0; i < visibleOthers.length; i++)
-                    Positioned(
-                      left: i * _overlapStep,
-                      child: _PresenceAvatar(
-                        presence: visibleOthers[i],
-                        isMe: false,
-                        zIndex: visibleOthers.length - i,
-                      ),
-                    ),
-                ],
+          // ─── Others – spaced row (no overlap) ───
+          if (visibleOthers.isNotEmpty) ...[
+            for (int i = 0; i < visibleOthers.length; i++) ...[
+              const SizedBox(width: 6),
+              _PresenceAvatar(
+                presence: visibleOthers[i],
+                isMe: false,
+                zIndex: visibleOthers.length - i,
               ),
-            ),
+            ],
+          ],
 
           // ─── Overflow count ───
           if (overflowCount > 0)
@@ -6630,12 +7186,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Widget _buildInventoryTrackerGrid() {
-    return Column(
-      children: [
-        _buildInventorySearchBar(),
-        Expanded(child: _buildInventoryTrackerGridContent()),
-      ],
-    );
+    return _buildInventoryTrackerGridContent();
   }
 
   Widget _buildInventoryTrackerGridContent() {
@@ -6707,10 +7258,18 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Total grid width
     double totalWidth = _rowNumWidth;
-    for (final _ in frozenLeft) totalWidth += _invFixedColW;
-    for (final _ in visibleDates) totalWidth += _invSubColW * 2;
-    for (final _ in miscCols) totalWidth += _invFixedColW;
-    for (final _ in frozenRight) totalWidth += _invFixedColW;
+    for (final _ in frozenLeft) {
+      totalWidth += _invFixedColW;
+    }
+    for (final _ in visibleDates) {
+      totalWidth += _invSubColW * 2;
+    }
+    for (final _ in miscCols) {
+      totalWidth += _invFixedColW;
+    }
+    for (final _ in frozenRight) {
+      totalWidth += _invFixedColW;
+    }
 
     // Approximate total height: two header rows + data rows.
     final double totalHeight =
@@ -6951,7 +7510,7 @@ class _SheetScreenState extends State<SheetScreen> {
     // usagePercent = TotalQty / MaintainingQty
     //   > 75%  → normal (navy)
     //   ≤ 75%  → red (critical alert)
-    Color? _totalQtyColor() {
+    Color? totalQtyColor() {
       final maintaining = double.tryParse(row['Maintaining'] ?? '');
       final total = double.tryParse(row['Total Quantity'] ?? '');
       if (maintaining == null || maintaining <= 0 || total == null) return null;
@@ -6975,7 +7534,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // For the Total Quantity cell, derive background + text colours from
       // the usage-percentage rule; fall back to the standard autoCalc colour.
       final bool isTotalQty = colKey == 'Total Quantity';
-      final Color? totalQtyFgColor = isTotalQty ? _totalQtyColor() : null;
+      final Color? totalQtyFgColor = isTotalQty ? totalQtyColor() : null;
       final Color? totalQtyBgColor = (isTotalQty &&
               totalQtyFgColor == const Color(0xFFC0392B))
           ? const Color(0xFFFFEBEE) // light red background for critical rows
@@ -8096,8 +8655,9 @@ class _SheetScreenState extends State<SheetScreen> {
                   Builder(builder: (_) {
                     final cellRef = _getCellReference(rowIndex, colIndex);
                     final userIds = _cellPresenceUserIds[cellRef];
-                    if (userIds == null || userIds.isEmpty)
+                    if (userIds == null || userIds.isEmpty) {
                       return const SizedBox.shrink();
+                    }
                     final firstId = userIds.first;
                     final presenceUser = _presenceInfoMap[firstId] ??
                         _presenceUsers
@@ -8584,121 +9144,135 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
     final offset = box.localToGlobal(Offset.zero);
     final size = box.size;
     final isEditing = p.currentCell != null;
+    const popupWidth = 240.0;
 
     _overlay = OverlayEntry(
-      builder: (_) => Positioned(
-        left: offset.dx - 8,
-        top: offset.dy + size.height + 6,
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            constraints: const BoxConstraints(minWidth: 180, maxWidth: 240),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2533),
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.28),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ── Avatar + name header ──
-                Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: p.color,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.3), width: 2),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(p.initials,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold)),
-                    ),
-                    const SizedBox(width: 10),
-                    Flexible(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.isMe ? '${p.fullName} (You)' : p.fullName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (p.fullName != p.username)
-                            Text('@${p.username}',
-                                style: TextStyle(
-                                    color: Colors.grey.shade400, fontSize: 10)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                const Divider(color: Color(0xFF2E3A4E), height: 1),
-                const SizedBox(height: 8),
-                // ── Role ──
-                _TooltipRow(
-                  icon: Icons.shield_outlined,
-                  label: 'Role',
-                  text: p.role.isEmpty ? 'Unknown' : _capitalize(p.role),
-                ),
-                // ── Department ──
-                if (p.departmentName != null)
-                  _TooltipRow(
-                    icon: Icons.business_outlined,
-                    label: 'Dept',
-                    text: p.departmentName!,
+      builder: (overlayCtx) {
+        final screenWidth = MediaQuery.of(overlayCtx).size.width;
+        // If popup would overflow the right edge, right-align it to the avatar.
+        double left;
+        if (offset.dx - 8 + popupWidth > screenWidth - 8) {
+          left = (offset.dx + size.width - popupWidth)
+              .clamp(8.0, screenWidth - popupWidth - 8);
+        } else {
+          left = offset.dx - 8;
+        }
+        return Positioned(
+          left: left,
+          top: offset.dy + size.height + 6,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 180, maxWidth: 240),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2533),
+                borderRadius: BorderRadius.circular(10),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.28),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
                   ),
-                const SizedBox(height: 4),
-                // ── Status ──
-                _TooltipRow(
-                  icon: isEditing
-                      ? Icons.edit_outlined
-                      : Icons.visibility_outlined,
-                  label: 'Status',
-                  text: isEditing ? 'Editing cell ${p.currentCell}' : 'Viewing',
-                  highlight: isEditing,
-                ),
-                // ── Online indicator ──
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                          color: Color(0xFF22C55E), shape: BoxShape.circle),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ── Avatar + name header ──
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: p.color,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.3), width: 2),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(p.initials,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.isMe ? '${p.fullName} (You)' : p.fullName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (p.fullName != p.username)
+                              Text('@${p.username}',
+                                  style: TextStyle(
+                                      color: Colors.grey.shade400,
+                                      fontSize: 10)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Divider(color: Color(0xFF2E3A4E), height: 1),
+                  const SizedBox(height: 8),
+                  // ── Role ──
+                  _TooltipRow(
+                    icon: Icons.shield_outlined,
+                    label: 'Role',
+                    text: p.role.isEmpty ? 'Unknown' : _capitalize(p.role),
+                  ),
+                  // ── Department ──
+                  if (p.departmentName != null)
+                    _TooltipRow(
+                      icon: Icons.business_outlined,
+                      label: 'Dept',
+                      text: p.departmentName!,
                     ),
-                    const SizedBox(width: 5),
-                    const Text('Online',
-                        style:
-                            TextStyle(fontSize: 10, color: Color(0xFF86EFAC))),
-                  ],
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  // ── Status ──
+                  _TooltipRow(
+                    icon: isEditing
+                        ? Icons.edit_outlined
+                        : Icons.visibility_outlined,
+                    label: 'Status',
+                    text:
+                        isEditing ? 'Editing cell ${p.currentCell}' : 'Viewing',
+                    highlight: isEditing,
+                  ),
+                  // ── Online indicator ──
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                            color: Color(0xFF22C55E), shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 5),
+                      const Text('Online',
+                          style: TextStyle(
+                              fontSize: 10, color: Color(0xFF86EFAC))),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
 
     Overlay.of(context).insert(_overlay!);
