@@ -5875,6 +5875,15 @@ class _SheetScreenState extends State<SheetScreen> {
     final authId = authUser?.id ?? -1;
     final me = effective.where((u) => u.userId == authId).firstOrNull;
     final others = effective.where((u) => u.userId != authId).toList();
+    // Number of others to show (cap at 8 + overflow badge)
+    final visibleOthers = others.take(8).toList();
+    final overflowCount = others.length - visibleOthers.length;
+    // Width of overlapping stack: first avatar full width + each extra at 22px offset
+    const double _avatarSize = 34.0;
+    const double _overlapStep = 22.0;
+    final double othersWidth = visibleOthers.isEmpty
+        ? 0
+        : _avatarSize + (visibleOthers.length - 1) * _overlapStep;
 
     return Container(
       height: 48,
@@ -5889,38 +5898,52 @@ class _SheetScreenState extends State<SheetScreen> {
         children: [
           const Icon(Icons.group_outlined, size: 14, color: Colors.grey),
           const SizedBox(width: 6),
-          const Text('In this sheet:',
-              style: TextStyle(fontSize: 11, color: Colors.grey)),
-          const SizedBox(width: 10),
+          Text(
+            'In this sheet: ${effective.length} user${effective.length == 1 ? '' : 's'}',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+          const SizedBox(width: 12),
 
-          // ─── "You" avatar ───
-          if (me != null)
-            _PresenceAvatar(
-              presence: me,
-              isMe: true,
-              label: 'You',
+          // ─── "You" avatar (always leftmost) ───
+          if (me != null) ...[
+            _PresenceAvatar(presence: me, isMe: true),
+            const SizedBox(width: 6)
+          ],
+
+          // ─── Others – overlapping stack ───
+          if (visibleOthers.isNotEmpty)
+            SizedBox(
+              height: _avatarSize,
+              width: othersWidth,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (int i = 0; i < visibleOthers.length; i++)
+                    Positioned(
+                      left: i * _overlapStep,
+                      child: _PresenceAvatar(
+                        presence: visibleOthers[i],
+                        isMe: false,
+                        zIndex: visibleOthers.length - i,
+                      ),
+                    ),
+                ],
+              ),
             ),
-          if (me != null && others.isNotEmpty) const SizedBox(width: 2),
-
-          // ─── Others (overlapping stack style) ───
-          ...others.take(9).map((u) => Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: _PresenceAvatar(presence: u, isMe: false),
-              )),
 
           // ─── Overflow count ───
-          if (others.length > 9)
+          if (overflowCount > 0)
             Container(
-              margin: const EdgeInsets.only(left: 2),
-              width: 32,
-              height: 32,
+              margin: const EdgeInsets.only(left: 6),
+              width: 34,
+              height: 34,
               decoration: BoxDecoration(
                 color: Colors.grey[300],
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 2),
               ),
               alignment: Alignment.center,
-              child: Text('+${others.length - 9}',
+              child: Text('+$overflowCount',
                   style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
@@ -8469,12 +8492,12 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
 class _PresenceAvatar extends StatefulWidget {
   final CellPresence presence;
   final bool isMe;
-  final String? label; // override display label (e.g. "You")
+  final int zIndex; // controls Stack z-ordering
 
   const _PresenceAvatar({
     required this.presence,
     required this.isMe,
-    this.label,
+    this.zIndex = 0,
   });
 
   @override
@@ -8483,6 +8506,7 @@ class _PresenceAvatar extends StatefulWidget {
 
 class _PresenceAvatarState extends State<_PresenceAvatar> {
   bool _hovered = false;
+  bool _pinned = false; // popover stays open after tap
   OverlayEntry? _overlay;
   final _key = GlobalKey();
 
@@ -8505,6 +8529,7 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
     if (box == null) return;
     final offset = box.localToGlobal(Offset.zero);
     final size = box.size;
+    final isEditing = p.currentCell != null;
 
     _overlay = OverlayEntry(
       builder: (_) => Positioned(
@@ -8513,15 +8538,15 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
         child: Material(
           color: Colors.transparent,
           child: Container(
-            constraints: const BoxConstraints(minWidth: 160, maxWidth: 220),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            constraints: const BoxConstraints(minWidth: 180, maxWidth: 240),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: const Color(0xFF1E2533),
               borderRadius: BorderRadius.circular(10),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.25),
-                  blurRadius: 10,
+                  color: Colors.black.withOpacity(0.28),
+                  blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
               ],
@@ -8530,7 +8555,76 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Name row ──
+                // ── Avatar + name header ──
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: p.color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: Colors.white.withOpacity(0.3), width: 2),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(p.initials,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.isMe ? '${p.fullName} (You)' : p.fullName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (p.fullName != p.username)
+                            Text('@${p.username}',
+                                style: TextStyle(
+                                    color: Colors.grey.shade400, fontSize: 10)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Divider(color: Color(0xFF2E3A4E), height: 1),
+                const SizedBox(height: 8),
+                // ── Role ──
+                _TooltipRow(
+                  icon: Icons.shield_outlined,
+                  label: 'Role',
+                  text: p.role.isEmpty ? 'Unknown' : _capitalize(p.role),
+                ),
+                // ── Department ──
+                if (p.departmentName != null)
+                  _TooltipRow(
+                    icon: Icons.business_outlined,
+                    label: 'Dept',
+                    text: p.departmentName!,
+                  ),
+                const SizedBox(height: 4),
+                // ── Status ──
+                _TooltipRow(
+                  icon: isEditing
+                      ? Icons.edit_outlined
+                      : Icons.visibility_outlined,
+                  label: 'Status',
+                  text: isEditing ? 'Editing cell ${p.currentCell}' : 'Viewing',
+                  highlight: isEditing,
+                ),
+                // ── Online indicator ──
+                const SizedBox(height: 6),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -8538,51 +8632,14 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
                       width: 8,
                       height: 8,
                       decoration: const BoxDecoration(
-                        color: Color(0xFF22C55E), // green dot = active
-                        shape: BoxShape.circle,
-                      ),
+                          color: Color(0xFF22C55E), shape: BoxShape.circle),
                     ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        widget.isMe ? '${p.username} (You)' : p.username,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
+                    const SizedBox(width: 5),
+                    const Text('Online',
+                        style:
+                            TextStyle(fontSize: 10, color: Color(0xFF86EFAC))),
                   ],
                 ),
-                const SizedBox(height: 6),
-                // ── Role ──
-                _TooltipRow(
-                  icon: Icons.shield_outlined,
-                  text: p.role.isEmpty ? 'Unknown role' : p.role,
-                ),
-                // ── Department ──
-                if (p.departmentName != null)
-                  _TooltipRow(
-                    icon: Icons.business,
-                    text: p.departmentName!,
-                  ),
-                // ── Currently editing cell ──
-                if (p.currentCell != null) ...[
-                  const SizedBox(height: 4),
-                  _TooltipRow(
-                    icon: Icons.edit_outlined,
-                    text: 'Editing cell ${p.currentCell}',
-                    highlight: true,
-                  ),
-                ] else ...[
-                  const SizedBox(height: 4),
-                  _TooltipRow(
-                    icon: Icons.visibility_outlined,
-                    text: 'Viewing',
-                  ),
-                ],
               ],
             ),
           ),
@@ -8593,97 +8650,122 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
     Overlay.of(context).insert(_overlay!);
   }
 
+  static String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
       key: _key,
       onEnter: (_) {
         setState(() => _hovered = true);
-        _showOverlay();
+        if (!_pinned) _showOverlay();
       },
       onExit: (_) {
         setState(() => _hovered = false);
-        _removeOverlay();
+        if (!_pinned) _removeOverlay();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: _hovered ? Colors.white : Colors.white,
-            width: 2.5,
+      child: GestureDetector(
+        onTap: () {
+          setState(() => _pinned = !_pinned);
+          if (_pinned) {
+            _showOverlay();
+          } else {
+            _removeOverlay();
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white,
+              width: 2.5,
+            ),
+            boxShadow: (_hovered || _pinned)
+                ? [
+                    BoxShadow(
+                      color: p.color.withOpacity(0.55),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : [],
           ),
-          boxShadow: _hovered
-              ? [
-                  BoxShadow(
-                    color: p.color.withOpacity(0.55),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  )
-                ]
-              : [],
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // ── Main circle ──
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: p.color,
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                p.initials,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0,
-                ),
-              ),
-            ),
-            // ── Green active dot (bottom-right) ──
-            Positioned(
-              bottom: 0,
-              right: 0,
-              child: Container(
-                width: 10,
-                height: 10,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // ── Main circle ──
+              Container(
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF22C55E),
+                  color: p.color,
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 1.5),
                 ),
-              ),
-            ),
-            // ── "You" label (top-right) for current user ──
-            if (widget.isMe)
-              Positioned(
-                top: -6,
-                right: -6,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryBlue,
-                    borderRadius: BorderRadius.circular(6),
+                alignment: Alignment.center,
+                child: Text(
+                  p.initials,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0,
                   ),
-                  child: const Text('You',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 7,
-                          fontWeight: FontWeight.bold)),
                 ),
               ),
-          ],
-        ),
-      ),
-    );
+              // ── Green active dot (bottom-right) ──
+              Positioned(
+                bottom: 0,
+                right: 0,
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF22C55E),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                ),
+              ),
+              // ── "You" label (top-right) for current user ──
+              if (widget.isMe)
+                Positioned(
+                  top: -6,
+                  right: -6,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryBlue,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text('You',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 7,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              // ── Pinned indicator ring ──
+              if (_pinned)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ), // closes Stack
+        ), // closes AnimatedContainer
+      ), // closes GestureDetector
+    ); // closes MouseRegion
   }
 }
 
@@ -8691,22 +8773,34 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
 class _TooltipRow extends StatelessWidget {
   final IconData icon;
   final String text;
+  final String? label;
   final bool highlight;
   const _TooltipRow(
-      {required this.icon, required this.text, this.highlight = false});
+      {required this.icon,
+      required this.text,
+      this.label,
+      this.highlight = false});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.only(top: 4),
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon,
-              size: 11,
+              size: 12,
               color:
                   highlight ? const Color(0xFF86EFAC) : Colors.grey.shade400),
           const SizedBox(width: 5),
+          if (label != null) ...[
+            Text('$label: ',
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade500,
+                    fontWeight: FontWeight.w500)),
+          ],
           Flexible(
             child: Text(
               text,

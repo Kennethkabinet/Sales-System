@@ -19,6 +19,7 @@ const List<Color> kPresenceColors = [
 class CellPresence {
   final int userId;
   final String username;
+  final String fullName; // display name (falls back to username)
   final String role;
   final String? departmentName;
   final String? currentCell; // e.g. "B4"
@@ -26,14 +27,16 @@ class CellPresence {
   const CellPresence({
     required this.userId,
     required this.username,
+    String? fullName,
     required this.role,
     this.departmentName,
     this.currentCell,
-  });
+  }) : fullName = fullName ?? username;
 
   factory CellPresence.fromJson(Map<String, dynamic> j) => CellPresence(
         userId: (j['user_id'] as num).toInt(),
         username: j['username'] as String? ?? '',
+        fullName: j['full_name'] as String?,
         role: j['role'] as String? ?? '',
         departmentName: j['department_name'] as String?,
         currentCell: j['current_cell'] as String?,
@@ -48,6 +51,7 @@ class CellPresence {
   CellPresence copyWith({String? currentCell}) => CellPresence(
         userId: userId,
         username: username,
+        fullName: fullName,
         role: role,
         departmentName: departmentName,
         currentCell: currentCell ?? this.currentCell,

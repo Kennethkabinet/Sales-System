@@ -44,7 +44,7 @@ class CollaborationHandler {
         
         // Get user info (including department name for presence)
         const result = await pool.query(`
-          SELECT u.id, u.username, u.department_id, r.name as role,
+          SELECT u.id, u.username, u.full_name, u.department_id, r.name as role,
                  d.name as department_name
           FROM users u
           LEFT JOIN roles r ON u.role_id = r.id
@@ -397,6 +397,7 @@ class CollaborationHandler {
       this.sheetPresence.get(sheet_id).set(socket.id, {
         userId:         socket.user.id,
         username:       socket.user.username,
+        fullName:       socket.user.full_name || socket.user.username,
         role:           socket.user.role,
         departmentName: socket.user.department_name || null,
         currentCell:    null,
@@ -556,6 +557,7 @@ class CollaborationHandler {
       ? Array.from(presence.values()).map(p => ({
           user_id:         p.userId,
           username:        p.username,
+          full_name:       p.fullName || p.username,
           role:            p.role,
           department_name: p.departmentName,
           current_cell:    p.currentCell
