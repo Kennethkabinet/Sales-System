@@ -182,4 +182,205 @@ router.get('/active-editors', authenticate, requireAdminAccess, async (req, res)
   }
 });
 
+// GET /dashboard/inventory-sheets – Returns list of active inventory tracker sheets (Admin only)
+router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, name, created_at FROM sheets
+      WHERE is_active = TRUE AND name ILIKE '%inventory%'
+      ORDER BY created_at ASC
+    `);
+    res.json({ success: true, sheets: result.rows });
+  } catch (error) {
+    console.error('GET /dashboard/inventory-sheets error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get inventory sheets' } });
+  }
+});
+
+// GET /dashboard/inventory-overview – Reads from Inventory Tracker sheets (Admin only)
+router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    // ── 1. Resolve sheet IDs: use ?sheet_ids=43,52 if provided, else all inventory sheets ─
+    let sheetIds;
+    if (req.query.sheet_ids) {
+      const parsed = req.query.sheet_ids.split(',').map(Number).filter(n => !isNaN(n) && n > 0);
+      if (parsed.length > 0) sheetIds = parsed;
+    }
+
+    if (!sheetIds) {
+      const sheetsRes = await pool.query(`
+        SELECT id FROM sheets
+        WHERE is_active = TRUE AND name ILIKE '%inventory%'
+        ORDER BY id ASC
+      `);
+      sheetIds = sheetsRes.rows.map(r => r.id);
+    }
+
+    const emptyResponse = {
+      success: true,
+      summary: {
+        total_materials: 0, total_stock_qty: 0,
+        low_stock_count: 0, out_of_stock_count: 0,
+        total_purchases_this_month: 0, total_used_this_month: 0,
+      },
+      monthly_trend: [], category_breakdown: [],
+      ink_breakdown: [], low_stock_items: [],
+    };
+
+    if (!sheetIds.length) return res.json(emptyResponse);
+
+    // ── 2. Fetch all non-empty product rows from those sheets ───────────────
+    const rowsRes = await pool.query(`
+      SELECT sheet_id, data
+      FROM sheet_data
+      WHERE sheet_id = ANY($1)
+        AND data->>'Product Name' IS NOT NULL
+        AND TRIM(data->>'Product Name') != ''
+      ORDER BY sheet_id ASC
+    `, [sheetIds]);
+
+    if (!rowsRes.rows.length) return res.json(emptyResponse);
+
+    // ── 3. Process rows ─────────────────────────────────────────────────────
+    // productMap: keyed by product name; newer sheets overwrite current_stock & maintaining
+    // seenDateKeys: Set of "productName|date|type" to avoid double-counting same date across sheets
+    const productMap = {};   // name → { name, qc_code, maintaining_qty, current_stock, total_out }
+    const seenDateKeys = new Set();
+    const dateInMap  = {};   // "YYYY-MM-DD" → total qty IN
+    const dateOutMap = {};   // "YYYY-MM-DD" → total qty OUT
+    const productOutMap = {}; // name → total qty OUT (for ink breakdown)
+
+    for (const row of rowsRes.rows) {
+      const d = row.data;
+      const name = (d['Product Name'] || '').trim();
+      if (!name) continue;
+
+      const maintaining = parseFloat(d['Maintaining']) || 0;
+      const totalQty    = parseFloat(d['Total Quantity']) || 0;
+
+      // Upsert product; latest sheet wins on current_stock / maintaining
+      if (!productMap[name]) {
+        productMap[name] = { name, qc_code: d['QC Code'] || '', maintaining_qty: 0, current_stock: 0 };
+        productOutMap[name] = 0;
+      }
+      productMap[name].maintaining_qty = maintaining;
+      productMap[name].current_stock   = totalQty;
+      if (d['QC Code']) productMap[name].qc_code = d['QC Code'];
+
+      // Accumulate date columns (DATE:YYYY-MM-DD:IN / OUT)
+      for (const [key, val] of Object.entries(d)) {
+        const m = key.match(/^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/);
+        if (!m) continue;
+        const qty = parseFloat(val) || 0;
+        if (qty <= 0) continue;
+
+        const dateKey = `${name}|${m[1]}|${m[2]}`;
+        if (seenDateKeys.has(dateKey)) continue; // skip duplicate date entries across sheets
+        seenDateKeys.add(dateKey);
+
+        const [, date, type] = m;
+        if (type === 'IN') {
+          dateInMap[date]  = (dateInMap[date]  || 0) + qty;
+        } else {
+          dateOutMap[date] = (dateOutMap[date] || 0) + qty;
+          productOutMap[name] = (productOutMap[name] || 0) + qty;
+        }
+      }
+    }
+
+    const products = Object.values(productMap);
+
+    // ── 4. Summary stats ────────────────────────────────────────────────────
+    const now = new Date();
+    const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    let totalPurchasesThisMonth = 0;
+    let totalUsedThisMonth      = 0;
+    for (const [date, qty] of Object.entries(dateInMap)) {
+      if (date.startsWith(currentMonthPrefix)) totalPurchasesThisMonth += qty;
+    }
+    for (const [date, qty] of Object.entries(dateOutMap)) {
+      if (date.startsWith(currentMonthPrefix)) totalUsedThisMonth += qty;
+    }
+
+    const summary = {
+      total_materials:            products.length,
+      total_stock_qty:            products.reduce((s, p) => s + p.current_stock, 0),
+      low_stock_count:            products.filter(p => p.current_stock > 0 && p.maintaining_qty > 0 && p.current_stock <= p.maintaining_qty).length,
+      out_of_stock_count:         products.filter(p => p.current_stock <= 0).length,
+      total_purchases_this_month: Math.round(totalPurchasesThisMonth),
+      total_used_this_month:      Math.round(totalUsedThisMonth),
+    };
+
+    // ── 5. Monthly trend ────────────────────────────────────────────────────
+    const monthlyMap = {};
+    const allDates = new Set([...Object.keys(dateInMap), ...Object.keys(dateOutMap)]);
+    for (const date of allDates) {
+      const month = date.substring(0, 7); // "YYYY-MM"
+      if (!monthlyMap[month]) monthlyMap[month] = { stock_in: 0, stock_out: 0 };
+      monthlyMap[month].stock_in  += (dateInMap[date]  || 0);
+      monthlyMap[month].stock_out += (dateOutMap[date] || 0);
+    }
+    const monthlyTrend = Object.entries(monthlyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, v]) => {
+        const d = new Date(month + '-02');
+        const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+        return { month_label: label, stock_in: Math.round(v.stock_in), stock_out: Math.round(v.stock_out) };
+      });
+
+    // ── 6. Category breakdown ───────────────────────────────────────────────
+    const categoryMap = {};
+    for (const p of products) {
+      const n = p.name.toLowerCase();
+      const cat =
+        /ink|cyan|magenta|yellow|black/.test(n)           ? 'Ink'        :
+        /paper|bond|cardboard|sticker|art paper/.test(n)  ? 'Paper'      :
+        /tarp|vinyl|mesh|canvas|backlit/.test(n)           ? 'Tarpaulin'  : 'Others';
+      if (!categoryMap[cat]) categoryMap[cat] = { category: cat, material_count: 0, total_stock: 0 };
+      categoryMap[cat].material_count++;
+      categoryMap[cat].total_stock += p.current_stock;
+    }
+    const categoryBreakdown = Object.values(categoryMap).sort((a, b) => b.total_stock - a.total_stock);
+
+    // ── 7. Ink consumption breakdown ────────────────────────────────────────
+    const inkMap = {};
+    for (const [name, totalOut] of Object.entries(productOutMap)) {
+      if (totalOut <= 0) continue;
+      const n = name.toLowerCase();
+      const inkType =
+        /cyan/.test(n)    ? 'Cyan'      :
+        /magenta/.test(n) ? 'Magenta'   :
+        /yellow/.test(n)  ? 'Yellow'    :
+        /black/.test(n)   ? 'Black'     :
+        /ink/.test(n)     ? 'Other Ink' : null;
+      if (!inkType) continue;
+      inkMap[inkType] = (inkMap[inkType] || 0) + totalOut;
+    }
+    const inkBreakdown = Object.entries(inkMap)
+      .map(([ink_type, total_used]) => ({ ink_type, total_used: Math.round(total_used) }))
+      .sort((a, b) => b.total_used - a.total_used);
+
+    // ── 8. Low-stock alert list ─────────────────────────────────────────────
+    const lowStockItems = products
+      .filter(p => p.maintaining_qty > 0 && p.current_stock <= p.maintaining_qty)
+      .sort((a, b) => a.current_stock - b.current_stock)
+      .map((p, i) => ({
+        id:              i + 1,
+        product_name:    p.name,
+        qc_code:         p.qc_code,
+        current_stock:   Math.round(p.current_stock),
+        maintaining_qty: Math.round(p.maintaining_qty),
+        critical_qty:    0,
+        stock_status:    p.current_stock <= 0 ? 'critical' : 'warning',
+      }));
+
+    res.json({ success: true, summary, monthly_trend: monthlyTrend, category_breakdown: categoryBreakdown, ink_breakdown: inkBreakdown, low_stock_items: lowStockItems });
+
+  } catch (error) {
+    console.error('GET /dashboard/inventory-overview error:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get inventory overview' } });
+  }
+});
+
 module.exports = router;

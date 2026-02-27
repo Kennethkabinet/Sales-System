@@ -30,6 +30,8 @@ class DataProvider extends ChangeNotifier {
   // Dashboard
   DashboardStats? _dashboardStats;
   AuditSummary? _auditSummary;
+  InventoryDashboardData? _inventoryDashboardData;
+  List<Map<String, dynamic>> _inventorySheets = [];
 
   // Collaboration
   List<ActiveUser> _activeUsers = [];
@@ -52,6 +54,8 @@ class DataProvider extends ChangeNotifier {
   List<AuditLog> get auditLogs => _auditLogs;
   DashboardStats? get dashboardStats => _dashboardStats;
   AuditSummary? get auditSummary => _auditSummary;
+  InventoryDashboardData? get inventoryDashboardData => _inventoryDashboardData;
+  List<Map<String, dynamic>> get inventorySheets => _inventorySheets;
   List<ActiveUser> get activeUsers => _activeUsers;
   Map<String, String> get lockedRows => _lockedRows;
   bool get isLoading => _isLoading;
@@ -524,6 +528,30 @@ class DataProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> loadInventorySheets() async {
+    try {
+      _inventorySheets = await ApiService.getInventorySheets();
+      notifyListeners();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadInventoryDashboard({List<int>? sheetIds}) async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      _inventoryDashboardData = await ApiService.getInventoryOverview(sheetIds: sheetIds);
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
   // ============== Audit Logs ==============
 
   Future<void> loadAuditLogs({
@@ -564,6 +592,7 @@ class DataProvider extends ChangeNotifier {
     _auditLogs = [];
     _dashboardStats = null;
     _auditSummary = null;
+    _inventoryDashboardData = null;
     _error = null;
     notifyListeners();
   }

@@ -481,6 +481,23 @@ class ApiService {
     return DashboardStats.fromJson(response);
   }
 
+  static Future<List<Map<String, dynamic>>> getInventorySheets() async {
+    final response = await _get(ApiEndpoints.inventorySheets);
+    return (response['sheets'] as List)
+        .map((s) => Map<String, dynamic>.from(s as Map))
+        .toList();
+  }
+
+  static Future<InventoryDashboardData> getInventoryOverview(
+      {List<int>? sheetIds}) async {
+    String url = ApiEndpoints.inventoryOverview;
+    if (sheetIds != null && sheetIds.isNotEmpty) {
+      url += '?sheet_ids=${sheetIds.join(',')}';
+    }
+    final response = await _get(url);
+    return InventoryDashboardData.fromJson(response);
+  }
+
   static Future<List<RecentActivity>> getRecentActivity(
       {int limit = 10}) async {
     final response = await _get('${ApiEndpoints.recentActivity}?limit=$limit');
@@ -1053,6 +1070,37 @@ class DashboardStats {
           .map<DashboardActiveUser>((item) =>
               DashboardActiveUser.fromJson(Map<String, dynamic>.from(item)))
           .toList(),
+    );
+  }
+}
+
+// ─── Inventory Dashboard Data ─────────────────────────────────────────────────
+class InventoryDashboardData {
+  final Map<String, dynamic> summary;
+  final List<Map<String, dynamic>> monthlyTrend;
+  final List<Map<String, dynamic>> categoryBreakdown;
+  final List<Map<String, dynamic>> inkBreakdown;
+  final List<Map<String, dynamic>> lowStockItems;
+
+  InventoryDashboardData({
+    required this.summary,
+    required this.monthlyTrend,
+    required this.categoryBreakdown,
+    required this.inkBreakdown,
+    required this.lowStockItems,
+  });
+
+  factory InventoryDashboardData.fromJson(Map<String, dynamic> json) {
+    return InventoryDashboardData(
+      summary: Map<String, dynamic>.from(json['summary'] ?? {}),
+      monthlyTrend: List<Map<String, dynamic>>.from(
+          (json['monthly_trend'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+      categoryBreakdown: List<Map<String, dynamic>>.from(
+          (json['category_breakdown'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+      inkBreakdown: List<Map<String, dynamic>>.from(
+          (json['ink_breakdown'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+      lowStockItems: List<Map<String, dynamic>>.from(
+          (json['low_stock_items'] ?? []).map((e) => Map<String, dynamic>.from(e))),
     );
   }
 }

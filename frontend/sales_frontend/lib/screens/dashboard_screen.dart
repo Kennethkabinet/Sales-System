@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import '../providers/auth_provider.dart';
 import '../providers/data_provider.dart';
 import '../config/constants.dart';
+import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
@@ -487,112 +488,344 @@ class _NavItem {
 // ═══════════════════════════════════════════════════════
 //  DASHBOARD CONTENT (main area)
 // ═══════════════════════════════════════════════════════
-class _DashboardContent extends StatelessWidget {
+class _DashboardContent extends StatefulWidget {
   const _DashboardContent();
+
+  @override
+  State<_DashboardContent> createState() => _DashboardContentState();
+}
+
+class _DashboardContentState extends State<_DashboardContent> {
+  final _searchCtrl = TextEditingController();
+  int _alertPage = 0;
+  static const int _alertPageSize = 8;
+
+  // Sheet filter state
+  List<Map<String, dynamic>> _sheets = [];
+  Set<int> _selectedSheetIds = {}; // empty = all sheets
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final data = context.read<DataProvider>();
+      // Load available sheets for the filter, then load dashboard
+      data.loadInventorySheets().then((_) {
+        if (mounted) setState(() => _sheets = data.inventorySheets);
+      });
+      data.loadInventoryDashboard();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _applySheetFilter(Set<int> ids) {
+    setState(() => _selectedSheetIds = ids);
+    context.read<DataProvider>().loadInventoryDashboard(
+      sheetIds: ids.isEmpty ? null : ids.toList(),
+    );
+  }
+
+  Widget _buildSheetFilter() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          )
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.filter_list_rounded, size: 18,
+              color: Color(0xFF5F6368)),
+          const SizedBox(width: 8),
+          const Text(
+            'Filter by Sheet:',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF5F6368),
+              letterSpacing: 0.1,
+            ),
+          ),
+          const SizedBox(width: 12),
+          _SheetDropdown(
+            sheets: _sheets,
+            selectedIds: _selectedSheetIds,
+            onChanged: _applySheetFilter,
+          ),
+          if (_selectedSheetIds.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _applySheetFilter({}),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: const Text(
+                  'Clear',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF5F6368),
+                      fontWeight: FontWeight.w500),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Consumer<DataProvider>(
       builder: (context, data, _) {
-        if (data.isLoading && data.dashboardStats == null) {
-          return const Center(child: CircularProgressIndicator());
+        final inv = data.inventoryDashboardData;
+
+        if (data.isLoading && inv == null) {
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Loading dashboard…',
+                    style: TextStyle(color: Color(0xFF5F6368))),
+              ],
+            ),
+          );
         }
 
-        final stats = data.dashboardStats;
+        // Low-stock alert filtering + pagination
+        final allAlerts = inv?.lowStockItems ?? [];
+        final query = _searchCtrl.text.toLowerCase();
+        final filtered = query.isEmpty
+            ? allAlerts
+            : allAlerts
+                .where((i) => (i['product_name'] as String? ?? '')
+                    .toLowerCase()
+                    .contains(query))
+                .toList();
+        final pageCount =
+            ((filtered.length) / _alertPageSize).ceil().clamp(1, 999);
+        final safeAlertPage = _alertPage.clamp(0, pageCount - 1);
+        final pagedAlerts = filtered
+            .skip(safeAlertPage * _alertPageSize)
+            .take(_alertPageSize)
+            .toList();
 
         return RefreshIndicator(
-          onRefresh: () => data.loadDashboard(),
+          onRefresh: () => data.loadInventoryDashboard(
+            sheetIds: _selectedSheetIds.isEmpty ? null : _selectedSheetIds.toList(),
+          ),
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Stats cards row
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final cardWidth =
-                        (constraints.maxWidth - 48) / 4; // 3 gaps × 16
-                    return Row(
-                      children: [
-                        _StatCard(
-                          title: 'Total Files',
-                          value: stats?.totalFiles.toString() ?? '0',
-                          icon: Icons.folder_outlined,
-                          color: AppColors.primaryBlue,
-                          width: cardWidth,
-                        ),
-                        const SizedBox(width: 16),
-                        _StatCard(
-                          title: 'Total Records',
-                          value: stats?.totalRecords.toString() ?? '0',
-                          icon: Icons.menu,
-                          color: AppColors.primaryRed,
-                          width: cardWidth,
-                        ),
-                        const SizedBox(width: 16),
-                        _StatCard(
-                          title: 'Active Users',
-                          value: stats?.activeUsers.toString() ?? '0',
-                          icon: Icons.people_alt_outlined,
-                          color: AppColors.primaryBlue,
-                          width: cardWidth,
-                        ),
-                        const SizedBox(width: 16),
-                        _StatCard(
-                          title: 'Recent Changes',
-                          value: stats?.recentChanges.toString() ?? '0',
-                          icon: Icons.edit_outlined,
-                          color: AppColors.primaryRed,
-                          width: cardWidth,
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
+                // ── Sheet filter bar ────────────────────────────────────
+                if (_sheets.isNotEmpty) ...[  
+                  _buildSheetFilter(),
+                  const SizedBox(height: 20),
+                ],
 
-                // Charts row
+                // ── Section: Summary Cards ────────────────────────────────
+                _SectionTitle(title: 'Inventory Summary'),
+                const SizedBox(height: 14),
+                _buildStatCards(inv),
+                const SizedBox(height: 28),
+
+                // ── Section: Stock Analytics ────────────────────────────
+                _SectionTitle(title: 'Stock Analytics'),
+                const SizedBox(height: 14),
+
+                // Row 2 – Line chart + Category bar
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
-                      flex: 2,
-                      child: _ChartCard(
-                        title: 'Activity (Last 7 Days)',
+                      child: _DashCard(
+                        title: 'Monthly Usage Trend',
+                        icon: Icons.trending_up_rounded,
+                        iconColor: AppColors.primaryBlue,
                         child: SizedBox(
-                          height: 250,
-                          child: stats != null && stats.activityData.isNotEmpty
-                              ? _ActivityChart(data: stats.activityData)
-                              : const Center(child: Text('No activity data')),
+                          height: 240,
+                          child: inv != null && inv.monthlyTrend.isNotEmpty
+                              ? _MonthlyUsageChart(data: inv.monthlyTrend)
+                              : const _EmptyChart(
+                                  message: 'No monthly data yet'),
                         ),
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
-                      child: _ChartCard(
-                        title: 'Files by Type',
+                      child: _DashCard(
+                        title: 'Stock by Category',
+                        icon: Icons.bar_chart_rounded,
+                        iconColor: const Color(0xFF0277BD),
                         child: SizedBox(
-                          height: 250,
-                          child: stats != null && stats.fileTypes.isNotEmpty
-                              ? _FileTypesChart(data: stats.fileTypes)
-                              : const Center(child: Text('No files')),
+                          height: 240,
+                          child: inv != null &&
+                                  inv.categoryBreakdown.isNotEmpty
+                              ? _CategoryBarChart(
+                                  data: inv.categoryBreakdown)
+                              : const _EmptyChart(
+                                  message: 'No category data yet'),
                         ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
 
-                // Recent activity
-                _ChartCard(
-                  title: 'Recent Activity',
-                  child: stats != null && stats.recentActivity.isNotEmpty
-                      ? _RecentActivityTable(activities: stats.recentActivity)
-                      : const Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(child: Text('No recent activity')),
+                // Row 3 – Ink pie + Stock In vs Out
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _DashCard(
+                        title: 'Ink Consumption Distribution',
+                        icon: Icons.pie_chart_rounded,
+                        iconColor: const Color(0xFF00838F),
+                        child: SizedBox(
+                          height: 240,
+                          child: inv != null && inv.inkBreakdown.isNotEmpty
+                              ? _InkPieChart(data: inv.inkBreakdown)
+                              : const _EmptyChart(
+                                  message: 'No ink usage recorded yet'),
                         ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _DashCard(
+                        title: 'Stock In vs Stock Out (Monthly)',
+                        icon: Icons.compare_arrows_rounded,
+                        iconColor: const Color(0xFF2E7D32),
+                        child: SizedBox(
+                          height: 240,
+                          child: inv != null && inv.monthlyTrend.isNotEmpty
+                              ? _StockInOutChart(data: inv.monthlyTrend)
+                              : const _EmptyChart(
+                                  message: 'No monthly data yet'),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 28),
+
+                // ── Section: Low Stock Alerts ───────────────────────────
+                _SectionTitle(title: 'Low Stock Alerts'),
+                const SizedBox(height: 14),
+                _DashCard(
+                  title: '',
+                  showHeader: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Alert badge row
+                      if (inv != null)
+                        Row(
+                          children: [
+                            _AlertBadge(
+                              label: 'Out of Stock',
+                              count: inv.summary['out_of_stock_count'] ?? 0,
+                              color: Colors.red[700]!,
+                            ),
+                            const SizedBox(width: 10),
+                            _AlertBadge(
+                              label: 'Low Stock',
+                              count: inv.summary['low_stock_count'] ?? 0,
+                              color: Colors.orange[700]!,
+                            ),
+                            const Spacer(),
+                            // Search
+                            SizedBox(
+                              width: 280,
+                              child: TextField(
+                                controller: _searchCtrl,
+                                decoration: InputDecoration(
+                                  hintText: 'Search materials…',
+                                  prefixIcon:
+                                      const Icon(Icons.search, size: 20),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(
+                                        color: Colors.grey.shade300),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                        color: AppColors.primaryBlue,
+                                        width: 1.5),
+                                  ),
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 10),
+                                  isDense: true,
+                                ),
+                                onChanged: (_) =>
+                                    setState(() => _alertPage = 0),
+                              ),
+                            ),
+                          ],
+                        ),
+                      const SizedBox(height: 16),
+
+                      // Table
+                      _LowStockTable(items: pagedAlerts),
+                      const SizedBox(height: 12),
+
+                      // Pagination
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${filtered.length} item(s)  •  Page ${safeAlertPage + 1} of $pageCount',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF5F6368)),
+                          ),
+                          const SizedBox(width: 4),
+                          IconButton(
+                            icon: const Icon(Icons.chevron_left, size: 20),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: safeAlertPage > 0
+                                ? () => setState(
+                                    () => _alertPage = safeAlertPage - 1)
+                                : null,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.chevron_right, size: 20),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: safeAlertPage < pageCount - 1
+                                ? () => setState(
+                                    () => _alertPage = safeAlertPage + 1)
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 24),
               ],
@@ -602,93 +835,322 @@ class _DashboardContent extends StatelessWidget {
       },
     );
   }
+
+  // ── 6 Summary stat cards ───────────────────────────────────────────
+  Widget _buildStatCards(InventoryDashboardData? inv) {
+    final s = inv?.summary ?? {};
+    final cards = [
+      _StatCardData(
+        title: 'Total Materials',
+        value: '${s['total_materials'] ?? 0}',
+        icon: Icons.inventory_2_outlined,
+        color: AppColors.primaryBlue,
+        bgColor: AppColors.lightBlue,
+      ),
+      _StatCardData(
+        title: 'Total Stock Qty',
+        value: _fmt(s['total_stock_qty'] ?? 0),
+        icon: Icons.stacked_bar_chart_rounded,
+        color: const Color(0xFF0277BD),
+        bgColor: const Color(0xFFE1F5FE),
+      ),
+      _StatCardData(
+        title: 'Low Stock Items',
+        value: '${s['low_stock_count'] ?? 0}',
+        icon: Icons.warning_amber_rounded,
+        color: Colors.orange[800]!,
+        bgColor: Colors.orange[50]!,
+        highlight: (s['low_stock_count'] ?? 0) > 0,
+      ),
+      _StatCardData(
+        title: 'Out of Stock',
+        value: '${s['out_of_stock_count'] ?? 0}',
+        icon: Icons.remove_shopping_cart_outlined,
+        color: const Color(0xFFC62828),
+        bgColor: AppColors.lightRed,
+        highlight: (s['out_of_stock_count'] ?? 0) > 0,
+      ),
+      _StatCardData(
+        title: 'Purchases This Month',
+        value: _fmt(s['total_purchases_this_month'] ?? 0),
+        icon: Icons.add_shopping_cart_outlined,
+        color: const Color(0xFF2E7D32),
+        bgColor: const Color(0xFFE8F5E9),
+      ),
+      _StatCardData(
+        title: 'Used This Month',
+        value: _fmt(s['total_used_this_month'] ?? 0),
+        icon: Icons.output_rounded,
+        color: const Color(0xFF6A1B9A),
+        bgColor: const Color(0xFFF3E5F5),
+      ),
+    ];
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final cardW = (constraints.maxWidth - 5 * 12) / 6;
+      return Row(
+        children: cards.asMap().entries.map((e) {
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (e.key > 0) const SizedBox(width: 12),
+              _StatCard(data: e.value, width: cardW),
+            ],
+          );
+        }).toList(),
+      );
+    });
+  }
+
+  String _fmt(dynamic n) {
+    final v = n is int ? n : (n is double ? n.toInt() : 0);
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}K';
+    return '$v';
+  }
 }
 
-class _StatCard extends StatelessWidget {
+// ── Section title ──────────────────────────────────────────────────────────────
+class _SectionTitle extends StatelessWidget {
+  final String title;
+  const _SectionTitle({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 20,
+          decoration: BoxDecoration(
+            color: AppColors.primaryBlue,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF202124),
+            letterSpacing: 0.1,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Stat card data model ───────────────────────────────────────────────────────
+class _StatCardData {
   final String title;
   final String value;
   final IconData icon;
   final Color color;
-  final double width;
+  final Color bgColor;
+  final bool highlight;
 
-  const _StatCard({
+  const _StatCardData({
     required this.title,
     required this.value,
     required this.icon,
     required this.color,
-    required this.width,
+    required this.bgColor,
+    this.highlight = false,
   });
+}
+
+// ── Stat card widget ───────────────────────────────────────────────────────────
+class _StatCard extends StatefulWidget {
+  final _StatCardData data;
+  final double width;
+  const _StatCard({required this.data, required this.width});
+
+  @override
+  State<_StatCard> createState() => _StatCardState();
+}
+
+class _StatCardState extends State<_StatCard> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: width,
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 30),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: color,
-                  ),
-                ),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[500],
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ],
+    final d = widget.data;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: widget.width,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade200, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: _hovered
+                  ? d.color.withOpacity(0.12)
+                  : Colors.black.withOpacity(0.05),
+              blurRadius: _hovered ? 14 : 6,
+              offset: const Offset(0, 2),
             ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Accent top stripe (always present, color varies)
+              Container(
+                height: 3,
+                color: d.color,
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: d.bgColor,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(d.icon, color: d.color, size: 20),
+                        ),
+                        if (d.highlight) ...[
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: d.color.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.circle,
+                                    size: 6, color: d.color),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Alert',
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: d.color),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      d.value,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: d.color,
+                        letterSpacing: -0.5,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      d.title,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF5F6368),
+                        letterSpacing: 0.1,
+                        height: 1.3,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _ChartCard extends StatelessWidget {
+// ── Dashboard card container ───────────────────────────────────────────────────
+class _DashCard extends StatelessWidget {
   final String title;
   final Widget child;
+  final IconData? icon;
+  final Color? iconColor;
+  final bool showHeader;
 
-  const _ChartCard({required this.title, required this.child});
+  const _DashCard({
+    required this.title,
+    required this.child,
+    this.icon,
+    this.iconColor,
+    this.showHeader = true,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF202124),
+          if (showHeader) ...[
+            Row(
+              children: [
+                if (icon != null) ...[
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: (iconColor ?? AppColors.primaryBlue).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Icon(icon, size: 16,
+                        color: iconColor ?? AppColors.primaryBlue),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF202124),
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
           child,
         ],
       ),
@@ -696,44 +1158,83 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
-class _ActivityChart extends StatelessWidget {
-  final List<Map<String, dynamic>> data;
-
-  const _ActivityChart({required this.data});
+// ── Empty chart placeholder ────────────────────────────────────────────────────
+class _EmptyChart extends StatelessWidget {
+  final String message;
+  const _EmptyChart({this.message = 'No data available'});
 
   @override
   Widget build(BuildContext context) {
-    final spots = data.asMap().entries.map((entry) {
-      return FlSpot(
-        entry.key.toDouble(),
-        (entry.value['count'] as num?)?.toDouble() ?? 0,
-      );
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.bar_chart_outlined,
+              size: 40, color: Colors.grey.shade300),
+          const SizedBox(height: 8),
+          Text(message,
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Monthly Usage Trend – Line Chart ──────────────────────────────────────────
+class _MonthlyUsageChart extends StatelessWidget {
+  final List<Map<String, dynamic>> data;
+  const _MonthlyUsageChart({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final spots = data.asMap().entries.map((e) {
+      final val = (e.value['stock_out'] as num?)?.toDouble() ?? 0.0;
+      return FlSpot(e.key.toDouble(), val);
     }).toList();
+
+    final maxY = spots.isEmpty
+        ? 10.0
+        : (spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) * 1.2)
+            .clamp(10.0, double.infinity);
 
     return LineChart(
       LineChartData(
-        gridData: FlGridData(show: true, drawVerticalLine: false),
+        minY: 0,
+        maxY: maxY,
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (v) =>
+              FlLine(color: Colors.grey.shade100, strokeWidth: 1),
+        ),
+        borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: 40,
-              getTitlesWidget: (value, meta) => Text(value.toInt().toString()),
+              reservedSize: 38,
+              getTitlesWidget: (v, _) => Text(
+                v.toInt().toString(),
+                style: const TextStyle(
+                    fontSize: 10, color: Color(0xFF9E9E9E)),
+              ),
             ),
           ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              getTitlesWidget: (value, meta) {
-                final index = value.toInt();
-                if (index >= 0 && index < data.length) {
-                  final date = data[index]['date']?.toString() ?? '';
-                  return Text(
-                    date.length > 5 ? date.substring(5) : date,
-                    style: const TextStyle(fontSize: 10),
-                  );
-                }
-                return const Text('');
+              interval: 1,
+              getTitlesWidget: (v, _) {
+                final i = v.toInt();
+                if (i < 0 || i >= data.length) return const SizedBox();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    data[i]['month_label']?.toString() ?? '',
+                    style: const TextStyle(
+                        fontSize: 9, color: Color(0xFF9E9E9E)),
+                  ),
+                );
               },
             ),
           ),
@@ -742,134 +1243,1064 @@ class _ActivityChart extends StatelessWidget {
           rightTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         ),
-        borderData: FlBorderData(show: false),
         lineBarsData: [
           LineChartBarData(
             spots: spots,
             isCurved: true,
-            color: Theme.of(context).primaryColor,
-            barWidth: 3,
-            dotData: const FlDotData(show: true),
+            color: AppColors.primaryBlue,
+            barWidth: 2.5,
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (s, _, __, ___) => FlDotCirclePainter(
+                radius: 3,
+                color: AppColors.primaryBlue,
+                strokeWidth: 2,
+                strokeColor: Colors.white,
+              ),
+            ),
             belowBarData: BarAreaData(
               show: true,
-              color: Theme.of(context).primaryColor.withOpacity(0.1),
+              color: AppColors.primaryBlue.withOpacity(0.08),
             ),
           ),
+        ],
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            tooltipBgColor: const Color(0xFF1565C0),
+            getTooltipItems: (spots) => spots
+                .map((s) => LineTooltipItem(
+                      'Used: ${s.y.toInt()}',
+                      const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600),
+                    ))
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Stock by Category – Bar Chart ─────────────────────────────────────────────
+class _CategoryBarChart extends StatelessWidget {
+  final List<Map<String, dynamic>> data;
+  const _CategoryBarChart({required this.data});
+
+  static const _colors = [
+    Color(0xFF1565C0),
+    Color(0xFF0097A7),
+    Color(0xFF2E7D32),
+    Color(0xFF6A1B9A),
+    Color(0xFFBF360C),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (data.isEmpty) return const _EmptyChart();
+
+    final maxY = data
+            .map((d) => (d['total_stock'] as num?)?.toDouble() ?? 0.0)
+            .reduce((a, b) => a > b ? a : b) *
+        1.25;
+
+    final groups = data.asMap().entries.map((e) {
+      final stock = (e.value['total_stock'] as num?)?.toDouble() ?? 0.0;
+      return BarChartGroupData(
+        x: e.key,
+        barRods: [
+          BarChartRodData(
+            toY: stock,
+            width: 28,
+            color: _colors[e.key % _colors.length],
+            borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(5)),
+          ),
+        ],
+      );
+    }).toList();
+
+    return BarChart(
+      BarChartData(
+        maxY: maxY.clamp(10.0, double.infinity),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (v) =>
+              FlLine(color: Colors.grey.shade100, strokeWidth: 1),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, _) {
+                final i = v.toInt();
+                if (i < 0 || i >= data.length) return const SizedBox();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    data[i]['category']?.toString() ?? '',
+                    style: const TextStyle(
+                        fontSize: 10, color: Color(0xFF5F6368)),
+                  ),
+                );
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 38,
+              getTitlesWidget: (v, _) => Text(
+                v.toInt().toString(),
+                style: const TextStyle(
+                    fontSize: 10, color: Color(0xFF9E9E9E)),
+              ),
+            ),
+          ),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        barGroups: groups,
+        barTouchData: BarTouchData(
+          touchTooltipData: BarTouchTooltipData(
+            tooltipBgColor: const Color(0xFF202124),
+            getTooltipItem: (group, _, rod, __) => BarTooltipItem(
+              '${data[group.x]['category']}\n${rod.toY.toInt()} units',
+              const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Ink Consumption – Pie Chart ────────────────────────────────────────────────
+class _InkPieChart extends StatefulWidget {
+  final List<Map<String, dynamic>> data;
+  const _InkPieChart({required this.data});
+
+  @override
+  State<_InkPieChart> createState() => _InkPieChartState();
+}
+
+class _InkPieChartState extends State<_InkPieChart> {
+  int _touchedIndex = -1;
+
+  static Color _inkColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'cyan':
+        return const Color(0xFF00BCD4);
+      case 'magenta':
+        return const Color(0xFFE91E63);
+      case 'yellow':
+        return const Color(0xFFFFC107);
+      case 'black':
+        return const Color(0xFF37474F);
+      default:
+        return const Color(0xFF78909C);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total =
+        widget.data.fold<double>(0, (s, e) => s + ((e['total_used'] as num?)?.toDouble() ?? 0));
+
+    return Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: PieChart(
+            PieChartData(
+              pieTouchData: PieTouchData(
+                touchCallback: (event, response) {
+                  if (!event.isInterestedForInteractions ||
+                      response == null ||
+                      response.touchedSection == null) {
+                    setState(() => _touchedIndex = -1);
+                    return;
+                  }
+                  setState(() => _touchedIndex =
+                      response.touchedSection!.touchedSectionIndex);
+                },
+              ),
+              sections: widget.data.asMap().entries.map((e) {
+                final isTouched = e.key == _touchedIndex;
+                final val =
+                    (e.value['total_used'] as num?)?.toDouble() ?? 0.0;
+                final pct =
+                    total > 0 ? (val / total * 100).toStringAsFixed(1) : '0';
+                return PieChartSectionData(
+                  value: val,
+                  title: '$pct%',
+                  color: _inkColor(e.value['ink_type']?.toString() ?? ''),
+                  radius: isTouched ? 78 : 68,
+                  titleStyle: TextStyle(
+                    fontSize: isTouched ? 13 : 11,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                );
+              }).toList(),
+              sectionsSpace: 2,
+              centerSpaceRadius: 30,
+            ),
+          ),
+        ),
+        // Legend
+        Expanded(
+          flex: 2,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: widget.data.map((e) {
+              final ink = e['ink_type']?.toString() ?? '';
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: _inkColor(ink),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$ink\n${e['total_used']} units',
+                        style: const TextStyle(
+                            fontSize: 11, color: Color(0xFF5F6368)),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Stock In vs Out – Grouped Bar Chart ───────────────────────────────────────
+class _StockInOutChart extends StatelessWidget {
+  final List<Map<String, dynamic>> data;
+  const _StockInOutChart({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    if (data.isEmpty) return const _EmptyChart();
+
+    double maxY = 10.0;
+    for (final d in data) {
+      final inn = (d['stock_in'] as num?)?.toDouble() ?? 0.0;
+      final out = (d['stock_out'] as num?)?.toDouble() ?? 0.0;
+      if (inn > maxY) maxY = inn;
+      if (out > maxY) maxY = out;
+    }
+    maxY *= 1.25;
+
+    final groups = data.asMap().entries.map((e) {
+      final inn = (e.value['stock_in'] as num?)?.toDouble() ?? 0.0;
+      final out = (e.value['stock_out'] as num?)?.toDouble() ?? 0.0;
+      return BarChartGroupData(
+        x: e.key,
+        groupVertically: false,
+        barRods: [
+          BarChartRodData(
+            toY: inn,
+            width: 10,
+            color: const Color(0xFF2E7D32),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(3)),
+          ),
+          BarChartRodData(
+            toY: out,
+            width: 10,
+            color: AppColors.primaryRed,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(3)),
+          ),
+        ],
+        barsSpace: 2,
+      );
+    }).toList();
+
+    return Column(
+      children: [
+        // Legend
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            _LegendDot(color: const Color(0xFF2E7D32), label: 'Stock In'),
+            const SizedBox(width: 12),
+            _LegendDot(color: AppColors.primaryRed, label: 'Stock Out'),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: BarChart(
+            BarChartData(
+              maxY: maxY,
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (v) =>
+                    FlLine(color: Colors.grey.shade100, strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (v, _) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= data.length)
+                        return const SizedBox();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          data[i]['month_label']?.toString() ?? '',
+                          style: const TextStyle(
+                              fontSize: 9,
+                              color: Color(0xFF9E9E9E)),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 38,
+                    getTitlesWidget: (v, _) => Text(
+                      v.toInt().toString(),
+                      style: const TextStyle(
+                          fontSize: 10, color: Color(0xFF9E9E9E)),
+                    ),
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+              ),
+              barGroups: groups,
+              barTouchData: BarTouchData(
+                touchTooltipData: BarTouchTooltipData(
+                  tooltipBgColor: const Color(0xFF202124),
+                  getTooltipItem: (group, _, rod, rodIndex) {
+                    final label = rodIndex == 0 ? 'In' : 'Out';
+                    return BarTooltipItem(
+                      '${data[group.x]['month_label']} $label\n'
+                      '${rod.toY.toInt()} units',
+                      const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Legend dot helper ──────────────────────────────────────────────────────────
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CircleAvatar(radius: 5, backgroundColor: color),
+        const SizedBox(width: 4),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 11, color: Color(0xFF5F6368))),
+      ],
+    );
+  }
+}
+
+// Returns a display name for a sheet, appending a short date when the name
+// is shared by more than one sheet in the list.
+String _sheetDisplayName(Map<String, dynamic> sheet,
+    List<Map<String, dynamic>> allSheets) {
+  final name = sheet['name'] as String? ?? 'Sheet ${sheet['id']}';
+  final duplicates =
+      allSheets.where((s) => (s['name'] as String?) == name).length;
+  if (duplicates <= 1) return name;
+  // Append a short date from created_at to disambiguate
+  final raw = sheet['created_at'];
+  if (raw == null) return '$name (#${sheet['id']})';
+  try {
+    final dt = DateTime.parse(raw.toString()).toLocal();
+    final mon = const [
+      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ][dt.month];
+    return '$name ($mon ${dt.day})';
+  } catch (_) {
+    return '$name (#${sheet['id']})';
+  }
+}
+
+// ── Sheet dropdown filter ──────────────────────────────────────────────────────
+class _SheetDropdown extends StatefulWidget {
+  final List<Map<String, dynamic>> sheets;
+  final Set<int> selectedIds;
+  final ValueChanged<Set<int>> onChanged;
+
+  const _SheetDropdown({
+    required this.sheets,
+    required this.selectedIds,
+    required this.onChanged,
+  });
+
+  @override
+  State<_SheetDropdown> createState() => _SheetDropdownState();
+}
+
+class _SheetDropdownState extends State<_SheetDropdown> {
+  final LayerLink _layerLink = LayerLink();
+  final TextEditingController _searchCtrl = TextEditingController();
+  OverlayEntry? _overlay;
+  bool _isOpen = false;
+
+  @override
+  void dispose() {
+    _closeDropdown();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _toggleDropdown() =>
+      _isOpen ? _closeDropdown() : _openDropdown();
+
+  void _openDropdown() {
+    _searchCtrl.clear();
+    _overlay = _buildOverlay();
+    Overlay.of(context).insert(_overlay!);
+    setState(() => _isOpen = true);
+  }
+
+  void _closeDropdown() {
+    _overlay?.remove();
+    _overlay = null;
+    if (mounted) setState(() => _isOpen = false);
+  }
+
+  OverlayEntry _buildOverlay() {
+    return OverlayEntry(
+      builder: (_) => _SheetDropdownOverlay(
+        layerLink: _layerLink,
+        sheets: widget.sheets,
+        selectedIds: widget.selectedIds,
+        searchCtrl: _searchCtrl,
+        onChanged: (ids) {
+          widget.onChanged(ids);
+          _overlay?.markNeedsBuild();
+          if (mounted) setState(() {});
+        },
+        onClose: _closeDropdown,
+      ),
+    );
+  }
+
+  String get _label {
+    if (widget.selectedIds.isEmpty) return 'All Sheets';
+    if (widget.selectedIds.length == 1) {
+      final id = widget.selectedIds.first;
+      final s = widget.sheets.firstWhere(
+        (e) => (e['id'] is int ? e['id'] : int.tryParse(e['id'].toString())) == id,
+        orElse: () => <String, dynamic>{'name': 'Sheet $id'},
+      );
+      return _sheetDisplayName(s, widget.sheets);
+    }
+    return '${widget.selectedIds.length} Sheets Selected';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: GestureDetector(
+        onTap: _toggleDropdown,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(
+              color: _isOpen ? AppColors.primaryBlue : Colors.grey.shade300,
+              width: _isOpen ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: _isOpen
+                ? [
+                    BoxShadow(
+                      color: AppColors.primaryBlue.withOpacity(0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    )
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.layers_outlined,
+                size: 15,
+                color: _isOpen
+                    ? AppColors.primaryBlue
+                    : const Color(0xFF5F6368),
+              ),
+              const SizedBox(width: 7),
+              ConstrainedBox(
+                constraints:
+                    const BoxConstraints(minWidth: 80, maxWidth: 220),
+                child: Text(
+                  _label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: _isOpen
+                        ? AppColors.primaryBlue
+                        : const Color(0xFF202124),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: _isOpen ? 0.5 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: _isOpen
+                      ? AppColors.primaryBlue
+                      : const Color(0xFF5F6368),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Overlay panel ─────────────────────────────────────────────────────────────────
+class _SheetDropdownOverlay extends StatefulWidget {
+  final LayerLink layerLink;
+  final List<Map<String, dynamic>> sheets;
+  final Set<int> selectedIds;
+  final TextEditingController searchCtrl;
+  final ValueChanged<Set<int>> onChanged;
+  final VoidCallback onClose;
+
+  const _SheetDropdownOverlay({
+    required this.layerLink,
+    required this.sheets,
+    required this.selectedIds,
+    required this.searchCtrl,
+    required this.onChanged,
+    required this.onClose,
+  });
+
+  @override
+  State<_SheetDropdownOverlay> createState() =>
+      _SheetDropdownOverlayState();
+}
+
+class _SheetDropdownOverlayState extends State<_SheetDropdownOverlay> {
+  late Set<int> _local;
+  static const double _itemH = 40;
+  static const int _maxVisible = 7;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = Set<int>.from(widget.selectedIds);
+    widget.searchCtrl.addListener(_rebuild);
+  }
+
+  void _rebuild() => setState(() {});
+
+  @override
+  void dispose() {
+    widget.searchCtrl.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  int _idOf(Map<String, dynamic> s) =>
+      s['id'] is int ? s['id'] as int : int.tryParse(s['id'].toString()) ?? 0;
+
+  List<Map<String, dynamic>> get _filtered {
+    final q = widget.searchCtrl.text.toLowerCase();
+    if (q.isEmpty) return widget.sheets;
+    return widget.sheets
+        .where((s) =>
+            (s['name'] as String? ?? '').toLowerCase().contains(q))
+        .toList();
+  }
+
+  void _toggle(int id) {
+    setState(() {
+      if (id == -1) {
+        _local.clear();
+      } else {
+        _local.contains(id) ? _local.remove(id) : _local.add(id);
+      }
+    });
+    widget.onChanged(Set<int>.from(_local));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filtered;
+    final listH = (filtered.length.clamp(1, _maxVisible) * _itemH);
+
+    return Stack(
+      children: [
+        // Tap-outside-to-dismiss
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: widget.onClose,
+            behavior: HitTestBehavior.translucent,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        CompositedTransformFollower(
+          link: widget.layerLink,
+          targetAnchor: Alignment.bottomLeft,
+          followerAnchor: Alignment.topLeft,
+          offset: const Offset(0, 4),
+          showWhenUnlinked: false,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: 280,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade200),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.10),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Search input
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                    child: TextField(
+                      controller: widget.searchCtrl,
+                      autofocus: true,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Search sheet...',
+                        hintStyle: const TextStyle(
+                            fontSize: 13, color: Color(0xFFBBBBBB)),
+                        prefixIcon:
+                            const Icon(Icons.search, size: 17),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 9),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide:
+                              BorderSide(color: Colors.grey.shade300),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide: const BorderSide(
+                              color: AppColors.primaryBlue, width: 1.5),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide:
+                              BorderSide(color: Colors.grey.shade300),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Divider(height: 1, color: Colors.grey.shade100),
+                  // "All Sheets" row
+                  _DropdownItem(
+                    label: 'All Sheets',
+                    selected: _local.isEmpty,
+                    isAll: true,
+                    onTap: () => _toggle(-1),
+                  ),
+                  Divider(height: 1, color: Colors.grey.shade100),
+                  // Scrollable sheet list
+                  SizedBox(
+                    height: listH,
+                    child: filtered.isEmpty
+                        ? const Center(
+                            child: Text('No sheets found',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF9E9E9E))),
+                          )
+                        : ListView.builder(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 4),
+                            itemCount: filtered.length,
+                            itemBuilder: (_, i) {
+                              final s = filtered[i];
+                              final id = _idOf(s);
+                              return _DropdownItem(
+                                label: _sheetDisplayName(s, widget.sheets),
+                                selected: _local.contains(id),
+                                onTap: () => _toggle(id),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Single row item inside the dropdown
+class _DropdownItem extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final bool isAll;
+
+  const _DropdownItem({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.isAll = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        color: selected
+            ? AppColors.primaryBlue.withOpacity(0.06)
+            : Colors.transparent,
+        child: Row(
+          children: [
+            Icon(
+              selected
+                  ? (isAll
+                      ? Icons.done_all_rounded
+                      : Icons.check_box_rounded)
+                  : (isAll
+                      ? Icons.layers_outlined
+                      : Icons.check_box_outline_blank_rounded),
+              size: 17,
+              color: selected
+                  ? AppColors.primaryBlue
+                  : const Color(0xFFBDBDBD),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight:
+                      selected ? FontWeight.w600 : FontWeight.w400,
+                  color: selected
+                      ? AppColors.primaryBlue
+                      : const Color(0xFF202124),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Alert badge ────────────────────────────────────────────────────────────────
+class _AlertBadge extends StatelessWidget {
+  final String label;
+  final dynamic count;
+  final Color color;
+  const _AlertBadge(
+      {required this.label, required this.count, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = count is int ? count : (count as num).toInt();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 10,
+            backgroundColor: color,
+            child: Text(
+              '$n',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: color)),
         ],
       ),
     );
   }
 }
 
-class _FileTypesChart extends StatelessWidget {
-  final List<Map<String, dynamic>> data;
-
-  const _FileTypesChart({required this.data});
+// ── Low Stock Alert Table ──────────────────────────────────────────────────────
+class _LowStockTable extends StatelessWidget {
+  final List<Map<String, dynamic>> items;
+  const _LowStockTable({required this.items});
 
   @override
   Widget build(BuildContext context) {
-    final colors = [
-      AppColors.primaryBlue,
-      AppColors.primaryRed,
-      const Color(0xFF42A5F5), // light blue
-      const Color(0xFFEF5350), // light red
-      const Color(0xFF1E88E5), // medium blue
-    ];
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(Icons.check_circle_outline,
+                  size: 36, color: Colors.green.shade400),
+              const SizedBox(height: 8),
+              const Text('All materials are sufficiently stocked',
+                  style: TextStyle(color: Color(0xFF5F6368), fontSize: 13)),
+            ],
+          ),
+        ),
+      );
+    }
 
-    return PieChart(
-      PieChartData(
-        sections: data.asMap().entries.map((entry) {
-          final item = entry.value;
-          return PieChartSectionData(
-            value: (item['count'] as num?)?.toDouble() ?? 0,
-            title: item['type']?.toString() ?? '',
-            color: colors[entry.key % colors.length],
-            radius: 80,
-            titleStyle: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          );
-        }).toList(),
-        sectionsSpace: 2,
-        centerSpaceRadius: 30,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Table(
+        border: TableBorder(
+          horizontalInside:
+              BorderSide(color: Colors.grey.shade100, width: 1),
+          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+        ),
+        columnWidths: const {
+          0: FlexColumnWidth(3),
+          1: FlexColumnWidth(1.2),
+          2: FlexColumnWidth(1.2),
+          3: FlexColumnWidth(1.2),
+          4: FlexColumnWidth(1.4),
+        },
+        children: [
+          // Header
+          TableRow(
+            decoration:
+                const BoxDecoration(color: Color(0xFFF8F9FA)),
+            children: const [
+              _TH('Material Name'),
+              _TH('Curr. Stock'),
+              _TH('Min. Level'),
+              _TH('Critical'),
+              _TH('Status'),
+            ],
+          ),
+          // Data rows
+          ...items.map((item) {
+            final status = item['stock_status']?.toString() ?? 'ok';
+            final isOut = status == 'critical' &&
+                (item['current_stock'] as num?) == 0;
+            final rowColor = isOut
+                ? Colors.red.shade50
+                : status == 'critical'
+                    ? Colors.red.shade50
+                    : Colors.orange.shade50;
+
+            return TableRow(
+              decoration: BoxDecoration(color: rowColor),
+              children: [
+                _TD(
+                  child: Row(
+                    children: [
+                      Icon(
+                        isOut
+                            ? Icons.block
+                            : Icons.warning_amber_rounded,
+                        size: 14,
+                        color: isOut
+                            ? Colors.red[700]
+                            : Colors.orange[700],
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          item['product_name']?.toString() ?? '-',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF202124)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _TD(
+                  child: Text(
+                    '${item['current_stock'] ?? 0}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isOut ? Colors.red[700] : Colors.orange[800],
+                    ),
+                  ),
+                ),
+                _TD(
+                  child: Text(
+                    '${item['maintaining_qty'] ?? 0}',
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF5F6368)),
+                  ),
+                ),
+                _TD(
+                  child: Text(
+                    '${item['critical_qty'] ?? 0}',
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF5F6368)),
+                  ),
+                ),
+                _TD(
+                  child: _StatusChip(
+                      status: status,
+                      isOutOfStock: (item['current_stock'] as num?) == 0),
+                ),
+              ],
+            );
+          }),
+        ],
       ),
     );
   }
 }
 
-class _RecentActivityTable extends StatelessWidget {
-  final List<Map<String, dynamic>> activities;
-
-  const _RecentActivityTable({required this.activities});
+// Table header cell
+class _TH extends StatelessWidget {
+  final String text;
+  const _TH(this.text);
 
   @override
   Widget build(BuildContext context) {
-    return DataTable(
-      columns: const [
-        DataColumn(label: Text('User')),
-        DataColumn(label: Text('Action')),
-        DataColumn(label: Text('Target')),
-        DataColumn(label: Text('Time')),
-      ],
-      rows: activities.take(10).map((activity) {
-        return DataRow(cells: [
-          DataCell(Text(activity['user']?.toString() ?? '-')),
-          DataCell(_ActionChip(action: activity['action']?.toString() ?? '')),
-          DataCell(Text(activity['target']?.toString() ?? '-')),
-          DataCell(Text(_formatTime(activity['timestamp']?.toString()))),
-        ]);
-      }).toList(),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF5F6368),
+          letterSpacing: 0.2,
+        ),
+      ),
     );
-  }
-
-  String _formatTime(String? timestamp) {
-    if (timestamp == null) return '-';
-    try {
-      final dt = DateTime.parse(timestamp);
-      final now = DateTime.now();
-      final diff = now.difference(dt);
-      if (diff.inMinutes < 1) return 'Just now';
-      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-      if (diff.inHours < 24) return '${diff.inHours}h ago';
-      return '${diff.inDays}d ago';
-    } catch (_) {
-      return timestamp;
-    }
   }
 }
 
-class _ActionChip extends StatelessWidget {
-  final String action;
-
-  const _ActionChip({required this.action});
+// Table data cell
+class _TD extends StatelessWidget {
+  final Widget child;
+  const _TD({required this.child});
 
   @override
   Widget build(BuildContext context) {
-    Color color;
-    switch (action.toLowerCase()) {
-      case 'create':
-        color = AppColors.primaryBlue;
-        break;
-      case 'update':
-        color = const Color(0xFF1976D2); // blue 700
-        break;
-      case 'delete':
-        color = AppColors.primaryRed;
-        break;
-      default:
-        color = Colors.grey;
-    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      child: child,
+    );
+  }
+}
 
-    return Chip(
-      label: Text(
-        action,
-        style: TextStyle(color: color, fontSize: 12),
+// Status chip
+class _StatusChip extends StatelessWidget {
+  final String status;
+  final bool isOutOfStock;
+  const _StatusChip({required this.status, this.isOutOfStock = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isOutOfStock
+        ? 'Out of Stock'
+        : status == 'critical'
+            ? 'Critical'
+            : 'Low Stock';
+    final color = isOutOfStock || status == 'critical'
+        ? Colors.red[700]!
+        : Colors.orange[700]!;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.4), width: 1),
       ),
-      backgroundColor: color.withOpacity(0.1),
-      padding: EdgeInsets.zero,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      child: Text(
+        label,
+        style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: color),
+      ),
     );
   }
 }

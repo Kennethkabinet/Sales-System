@@ -81,6 +81,8 @@ class ApiEndpoints {
   // Dashboard
   static const String dashboardStats = '/dashboard/stats';
   static const String recentActivity = '/dashboard/recent-activity';
+  static const String inventoryOverview = '/dashboard/inventory-overview';
+  static const String inventorySheets = '/dashboard/inventory-sheets';
 
   // Sheets
   static const String sheets = '/sheets';

@@ -9,7 +9,11 @@
     "init-db": "node database/init.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["sales", "inventory", "management"],
+  "keywords": [
+    "sales",
+    "inventory",
+    "management"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {

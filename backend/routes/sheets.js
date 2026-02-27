@@ -213,16 +213,15 @@ router.get('/', authenticate, requireSheetAccess, async (req, res) => {
         folderQueryParams.push(parseInt(folderIdParam));
       }
     } else {
-      // Editors and regular users see folders they own
+      // Editors and regular users see all active folders (not just their own)
       folderQuery = `SELECT fo.id, fo.name, fo.parent_id, u.username as created_by, fo.created_at, fo.updated_at,
               (SELECT COUNT(*) FROM sheets s2 WHERE s2.folder_id = fo.id AND s2.is_active = TRUE) as sheet_count
        FROM folders fo LEFT JOIN users u ON fo.created_by = u.id
-       WHERE fo.is_active = TRUE AND ${parentCondition} AND fo.created_by = $${fpIdx}
+       WHERE fo.is_active = TRUE AND ${parentCondition}
        ORDER BY fo.name ASC`;
       if (folderIdParam !== undefined && folderIdParam !== 'root' && folderIdParam !== '') {
         folderQueryParams.push(parseInt(folderIdParam));
       }
-      folderQueryParams.push(req.user.id);
     }
     const foldersResult = await pool.query(folderQuery, folderQueryParams);
 
@@ -798,60 +797,81 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
 
 // DELETE /sheets/folders/:id - Delete a sheet folder (Admin only)
 router.delete('/folders/:id', authenticate, requireRole('admin'), async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
+    const folderId = parseInt(id);
+    if (isNaN(folderId)) return res.status(400).json({ success: false, error: { code: 'INVALID_ID', message: 'Invalid folder ID' } });
 
-    // Move sheets in this folder back to root
-    await pool.query('UPDATE sheets SET folder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE folder_id = $1', [id]);
+    await client.query('BEGIN');
 
-    // Soft delete the folder
-    await pool.query('UPDATE folders SET is_active = FALSE WHERE id = $1', [id]);
+    // Hard-delete all sheets inside this folder (cascades to sheet_data, etc.)
+    await client.query('DELETE FROM sheets WHERE folder_id = $1', [folderId]);
+
+    // Hard-delete the folder itself
+    await client.query('DELETE FROM folders WHERE id = $1', [folderId]);
+
+    await client.query('COMMIT');
 
     await auditService.log({
       userId: req.user.id,
       action: 'DELETE',
       entityType: 'folders',
-      entityId: parseInt(id),
+      entityId: folderId,
       metadata: { deleted_by: req.user.username }
     });
 
-    res.json({ success: true, message: 'Folder deleted' });
+    res.json({ success: true, message: 'Folder and all its sheets deleted' });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Delete sheet folder error:', error);
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to delete folder' } });
+  } finally {
+    client.release();
   }
 });
 
-// DELETE /sheets/:id - Delete sheet (Admin only)
+// DELETE /sheets/:id - Delete sheet and all its data (Admin only)
 router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
+    const sheetId = parseInt(id);
+    if (isNaN(sheetId)) return res.status(400).json({ success: false, error: { code: 'INVALID_ID', message: 'Invalid sheet ID' } });
 
-    // Soft delete
-    await pool.query(
-      'UPDATE sheets SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-      [id]
-    );
+    await client.query('BEGIN');
 
-    // Audit log
+    // Fetch sheet name for the audit log before deleting
+    const sheetRes = await client.query('SELECT name FROM sheets WHERE id = $1', [sheetId]);
+    if (!sheetRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Sheet not found' } });
+    }
+    const sheetName = sheetRes.rows[0].name;
+
+    // Hard delete – cascades to: sheet_data, sheet_locks, sheet_edit_sessions,
+    //   sheet_edit_history, edit_requests, active_users.
+    // audit_logs.sheet_id is SET NULL so the audit trail is preserved.
+    await client.query('DELETE FROM sheets WHERE id = $1', [sheetId]);
+
+    await client.query('COMMIT');
+
+    // Audit log (recorded after commit so the delete is permanent)
     await auditService.log({
       userId: req.user.id,
       action: 'DELETE',
       entityType: 'sheets',
-      entityId: parseInt(id),
-      metadata: { deleted_by: req.user.username }
+      entityId: sheetId,
+      metadata: { deleted_by: req.user.username, sheet_name: sheetName }
     });
 
-    res.json({
-      success: true,
-      message: 'Sheet deleted successfully'
-    });
+    res.json({ success: true, message: 'Sheet and all associated data deleted successfully' });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Delete sheet error:', error);
-    res.status(500).json({
-      success: false,
-      error: { code: 'SERVER_ERROR', message: 'Failed to delete sheet' }
-    });
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to delete sheet' } });
+  } finally {
+    client.release();
   }
 });
 

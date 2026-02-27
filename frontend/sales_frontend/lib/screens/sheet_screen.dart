@@ -1949,8 +1949,8 @@ class _SheetScreenState extends State<SheetScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final userRole = authProvider.user?.role ?? '';
 
-    // Check permissions - only admin and manager can delete
-    if (userRole != 'admin' && userRole != 'manager') {
+    // Check permissions - only admin can delete
+    if (userRole != 'admin') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('You do not have permission to delete sheets'),
@@ -3427,8 +3427,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 ),
                 const SizedBox(width: 6),
                 OutlinedButton.icon(
-                  onPressed: (auth.user?.role == 'admin' ||
-                          auth.user?.role == 'manager')
+                  onPressed: auth.user?.role == 'admin'
                       ? _bulkDeleteSheets
                       : null,
                   icon: const Icon(Icons.delete_outline, size: 14),
@@ -3806,7 +3805,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                         ),
                                       ],
                                     ),
-                                    if (role == 'admin' || role == 'manager')
+                                    if (role == 'admin')
                                       Tooltip(
                                         message: 'Delete sheet',
                                         child: InkWell(
