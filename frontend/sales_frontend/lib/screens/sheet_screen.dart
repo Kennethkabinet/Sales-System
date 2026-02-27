@@ -4680,6 +4680,7 @@ class _SheetScreenState extends State<SheetScreen> {
     final role =
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
     final isAdminOrEditor = role == 'admin' || role == 'editor';
+    final isAdmin = role == 'admin';
     return Row(
       children: [
         if (!isViewer && isAdminOrEditor) ...[
@@ -4704,24 +4705,38 @@ class _SheetScreenState extends State<SheetScreen> {
             _inventoryFilterToday = false;
           }),
         ),
-        const SizedBox(width: 6),
-        _buildRibbonButton(
-          Icons.tune,
-          'Alert: ${(_criticalThreshold * 100).round()}%',
-          _showCriticalThresholdDialog,
-        ),
-        const SizedBox(width: 6),
-        _buildRibbonButton(
-          Icons.warning_amber_rounded,
-          'Critical Alerts',
-          _showCriticalAlertsModal,
-        ),
+        if (isAdmin) ...[
+          const SizedBox(width: 6),
+          _buildRibbonButton(
+            Icons.tune,
+            'Alert: ${(_criticalThreshold * 100).round()}%',
+            _showCriticalThresholdDialog,
+          ),
+          const SizedBox(width: 6),
+          _buildRibbonButton(
+            Icons.warning_amber_rounded,
+            'Critical Alerts',
+            _showCriticalAlertsModal,
+          ),
+        ],
       ],
     );
   }
 
   // ── Inventory: configurable critical alert threshold dialog ──
   void _showCriticalThresholdDialog() {
+    final role =
+        Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+    if (role != 'admin') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Only admins can change alert settings.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     double tempThreshold = _criticalThreshold;
     showDialog(
       context: context,
@@ -4752,7 +4767,7 @@ class _SheetScreenState extends State<SheetScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Turn Total Quantity red when this percentage of the Maintaining stock has been consumed.',
+                  'Turn Total Quantity red when this percentage of Stock has been consumed.',
                   style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 20),
@@ -4803,7 +4818,7 @@ class _SheetScreenState extends State<SheetScreen> {
                       Expanded(
                         child: Text(
                           'Products whose Total Quantity has dropped by '
-                          '${(tempThreshold * 100).round()}% or more of Maintaining will be highlighted red.',
+                          '${(tempThreshold * 100).round()}% or more of Stock will be highlighted red.',
                           style: const TextStyle(
                               fontSize: 11, color: Color(0xFFC0392B)),
                         ),
@@ -4838,26 +4853,54 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ── Inventory: critical alerts modal ──
-  void _showCriticalAlertsModal() {
-    // Build list of critical rows
+  double? _criticalUsedPctForRow(Map<String, String> row) {
+    final productName = (row['Product Name'] ?? '').trim();
+    final code = (row['QB Code'] ?? row['QC Code'] ?? '').trim();
+    if (productName.isEmpty && code.isEmpty) return null;
+
+    final total = double.tryParse(row['Total Quantity'] ?? '');
+    if (total == null) return null;
+
+    if (total <= 0) return 1.0;
+
+    final stock = double.tryParse(row['Stock'] ?? '');
+    if (stock == null || stock <= 0) return null;
+    return (stock - total) / stock;
+  }
+
+  List<Map<String, String>> _buildCriticalRows() {
     final criticalRows = <Map<String, String>>[];
     for (final row in _data) {
-      final productName = row['Product Name'] ?? '';
-      if (productName.isEmpty) continue;
-      final maintaining = double.tryParse(row['Maintaining'] ?? '');
-      final total = double.tryParse(row['Total Quantity'] ?? '');
-      if (maintaining == null || maintaining <= 0 || total == null) continue;
-      final usedPct = (maintaining - total) / maintaining;
-      if (usedPct >= _criticalThreshold) {
-        criticalRows.add({
-          'Product Name': productName,
-          'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
-          'Maintaining': maintaining.toStringAsFixed(0),
-          'Total Quantity': total.toStringAsFixed(0),
-          'usedPct': (usedPct * 100).toStringAsFixed(1),
-        });
-      }
+      final usedPct = _criticalUsedPctForRow(row);
+      if (usedPct == null || usedPct < _criticalThreshold) continue;
+
+      final total = double.tryParse(row['Total Quantity'] ?? '') ?? 0;
+      final stock = double.tryParse(row['Stock'] ?? '') ?? 0;
+      criticalRows.add({
+        'Product Name': row['Product Name'] ?? '',
+        'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
+        'Stock': stock.toStringAsFixed(0),
+        'Total Quantity': total.toStringAsFixed(0),
+        'usedPct': (usedPct * 100).toStringAsFixed(1),
+      });
     }
+    return criticalRows;
+  }
+
+  void _showCriticalAlertsModal() {
+    final role =
+        Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+    if (role != 'admin') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Only admins can open critical alerts.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final criticalRows = _buildCriticalRows();
 
     showDialog(
       context: context,
@@ -4969,7 +5012,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                     fontSize: 12))),
                         Expanded(
                             flex: 2,
-                            child: Text('Maintaining',
+                            child: Text('Stock',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                     color: Colors.white,
@@ -5044,7 +5087,7 @@ class _SheetScreenState extends State<SheetScreen> {
                               Expanded(
                                 flex: 2,
                                 child: Text(
-                                  r['Maintaining'] ?? '',
+                                  r['Stock'] ?? '',
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
                                       fontSize: 13,
@@ -7818,17 +7861,14 @@ class _SheetScreenState extends State<SheetScreen> {
         rowIndex.isEven ? Colors.white : const Color(0xFFF8F9FA);
 
     // ── Total Quantity colour logic ──────────────────────────────────────────
-    // usagePercent = TotalQty / MaintainingQty
-    //   > 75%  → normal (navy)
-    //   ≤ 75%  → red (critical alert)
+    // usedPercent = (Stock - TotalQty) / Stock
+    //   ≥ threshold → red (critical alert)
     Color? totalQtyColor() {
-      final maintaining = double.tryParse(row['Maintaining'] ?? '');
-      final total = double.tryParse(row['Total Quantity'] ?? '');
-      if (maintaining == null || maintaining <= 0 || total == null) return null;
-      // usedPercent = how much of Maintaining has been consumed
-      // Red when ≥ 80% used (≤ 20% remaining)
-      final usedPct = (maintaining - total) / maintaining;
-      return usedPct >= 0.80 ? const Color(0xFFC0392B) : AppColors.primaryBlue;
+      final usedPct = _criticalUsedPctForRow(row);
+      if (usedPct == null) return null;
+      return usedPct >= _criticalThreshold
+          ? const Color(0xFFC0392B)
+          : AppColors.primaryBlue;
     }
 
     Widget dataCell({
@@ -7880,14 +7920,16 @@ class _SheetScreenState extends State<SheetScreen> {
           : null;
 
       // Display rules:
-      //  • No Maintaining set       → show empty for IN/OUT and Total Quantity
-      //  • Maintaining set, no data → show '0' for date IN/OUT cells
+      //  • No product/code set      → show empty for IN/OUT and Total Quantity
+      //  • Product/code set, no data→ show '0' for date IN/OUT cells
       //  • Otherwise                → show the stored value
-      final bool maintainingBlank = (row['Maintaining'] ?? '').trim().isEmpty;
+      final bool rowIdentityBlank =
+          (row['Product Name'] ?? '').trim().isEmpty &&
+              _inventoryRowCode(row).trim().isEmpty;
       final String displayValue;
-      if (maintainingBlank && (isTotalQty || isDateInOut)) {
+      if (rowIdentityBlank && (isTotalQty || isDateInOut)) {
         displayValue = '';
-      } else if (!maintainingBlank && isDateInOut && value.isEmpty) {
+      } else if (!rowIdentityBlank && isDateInOut && value.isEmpty) {
         displayValue = '0';
       } else {
         displayValue = value;
