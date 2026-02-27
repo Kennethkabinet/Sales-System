@@ -1081,6 +1081,7 @@ class InventoryDashboardData {
   final List<Map<String, dynamic>> categoryBreakdown;
   final List<Map<String, dynamic>> inkBreakdown;
   final List<Map<String, dynamic>> lowStockItems;
+  final List<Map<String, dynamic>> productStocks;
 
   InventoryDashboardData({
     required this.summary,
@@ -1088,19 +1089,27 @@ class InventoryDashboardData {
     required this.categoryBreakdown,
     required this.inkBreakdown,
     required this.lowStockItems,
+    required this.productStocks,
   });
 
   factory InventoryDashboardData.fromJson(Map<String, dynamic> json) {
     return InventoryDashboardData(
       summary: Map<String, dynamic>.from(json['summary'] ?? {}),
       monthlyTrend: List<Map<String, dynamic>>.from(
-          (json['monthly_trend'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+          (json['monthly_trend'] ?? [])
+              .map((e) => Map<String, dynamic>.from(e))),
       categoryBreakdown: List<Map<String, dynamic>>.from(
-          (json['category_breakdown'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+          (json['category_breakdown'] ?? [])
+              .map((e) => Map<String, dynamic>.from(e))),
       inkBreakdown: List<Map<String, dynamic>>.from(
-          (json['ink_breakdown'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+          (json['ink_breakdown'] ?? [])
+              .map((e) => Map<String, dynamic>.from(e))),
       lowStockItems: List<Map<String, dynamic>>.from(
-          (json['low_stock_items'] ?? []).map((e) => Map<String, dynamic>.from(e))),
+          (json['low_stock_items'] ?? [])
+              .map((e) => Map<String, dynamic>.from(e))),
+      productStocks: List<Map<String, dynamic>>.from(
+          (json['product_stocks'] ?? [])
+              .map((e) => Map<String, dynamic>.from(e))),
     );
   }
 }

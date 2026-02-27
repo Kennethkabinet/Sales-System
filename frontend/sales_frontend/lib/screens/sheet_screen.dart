@@ -351,11 +351,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
       final newSig = normalized
           .map((u) =>
-            '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
+              '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
           .toList();
       final oldSig = _activeSheetUsers
           .map((u) =>
-            '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
+              '${u['user_id']}|${u['username']}|${u['role']}|${u['department_name']}|${u['is_you']}')
           .toList();
 
       if (!listEquals(newSig, oldSig)) {
@@ -982,7 +982,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
         // Strip legacy Inventory Tracker columns that are no longer used.
         if (_columns.contains('Product Name') &&
-            _columns.contains('QC Code') &&
+            (_columns.contains('QB Code') || _columns.contains('QC Code')) &&
             _columns.contains('Total Quantity')) {
           const legacy = [
             'Critical',
@@ -996,6 +996,17 @@ class _SheetScreenState extends State<SheetScreen> {
             _columns.remove(col);
             for (final row in _data) {
               row.remove(col);
+            }
+          }
+
+          // Ensure modern Inventory Tracker has a dedicated Stock column.
+          if (!_columns.contains('Stock')) {
+            final maintainingIdx = _columns.indexOf('Maintaining');
+            final insertAt = maintainingIdx >= 0 ? maintainingIdx : 2;
+            _columns.insert(insertAt, 'Stock');
+            for (final row in _data) {
+              final current = (row['Total Quantity'] ?? '').trim();
+              row['Stock'] = current.isEmpty ? '0' : current;
             }
           }
         }
@@ -1126,22 +1137,25 @@ class _SheetScreenState extends State<SheetScreen> {
       'colorValue': 0xFF1E3A6E,
       'columns': [
         'Product Name',
-        'QC Code',
+        'QB Code',
+        'Stock',
         'Maintaining',
         'Total Quantity',
       ],
       'rows': [
         {
           'Product Name': 'Product A',
-          'QC Code': 'QC-001',
+          'QB Code': 'QB-001',
+          'Stock': '0',
           'Maintaining': '20',
-          'Total Quantity': '20',
+          'Total Quantity': '0',
         },
         {
           'Product Name': 'Product B',
-          'QC Code': 'QC-002',
+          'QB Code': 'QB-002',
+          'Stock': '0',
           'Maintaining': '15',
-          'Total Quantity': '15',
+          'Total Quantity': '0',
         },
       ],
     },
@@ -3427,9 +3441,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 ),
                 const SizedBox(width: 6),
                 OutlinedButton.icon(
-                  onPressed: auth.user?.role == 'admin'
-                      ? _bulkDeleteSheets
-                      : null,
+                  onPressed:
+                      auth.user?.role == 'admin' ? _bulkDeleteSheets : null,
                   icon: const Icon(Icons.delete_outline, size: 14),
                   label: const Text('Delete', style: TextStyle(fontSize: 12)),
                   style: OutlinedButton.styleFrom(
@@ -4083,13 +4096,14 @@ class _SheetScreenState extends State<SheetScreen> {
                 ? user['full_name']
                 : username)
             .toString();
-        final role = (fromPresence?.role ?? user['role'] ??
+        final role = (fromPresence?.role ??
+                user['role'] ??
                 ((user['is_you'] == true) ? authUser?.role : '') ??
                 '')
             .toString();
         final department =
-          (fromPresence?.departmentName ?? user['department_name'])
-            ?.toString();
+            (fromPresence?.departmentName ?? user['department_name'])
+                ?.toString();
         final isEditing = (fromPresence?.currentCell ?? '').trim().isNotEmpty;
         return {
           ...user,
@@ -4157,8 +4171,8 @@ class _SheetScreenState extends State<SheetScreen> {
                               (visibleUsers[i]['department'] ?? '').toString(),
                           isYou: visibleUsers[i]['is_you'] == true,
                           isEditing: visibleUsers[i]['is_editing'] == true,
-                          initials:
-                              initialsOf(visibleUsers[i]['full_name'] as String),
+                          initials: initialsOf(
+                              visibleUsers[i]['full_name'] as String),
                           avatarUrl:
                               (visibleUsers[i]['avatar_url'] ?? '').toString(),
                         ),
@@ -4837,7 +4851,7 @@ class _SheetScreenState extends State<SheetScreen> {
       if (usedPct >= _criticalThreshold) {
         criticalRows.add({
           'Product Name': productName,
-          'QC Code': row['QC Code'] ?? '',
+          'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
           'Maintaining': maintaining.toStringAsFixed(0),
           'Total Quantity': total.toStringAsFixed(0),
           'usedPct': (usedPct * 100).toStringAsFixed(1),
@@ -5017,9 +5031,9 @@ class _SheetScreenState extends State<SheetScreen> {
                                           fontSize: 13,
                                           color: AppColors.primaryBlue),
                                     ),
-                                    if ((r['QC Code'] ?? '').isNotEmpty)
+                                    if ((r['QB Code'] ?? '').isNotEmpty)
                                       Text(
-                                        r['QC Code']!,
+                                        r['QB Code']!,
                                         style: TextStyle(
                                             fontSize: 11,
                                             color: Colors.grey[500]),
@@ -7096,18 +7110,31 @@ class _SheetScreenState extends State<SheetScreen> {
   static const double _invHeaderH1 = 32.0; // height of date-group header
   static const double _invHeaderH2 = 26.0; // height of IN/OUT sub-header
 
+  String? _inventoryCodeColumn() {
+    if (_columns.contains('QB Code')) return 'QB Code';
+    if (_columns.contains('QC Code')) return 'QC Code';
+    return null;
+  }
+
+  String _inventoryRowCode(Map<String, String> row) =>
+      (row['QB Code'] ?? row['QC Code'] ?? '').toString();
+
   /// Returns true when the open sheet is an Inventory Tracker sheet.
   bool _isInventoryTrackerSheet() {
     return _columns.contains('Product Name') &&
-        _columns.contains('QC Code') &&
+        _inventoryCodeColumn() != null &&
         _columns.contains('Total Quantity');
   }
 
-  List<String> _inventoryFrozenLeft() => [
-        'Product Name',
-        'QC Code',
-        'Maintaining',
-      ].where(_columns.contains).toList();
+  List<String> _inventoryFrozenLeft() {
+    final codeCol = _inventoryCodeColumn();
+    return [
+      'Product Name',
+      if (codeCol != null) codeCol,
+      'Stock',
+      'Maintaining',
+    ].where(_columns.contains).toList();
+  }
 
   List<String> _inventoryFrozenRight() =>
       ['Total Quantity'].where(_columns.contains).toList();
@@ -7319,13 +7346,14 @@ class _SheetScreenState extends State<SheetScreen> {
   void _recalcInventoryTotals() {
     setState(() {
       for (final row in _data) {
-        final maintainingStr = (row['Maintaining'] ?? '').trim();
-        // Rows with no Maintaining value get blank Total Quantity.
-        if (maintainingStr.isEmpty) {
+        final productName = (row['Product Name'] ?? '').trim();
+        final code = _inventoryRowCode(row).trim();
+        if (productName.isEmpty && code.isEmpty) {
+          if (row.containsKey('Stock')) row['Stock'] = '';
           if (row.containsKey('Total Quantity')) row['Total Quantity'] = '';
           continue;
         }
-        final maintaining = int.tryParse(maintainingStr) ?? 0;
+
         int totalIn = 0, totalOut = 0;
         for (final col in _columns) {
           if (col.startsWith('DATE:') && col.endsWith(':IN')) {
@@ -7334,8 +7362,13 @@ class _SheetScreenState extends State<SheetScreen> {
             totalOut += int.tryParse(row[col] ?? '0') ?? 0;
           }
         }
+        final currentStock = totalIn - totalOut;
+
+        if (row.containsKey('Stock')) {
+          row['Stock'] = currentStock.toString();
+        }
         if (row.containsKey('Total Quantity')) {
-          row['Total Quantity'] = (maintaining + totalIn - totalOut).toString();
+          row['Total Quantity'] = currentStock.toString();
         }
       }
     });
@@ -7446,7 +7479,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           .toString()
                           .toLowerCase()
                           .contains(q) ||
-                      (row['QC Code'] ?? '')
+                      _inventoryRowCode(row)
                           .toString()
                           .toLowerCase()
                           .contains(q);
@@ -7573,7 +7606,7 @@ class _SheetScreenState extends State<SheetScreen> {
                             .toString()
                             .toLowerCase()
                             .contains(q) ||
-                        (row['QC Code'] ?? '')
+                        _inventoryRowCode(row)
                             .toString()
                             .toLowerCase()
                             .contains(q);
@@ -9754,7 +9787,8 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
         var top = _cursorGlobal.dy + 14;
 
         if (left + cardWidth > screen.width - 8) {
-          left = (_cursorGlobal.dx - cardWidth - 14).clamp(8.0, screen.width - cardWidth - 8);
+          left = (_cursorGlobal.dx - cardWidth - 14)
+              .clamp(8.0, screen.width - cardWidth - 8);
         }
         if (top + 160 > screen.height - 8) {
           top = (_cursorGlobal.dy - 160).clamp(8.0, screen.height - 168);
@@ -9768,7 +9802,8 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
               color: Colors.transparent,
               child: Container(
                 width: cardWidth,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E2533),
                   borderRadius: BorderRadius.circular(12),
@@ -9792,7 +9827,9 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
                           decoration: BoxDecoration(
                             color: _avatarColor,
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white.withOpacity(0.32), width: 2),
+                            border: Border.all(
+                                color: Colors.white.withOpacity(0.32),
+                                width: 2),
                           ),
                           alignment: Alignment.center,
                           child: Text(
@@ -9924,9 +9961,7 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
             border: Border.all(
               color: widget.isYou
                   ? const Color(0xFF2563EB)
-                  : (widget.isEditing
-                      ? const Color(0xFF22C55E)
-                      : Colors.white),
+                  : (widget.isEditing ? const Color(0xFF22C55E) : Colors.white),
               width: widget.isYou ? 2.4 : 1.8,
             ),
             boxShadow: [
@@ -9942,8 +9977,9 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
           ),
           child: CircleAvatar(
             backgroundColor: _avatarColor,
-            backgroundImage:
-                widget.avatarUrl.isNotEmpty ? NetworkImage(widget.avatarUrl) : null,
+            backgroundImage: widget.avatarUrl.isNotEmpty
+                ? NetworkImage(widget.avatarUrl)
+                : null,
             child: widget.avatarUrl.isNotEmpty
                 ? null
                 : Text(

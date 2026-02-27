@@ -201,10 +201,45 @@ router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, re
 router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, res) => {
   try {
     // ── 1. Resolve sheet IDs: use ?sheet_ids=43,52 if provided, else all inventory sheets ─
+    // Accepts formats like "1,2", ["1","2"], [1,2], or "[1,2]".
+    const parseSheetIds = (raw) => {
+      if (raw == null) return [];
+
+      let parts = [];
+      if (Array.isArray(raw)) {
+        parts = raw;
+      } else if (typeof raw === 'string') {
+        const text = raw.trim();
+        if (!text) return [];
+        if (text.startsWith('[') && text.endsWith(']')) {
+          try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) {
+              parts = parsed;
+            } else {
+              parts = text.split(',');
+            }
+          } catch (_) {
+            parts = text.split(',');
+          }
+        } else {
+          parts = text.split(',');
+        }
+      } else {
+        parts = [raw];
+      }
+
+      return [...new Set(
+        parts
+          .map(v => parseInt(v, 10))
+          .filter(n => Number.isFinite(n) && n > 0)
+      )];
+    };
+
     let sheetIds;
-    if (req.query.sheet_ids) {
-      const parsed = req.query.sheet_ids.split(',').map(Number).filter(n => !isNaN(n) && n > 0);
-      if (parsed.length > 0) sheetIds = parsed;
+    const hasSheetFilter = Object.prototype.hasOwnProperty.call(req.query, 'sheet_ids');
+    if (hasSheetFilter) {
+      sheetIds = parseSheetIds(req.query.sheet_ids);
     }
 
     if (!sheetIds) {
@@ -219,12 +254,14 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
     const emptyResponse = {
       success: true,
       summary: {
-        total_materials: 0, total_stock_qty: 0,
+        total_materials: 0,
+        total_product_categories: 0,
+        total_stock_qty: 0,
         low_stock_count: 0, out_of_stock_count: 0,
         total_purchases_this_month: 0, total_used_this_month: 0,
       },
       monthly_trend: [], category_breakdown: [],
-      ink_breakdown: [], low_stock_items: [],
+      ink_breakdown: [], low_stock_items: [], product_stocks: [],
     };
 
     if (!sheetIds.length) return res.json(emptyResponse);
@@ -242,30 +279,37 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
     if (!rowsRes.rows.length) return res.json(emptyResponse);
 
     // ── 3. Process rows ─────────────────────────────────────────────────────
-    // productMap: keyed by product name; newer sheets overwrite current_stock & maintaining
-    // seenDateKeys: Set of "productName|date|type" to avoid double-counting same date across sheets
-    const productMap = {};   // name → { name, qc_code, maintaining_qty, current_stock, total_out }
-    const seenDateKeys = new Set();
+    // productMap: keyed by normalized product name + QB/QC code; values are summed across sheets
+    const productMap = {};   // key → { name, qc_code, maintaining_qty, current_stock }
     const dateInMap  = {};   // "YYYY-MM-DD" → total qty IN
     const dateOutMap = {};   // "YYYY-MM-DD" → total qty OUT
-    const productOutMap = {}; // name → total qty OUT (for ink breakdown)
+    const productOutMap = {}; // key → total qty OUT (for ink breakdown)
 
     for (const row of rowsRes.rows) {
       const d = row.data;
       const name = (d['Product Name'] || '').trim();
       if (!name) continue;
+      const code = (d['QB Code'] || d['QC Code'] || '').toString().trim();
+      const productKey = `${name.toLowerCase()}|${code.toLowerCase()}`;
 
       const maintaining = parseFloat(d['Maintaining']) || 0;
       const totalQty    = parseFloat(d['Total Quantity']) || 0;
 
-      // Upsert product; latest sheet wins on current_stock / maintaining
-      if (!productMap[name]) {
-        productMap[name] = { name, qc_code: d['QC Code'] || '', maintaining_qty: 0, current_stock: 0 };
-        productOutMap[name] = 0;
+      // Aggregate product across sheets by product name + QB/QC code
+      if (!productMap[productKey]) {
+        productMap[productKey] = {
+          name,
+          qc_code: code,
+          maintaining_qty: 0,
+          current_stock: 0,
+        };
+        productOutMap[productKey] = 0;
       }
-      productMap[name].maintaining_qty = maintaining;
-      productMap[name].current_stock   = totalQty;
-      if (d['QC Code']) productMap[name].qc_code = d['QC Code'];
+      productMap[productKey].maintaining_qty += maintaining;
+      productMap[productKey].current_stock += totalQty;
+      if (code && !productMap[productKey].qc_code) {
+        productMap[productKey].qc_code = code;
+      }
 
       // Accumulate date columns (DATE:YYYY-MM-DD:IN / OUT)
       for (const [key, val] of Object.entries(d)) {
@@ -274,16 +318,12 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         const qty = parseFloat(val) || 0;
         if (qty <= 0) continue;
 
-        const dateKey = `${name}|${m[1]}|${m[2]}`;
-        if (seenDateKeys.has(dateKey)) continue; // skip duplicate date entries across sheets
-        seenDateKeys.add(dateKey);
-
         const [, date, type] = m;
         if (type === 'IN') {
           dateInMap[date]  = (dateInMap[date]  || 0) + qty;
         } else {
           dateOutMap[date] = (dateOutMap[date] || 0) + qty;
-          productOutMap[name] = (productOutMap[name] || 0) + qty;
+          productOutMap[productKey] = (productOutMap[productKey] || 0) + qty;
         }
       }
     }
@@ -342,11 +382,24 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       categoryMap[cat].total_stock += p.current_stock;
     }
     const categoryBreakdown = Object.values(categoryMap).sort((a, b) => b.total_stock - a.total_stock);
+    summary.total_product_categories = products.length;
+
+    const productStocks = products
+      .map(p => ({
+        product_name: p.name,
+        qc_code: p.qc_code,
+        qb_code: p.qc_code,
+        current_stock: Math.round(p.current_stock),
+      }))
+      .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
     // ── 7. Ink consumption breakdown ────────────────────────────────────────
     const inkMap = {};
-    for (const [name, totalOut] of Object.entries(productOutMap)) {
+    for (const [productKey, totalOut] of Object.entries(productOutMap)) {
       if (totalOut <= 0) continue;
+      const p = productMap[productKey];
+      if (!p) continue;
+      const name = p.name || '';
       const n = name.toLowerCase();
       const inkType =
         /cyan/.test(n)    ? 'Cyan'      :
@@ -369,13 +422,22 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         id:              i + 1,
         product_name:    p.name,
         qc_code:         p.qc_code,
+        qb_code:         p.qc_code,
         current_stock:   Math.round(p.current_stock),
         maintaining_qty: Math.round(p.maintaining_qty),
         critical_qty:    0,
         stock_status:    p.current_stock <= 0 ? 'critical' : 'warning',
       }));
 
-    res.json({ success: true, summary, monthly_trend: monthlyTrend, category_breakdown: categoryBreakdown, ink_breakdown: inkBreakdown, low_stock_items: lowStockItems });
+    res.json({
+      success: true,
+      summary,
+      monthly_trend: monthlyTrend,
+      category_breakdown: categoryBreakdown,
+      ink_breakdown: inkBreakdown,
+      low_stock_items: lowStockItems,
+      product_stocks: productStocks,
+    });
 
   } catch (error) {
     console.error('GET /dashboard/inventory-overview error:', error);
