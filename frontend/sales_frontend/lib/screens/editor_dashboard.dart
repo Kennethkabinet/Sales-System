@@ -35,115 +35,134 @@ class _EditorDashboardState extends State<EditorDashboard> {
           // ── Top bar ──
           Container(
             height: 56,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: const BoxDecoration(
               color: _kBg,
               border: Border(
                 bottom: BorderSide(color: Color(0xFFE8EAED)),
               ),
             ),
-            child: Row(
-              children: [
-                // App Title
-                SizedBox(
-                  width: 30,
-                  height: 30,
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.diamond, size: 22, color: _kAccent),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  'Synergy Graphics',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: _kNavy,
-                  ),
-                ),
-                const Spacer(),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: Row(
+                      children: [
+                        // App Title
+                        SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.diamond,
+                                size: 22,
+                                color: _kAccent),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Synergy Graphics',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _kNavy,
+                          ),
+                        ),
+                        const SizedBox(width: 24),
 
-                // User info
-                CircleAvatar(
-                  radius: 17,
-                  backgroundColor: _kAvatBg,
-                  child: Text(
-                    auth.user?.username[0].toUpperCase() ?? 'E',
-                    style: const TextStyle(
-                      color: _kAccent,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
+                        // User info
+                        CircleAvatar(
+                          radius: 17,
+                          backgroundColor: _kAvatBg,
+                          child: Text(
+                            auth.user?.username[0].toUpperCase() ?? 'E',
+                            style: const TextStyle(
+                              color: _kAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              auth.user?.fullName ??
+                                  auth.user?.username ??
+                                  'Editor',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: _kNavy,
+                              ),
+                            ),
+                            const Text(
+                              'Editor',
+                              style: TextStyle(fontSize: 11, color: _kGray),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 8),
+
+                        // Settings button
+                        IconButton(
+                          icon: const Icon(Icons.settings_outlined,
+                              color: _kGray),
+                          tooltip: 'Settings',
+                          onPressed: () {
+                            setState(() => _showSettings = !_showSettings);
+                          },
+                        ),
+
+                        // Logout button
+                        IconButton(
+                          icon: const Icon(Icons.logout, color: _kGray),
+                          tooltip: 'Logout',
+                          onPressed: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                scrollable: true,
+                                title: const Text('Logout'),
+                                content: const Text(
+                                    'Are you sure you want to logout?'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Logout'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true && context.mounted) {
+                              await auth.logout();
+                              if (context.mounted) {
+                                Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                    builder: (_) => const LoginScreen(),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      auth.user?.fullName ?? auth.user?.username ?? 'Editor',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _kNavy,
-                      ),
-                    ),
-                    const Text(
-                      'Editor',
-                      style: TextStyle(fontSize: 11, color: _kGray),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 8),
-
-                // Settings button
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined, color: _kGray),
-                  tooltip: 'Settings',
-                  onPressed: () {
-                    setState(() => _showSettings = !_showSettings);
-                  },
-                ),
-
-                // Logout button
-                IconButton(
-                  icon: const Icon(Icons.logout, color: _kGray),
-                  tooltip: 'Logout',
-                  onPressed: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Logout'),
-                        content: const Text('Are you sure you want to logout?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text('Logout'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true && context.mounted) {
-                      await auth.logout();
-                      if (context.mounted) {
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(
-                            builder: (_) => const LoginScreen(),
-                          ),
-                        );
-                      }
-                    }
-                  },
-                ),
-              ],
+                );
+              },
             ),
           ),
 

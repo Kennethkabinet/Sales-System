@@ -35,174 +35,193 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
           // ── Top bar ──
           Container(
             height: 56,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: const BoxDecoration(
               color: _kBg,
               border: Border(
                 bottom: BorderSide(color: Color(0xFFE8EAED)),
               ),
             ),
-            child: Row(
-              children: [
-                // App Title
-                SizedBox(
-                  width: 30,
-                  height: 30,
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.diamond, size: 22, color: _kAccent),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  'Synergy Graphics',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: _kNavy,
-                  ),
-                ),
-                const Spacer(),
-
-                // Live Updates badge
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE6F4EA),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF34A853),
-                          shape: BoxShape.circle,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: Row(
+                      children: [
+                        // App Title
+                        SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.diamond,
+                                size: 22,
+                                color: _kAccent),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'Live Updates',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF1E7E34),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Synergy Graphics',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _kNavy,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
+                        const SizedBox(width: 24),
 
-                // Read-only badge
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.lock_outline, size: 13, color: _kGray),
-                      SizedBox(width: 5),
-                      Text(
-                        'Read-Only',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: _kGray,
+                        // Live Updates badge
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE6F4EA),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF34A853),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              const Text(
+                                'Live Updates',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF1E7E34),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 16),
+                        const SizedBox(width: 12),
 
-                // User info
-                CircleAvatar(
-                  radius: 17,
-                  backgroundColor: _kAvatBg,
-                  child: Text(
-                    auth.user?.username[0].toUpperCase() ?? 'V',
-                    style: const TextStyle(
-                      color: _kAccent,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
+                        // Read-only badge
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.lock_outline, size: 13, color: _kGray),
+                              SizedBox(width: 5),
+                              Text(
+                                'Read-Only',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: _kGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+
+                        // User info
+                        CircleAvatar(
+                          radius: 17,
+                          backgroundColor: _kAvatBg,
+                          child: Text(
+                            auth.user?.username[0].toUpperCase() ?? 'V',
+                            style: const TextStyle(
+                              color: _kAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              auth.user?.fullName ??
+                                  auth.user?.username ??
+                                  'Viewer',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: _kNavy,
+                              ),
+                            ),
+                            const Text(
+                              'Viewer',
+                              style: TextStyle(fontSize: 11, color: _kGray),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 8),
+
+                        // Settings button
+                        IconButton(
+                          icon: const Icon(Icons.settings_outlined,
+                              color: _kGray),
+                          tooltip: 'Settings',
+                          onPressed: () {
+                            setState(() => _showSettings = !_showSettings);
+                          },
+                        ),
+
+                        // Logout button
+                        IconButton(
+                          icon: const Icon(Icons.logout, color: _kGray),
+                          tooltip: 'Logout',
+                          onPressed: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                scrollable: true,
+                                title: const Text('Logout'),
+                                content: const Text(
+                                    'Are you sure you want to logout?'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Logout'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true && context.mounted) {
+                              await auth.logout();
+                              if (context.mounted) {
+                                Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                    builder: (_) => const LoginScreen(),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      auth.user?.fullName ?? auth.user?.username ?? 'Viewer',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _kNavy,
-                      ),
-                    ),
-                    const Text(
-                      'Viewer',
-                      style: TextStyle(fontSize: 11, color: _kGray),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 8),
-
-                // Settings button
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined, color: _kGray),
-                  tooltip: 'Settings',
-                  onPressed: () {
-                    setState(() => _showSettings = !_showSettings);
-                  },
-                ),
-
-                // Logout button
-                IconButton(
-                  icon: const Icon(Icons.logout, color: _kGray),
-                  tooltip: 'Logout',
-                  onPressed: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Logout'),
-                        content: const Text('Are you sure you want to logout?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text('Logout'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true && context.mounted) {
-                      await auth.logout();
-                      if (context.mounted) {
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(
-                            builder: (_) => const LoginScreen(),
-                          ),
-                        );
-                      }
-                    }
-                  },
-                ),
-              ],
+                );
+              },
             ),
           ),
 

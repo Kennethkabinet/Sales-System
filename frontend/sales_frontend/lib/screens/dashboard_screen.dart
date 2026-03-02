@@ -153,24 +153,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ? MainAxisAlignment.start
                         : MainAxisAlignment.center,
                     children: [
-                      // Logo
-                      SizedBox(
-                        width: 32,
-                        height: 32,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.asset(
-                            'assets/images/logo.png',
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => const Icon(
-                              Icons.diamond,
-                              size: 22,
-                              color: AppColors.primaryRed,
+                      if (_sidebarExpanded) ...[
+                        // Logo
+                        SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: Image.asset(
+                              'assets/images/logo.png',
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.diamond,
+                                size: 22,
+                                color: AppColors.primaryRed,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      if (_sidebarExpanded) ...[
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -193,11 +193,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const BoxConstraints(minWidth: 32, minHeight: 32),
                         ),
                       ] else
-                        GestureDetector(
-                          onTap: () => setState(
+                        IconButton(
+                          icon: Icon(Icons.menu,
+                              color: Colors.grey.shade600, size: 22),
+                          onPressed: () => setState(
                               () => _sidebarExpanded = !_sidebarExpanded),
-                          behavior: HitTestBehavior.opaque,
-                          child: const SizedBox(width: 32, height: 32),
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 32, minHeight: 32),
                         ),
                     ],
                   ),
@@ -425,6 +428,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final confirmed = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
+              scrollable: true,
               title: const Text('Logout'),
               content: const Text('Are you sure you want to logout?'),
               actions: [

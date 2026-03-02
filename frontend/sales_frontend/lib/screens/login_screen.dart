@@ -41,15 +41,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final compact = screenWidth < 900;
+    final contentWidth = screenWidth < 420 ? screenWidth - 24 : 380.0;
+
     return Scaffold(
       backgroundColor: AppColors.lightBlue,
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 12 : 32,
+            vertical: compact ? 16 : 32,
+          ),
           child: Consumer<AuthProvider>(
             builder: (context, auth, _) {
               return SizedBox(
-                width: 380,
+                width: contentWidth,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -74,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         const Text(
                           'Synergy Graphics',
                           style: TextStyle(
-                            fontSize: 24,
+                            fontSize: 22,
                             fontWeight: FontWeight.w900,
                             color: AppColors.primaryBlue,
                             letterSpacing: 0.3,
@@ -102,11 +109,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         Container(
                           width: double.infinity,
                           margin: const EdgeInsets.only(top: 40),
-                          padding: const EdgeInsets.only(
-                            top: 60,
-                            left: 40,
-                            right: 40,
-                            bottom: 40,
+                          padding: EdgeInsets.only(
+                            top: compact ? 52 : 60,
+                            left: compact ? 20 : 40,
+                            right: compact ? 20 : 40,
+                            bottom: compact ? 28 : 40,
                           ),
                           decoration: BoxDecoration(
                             color: AppColors.primaryRed,

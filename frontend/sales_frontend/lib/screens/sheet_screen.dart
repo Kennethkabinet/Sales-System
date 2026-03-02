@@ -95,6 +95,26 @@ class _FormulaEntry {
       );
 }
 
+class _SheetSnapshot {
+  final List<String> columns;
+  final List<Map<String, String>> data;
+  final List<String> rowLabels;
+  final int? selectedRow;
+  final int? selectedCol;
+  final int? selectionEndRow;
+  final int? selectionEndCol;
+
+  const _SheetSnapshot({
+    required this.columns,
+    required this.data,
+    required this.rowLabels,
+    this.selectedRow,
+    this.selectedCol,
+    this.selectionEndRow,
+    this.selectionEndCol,
+  });
+}
+
 class SheetScreen extends StatefulWidget {
   final bool readOnly;
   final VoidCallback? onNavigateToEditRequests;
@@ -142,6 +162,12 @@ class _SheetScreenState extends State<SheetScreen> {
   int? _selectionEndRow;
   int? _selectionEndCol;
   bool _isDragging = false;
+
+  // Undo / Redo history
+  static const int _maxHistoryEntries = 100;
+  final List<_SheetSnapshot> _undoStack = [];
+  final List<_SheetSnapshot> _redoStack = [];
+  bool _isRestoringHistory = false;
 
   // Bulk sheet selection (All Sheets table)
   final Set<int> _selectedSheetIds = {};
@@ -1025,6 +1051,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _saveStatus = 'saved';
         _hasUnsavedChanges = false;
       });
+      _clearHistory();
 
       // Refresh collaborative editing status
       await _refreshSheetStatus();
@@ -1100,6 +1127,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _editingCol = null;
         _isLoading = false;
       });
+      _clearHistory();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1336,6 +1364,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _editingCol = null;
         _isLoading = false;
       });
+      _clearHistory();
 
       // Recalc totals so Total Quantity shows correct value from Maintaining
       if (template['id'] == 'inventory_tracker') {
@@ -2163,15 +2192,18 @@ class _SheetScreenState extends State<SheetScreen> {
       }
     }
 
+    _pushUndoSnapshot();
     setState(() {
       _columns.add(nextCol);
       for (var row in _data) {
         row[nextCol] = '';
       }
     });
+    _markDirty();
   }
 
   void _addRow() {
+    _pushUndoSnapshot();
     setState(() {
       final row = <String, String>{};
       for (var col in _columns) {
@@ -2181,6 +2213,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // Add label for new row
       _rowLabels.add('${_data.length}');
     });
+    _markDirty();
   }
 
   void _deleteColumn() {
@@ -2206,6 +2239,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final colToDelete = _columns[_selectedCol!];
 
+    _pushUndoSnapshot();
     setState(() {
       _columns.removeAt(_selectedCol!);
       // Remove column data from all rows
@@ -2215,6 +2249,7 @@ class _SheetScreenState extends State<SheetScreen> {
       _selectedCol = null;
       _selectionEndCol = null;
     });
+    _markDirty();
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -2248,12 +2283,14 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final rowNum = _selectedRow! + 1;
 
+    _pushUndoSnapshot();
     setState(() {
       _data.removeAt(_selectedRow!);
       _rowLabels.removeAt(_selectedRow!);
       _selectedRow = null;
       _selectionEndRow = null;
     });
+    _markDirty();
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -2526,6 +2563,9 @@ class _SheetScreenState extends State<SheetScreen> {
       final colName = _columns[savedCol];
       final newValue = _editController.text;
       final changed = newValue != _originalCellValue;
+      if (changed) {
+        _pushUndoSnapshot();
+      }
       setState(() {
         _data[savedRow][colName] = newValue;
         _editingRow = null;
@@ -2564,6 +2604,76 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // =============== Excel-like Selection Helpers ===============
+
+  List<Map<String, String>> _cloneDataRows(List<Map<String, String>> rows) {
+    return rows.map((r) => Map<String, String>.from(r)).toList();
+  }
+
+  _SheetSnapshot _captureSheetSnapshot() {
+    return _SheetSnapshot(
+      columns: List<String>.from(_columns),
+      data: _cloneDataRows(_data),
+      rowLabels: List<String>.from(_rowLabels),
+      selectedRow: _selectedRow,
+      selectedCol: _selectedCol,
+      selectionEndRow: _selectionEndRow,
+      selectionEndCol: _selectionEndCol,
+    );
+  }
+
+  void _clearHistory() {
+    _undoStack.clear();
+    _redoStack.clear();
+  }
+
+  bool get _canUndo => _undoStack.isNotEmpty;
+  bool get _canRedo => _redoStack.isNotEmpty;
+
+  void _pushUndoSnapshot() {
+    if (_isRestoringHistory) return;
+    _undoStack.add(_captureSheetSnapshot());
+    if (_undoStack.length > _maxHistoryEntries) {
+      _undoStack.removeAt(0);
+    }
+    _redoStack.clear();
+  }
+
+  void _restoreSnapshot(_SheetSnapshot snapshot) {
+    setState(() {
+      _columns = List<String>.from(snapshot.columns);
+      _data = _cloneDataRows(snapshot.data);
+      _rowLabels = List<String>.from(snapshot.rowLabels);
+      _selectedRow = snapshot.selectedRow;
+      _selectedCol = snapshot.selectedCol;
+      _selectionEndRow = snapshot.selectionEndRow;
+      _selectionEndCol = snapshot.selectionEndCol;
+      _editingRow = null;
+      _editingCol = null;
+      _updateFormulaBar();
+    });
+  }
+
+  void _undo() {
+    if (!_canUndo) return;
+    final current = _captureSheetSnapshot();
+    final previous = _undoStack.removeLast();
+    _isRestoringHistory = true;
+    _redoStack.add(current);
+    _restoreSnapshot(previous);
+    _isRestoringHistory = false;
+    _markDirty();
+  }
+
+  void _redo() {
+    if (!_canRedo) return;
+    final current = _captureSheetSnapshot();
+    final next = _redoStack.removeLast();
+    _isRestoringHistory = true;
+    _undoStack.add(current);
+    _restoreSnapshot(next);
+    _isRestoringHistory = false;
+    _markDirty();
+  }
 
   /// Get column width for a given column index
   double _getColumnWidth(int colIndex) {
@@ -2661,9 +2771,31 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Select a single cell and clear range
   void _selectCell(int row, int col) {
+    if (_selectedRow == row &&
+        _selectedCol == col &&
+        _selectionEndRow == row &&
+        _selectionEndCol == col) {
+      return;
+    }
     setState(() {
       _selectedRow = row;
       _selectedCol = col;
+      _selectionEndRow = row;
+      _selectionEndCol = col;
+      _updateFormulaBar();
+    });
+  }
+
+  /// Extend current selection range to a new endpoint.
+  void _extendSelectionTo(int row, int col) {
+    if (_selectedRow == null || _selectedCol == null) {
+      _selectCell(row, col);
+      return;
+    }
+    if (_selectionEndRow == row && _selectionEndCol == col) {
+      return;
+    }
+    setState(() {
       _selectionEndRow = row;
       _selectionEndCol = col;
       _updateFormulaBar();
@@ -2849,6 +2981,7 @@ class _SheetScreenState extends State<SheetScreen> {
     if (!_canEditSheet()) return;
 
     final bounds = _getSelectionBounds();
+    _pushUndoSnapshot();
     setState(() {
       for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
         for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
@@ -2857,6 +2990,7 @@ class _SheetScreenState extends State<SheetScreen> {
       }
       _updateFormulaBar();
     });
+    _markDirty();
   }
 
   /// Convert row/col from a global position within the spreadsheet
@@ -2901,6 +3035,20 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final isShift = HardwareKeyboard.instance.isShiftPressed;
     final isCtrl = HardwareKeyboard.instance.isControlPressed;
+
+    // Undo / Redo shortcuts (global in sheet view)
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      if (isShift) {
+        _redo();
+      } else {
+        _undo();
+      }
+      return;
+    }
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY) {
+      _redo();
+      return;
+    }
 
     if (_editingRow != null && _editingCol != null) {
       // In editing mode
@@ -4555,6 +4703,8 @@ class _SheetScreenState extends State<SheetScreen> {
               !widget.readOnly &&
               (isAdminOrEditor || role == 'user'))
             group('Edit', [
+              _buildRibbonButton(Icons.undo, 'Undo', _canUndo ? _undo : null),
+              _buildRibbonButton(Icons.redo, 'Redo', _canRedo ? _redo : null),
               _buildRibbonButton(
                   Icons.edit, 'Edit', _isLocked ? null : _lockSheet),
               _buildRibbonButton(
@@ -4767,7 +4917,7 @@ class _SheetScreenState extends State<SheetScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Turn Total Quantity red when this percentage of Stock has been consumed.',
+                  'Turn Total Quantity red when used quantity reaches this percentage of total quantity.',
                   style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 20),
@@ -4817,8 +4967,8 @@ class _SheetScreenState extends State<SheetScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          'Products whose Total Quantity has dropped by '
-                          '${(tempThreshold * 100).round()}% or more of Stock will be highlighted red.',
+                          'Products whose usage reaches '
+                          '${(tempThreshold * 100).round()}% or more will be highlighted red.',
                           style: const TextStyle(
                               fontSize: 11, color: Color(0xFFC0392B)),
                         ),
@@ -4858,14 +5008,29 @@ class _SheetScreenState extends State<SheetScreen> {
     final code = (row['QB Code'] ?? row['QC Code'] ?? '').trim();
     if (productName.isEmpty && code.isEmpty) return null;
 
-    final total = double.tryParse(row['Total Quantity'] ?? '');
-    if (total == null) return null;
+    double totalIn = 0;
+    double totalOut = 0;
+    for (final col in _columns) {
+      if (col.startsWith('DATE:') && col.endsWith(':IN')) {
+        totalIn += double.tryParse(row[col] ?? '0') ?? 0;
+      } else if (col.startsWith('DATE:') && col.endsWith(':OUT')) {
+        totalOut += double.tryParse(row[col] ?? '0') ?? 0;
+      }
+    }
 
-    if (total <= 0) return 1.0;
+    // Primary rule: usage% = used quantity / total quantity
+    // where used quantity is sum(OUT) and total quantity is sum(IN).
+    if (totalIn > 0) {
+      final pct = totalOut / totalIn;
+      return pct.clamp(0.0, 1.0);
+    }
 
+    // Fallback for legacy rows without date transactions.
     final stock = double.tryParse(row['Stock'] ?? '');
-    if (stock == null || stock <= 0) return null;
-    return (stock - total) / stock;
+    final total = double.tryParse(row['Total Quantity'] ?? '');
+    if (stock == null || stock <= 0 || total == null) return null;
+    final pct = (stock - total) / stock;
+    return pct.clamp(0.0, 1.0);
   }
 
   List<Map<String, String>> _buildCriticalRows() {
@@ -5180,6 +5345,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
     return Row(
       children: [
+        _buildRibbonButton(Icons.undo, 'Undo', _canUndo ? _undo : null),
+        const SizedBox(width: 6),
+        _buildRibbonButton(Icons.redo, 'Redo', _canRedo ? _redo : null),
+        const SizedBox(width: 6),
+
         // ── Edit button ──
         if (canCollab)
           _buildRibbonButton(
@@ -7610,6 +7780,50 @@ class _SheetScreenState extends State<SheetScreen> {
     final isViewer = role == 'viewer';
     final todayStr = _inventoryDateStr(DateTime.now());
 
+    final q = _inventorySearchQuery.toLowerCase();
+    final filteredEntries = q.isEmpty
+        ? _data.asMap().entries.toList()
+        : _data.asMap().entries.where((e) {
+            final row = e.value;
+            return (row['Product Name'] ?? '')
+                    .toString()
+                    .toLowerCase()
+                    .contains(q) ||
+                _inventoryRowCode(row).toString().toLowerCase().contains(q);
+          }).toList();
+
+    final visibleColumnKeys = <String>[
+      ...frozenLeft,
+      for (final date in visibleDates) ...['DATE:$date:IN', 'DATE:$date:OUT'],
+      ...miscCols,
+      ...frozenRight,
+    ];
+
+    Map<String, int>? inventoryCellFromPosition(Offset localPosition) {
+      final x = localPosition.dx / _zoomLevel;
+      final y = localPosition.dy / _zoomLevel;
+      final dataStartY = _invHeaderH1 + _invHeaderH2;
+
+      if (x < _rowNumWidth || y < dataStartY) return null;
+
+      final rowVisual = ((y - dataStartY) / _cellHeight).floor();
+      if (rowVisual < 0 || rowVisual >= filteredEntries.length) return null;
+      final row = filteredEntries[rowVisual].key;
+
+      double accX = _rowNumWidth;
+      for (final colKey in visibleColumnKeys) {
+        final width = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
+        if (x >= accX && x < accX + width) {
+          final col = _columns.indexOf(colKey);
+          if (col < 0) return null;
+          return {'row': row, 'col': col};
+        }
+        accX += width;
+      }
+
+      return null;
+    }
+
     // Total grid width
     double totalWidth = _rowNumWidth;
     for (final _ in frozenLeft) {
@@ -7627,7 +7841,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Approximate total height: two header rows + data rows.
     final double totalHeight =
-        _invHeaderH1 + _invHeaderH2 + _data.length * _cellHeight + 16;
+        _invHeaderH1 + _invHeaderH2 + filteredEntries.length * _cellHeight + 16;
 
     final gridContent = SizedBox(
       width: totalWidth,
@@ -7639,44 +7853,58 @@ class _SheetScreenState extends State<SheetScreen> {
               frozenLeft, frozenRight, miscCols, visibleDates,
               canDelete: isAdminOrEditor && !widget.readOnly),
           // Data rows – filtered by search query
-          ...() {
-            final q = _inventorySearchQuery.toLowerCase();
-            final filtered = q.isEmpty
-                ? _data.asMap().entries.toList()
-                : _data.asMap().entries.where((e) {
-                    final row = e.value;
-                    return (row['Product Name'] ?? '')
-                            .toString()
-                            .toLowerCase()
-                            .contains(q) ||
-                        _inventoryRowCode(row)
-                            .toString()
-                            .toLowerCase()
-                            .contains(q);
-                  }).toList();
-            return filtered.map((e) => _buildInventoryDataRow(
-                  e.key,
-                  frozenLeft,
-                  frozenRight,
-                  miscCols,
-                  visibleDates,
-                  isAdminOrEditor: isAdminOrEditor && !widget.readOnly,
-                  isViewer: isViewer,
-                  todayStr: todayStr,
-                ));
-          }(),
+          ...filteredEntries.map((e) => _buildInventoryDataRow(
+                e.key,
+                frozenLeft,
+                frozenRight,
+                miscCols,
+                visibleDates,
+                isAdminOrEditor: isAdminOrEditor && !widget.readOnly,
+                isViewer: isViewer,
+                todayStr: todayStr,
+              )),
         ],
       ),
     );
 
     // Wrap in a zoom-aware sized box so scroll extents scale with zoom.
-    return SizedBox(
-      width: totalWidth * _zoomLevel,
-      height: totalHeight * _zoomLevel,
-      child: Transform.scale(
-        scale: _zoomLevel,
-        alignment: Alignment.topLeft,
-        child: gridContent,
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if ((event.buttons & kPrimaryMouseButton) == 0) return;
+        final cell = inventoryCellFromPosition(event.localPosition);
+        if (cell == null) return;
+
+        if (_editingRow != null) {
+          _saveEdit();
+          _recalcInventoryTotals();
+        }
+
+        _isDragging = true;
+        final isShift = HardwareKeyboard.instance.isShiftPressed;
+        if (isShift && _selectedRow != null && _selectedCol != null) {
+          _extendSelectionTo(cell['row']!, cell['col']!);
+        } else {
+          _selectCell(cell['row']!, cell['col']!);
+        }
+        _spreadsheetFocusNode.requestFocus();
+      },
+      onPointerMove: (event) {
+        if (!_isDragging) return;
+        final cell = inventoryCellFromPosition(event.localPosition);
+        if (cell == null) return;
+        _extendSelectionTo(cell['row']!, cell['col']!);
+      },
+      onPointerUp: (_) => _isDragging = false,
+      onPointerCancel: (_) => _isDragging = false,
+      child: SizedBox(
+        width: totalWidth * _zoomLevel,
+        height: totalHeight * _zoomLevel,
+        child: Transform.scale(
+          scale: _zoomLevel,
+          alignment: Alignment.topLeft,
+          child: gridContent,
+        ),
       ),
     );
   }
@@ -7879,7 +8107,8 @@ class _SheetScreenState extends State<SheetScreen> {
     }) {
       final colIdx = _columns.indexOf(colKey);
       final isEditing = _editingRow == rowIndex && _editingCol == colIdx;
-      final isSelected = _selectedRow == rowIndex && _selectedCol == colIdx;
+      final isActiveCell = _selectedRow == rowIndex && _selectedCol == colIdx;
+      final isInSel = colIdx >= 0 && _isInSelection(rowIndex, colIdx);
       final value = row[colKey] ?? '';
 
       // For the Total Quantity cell, derive background + text colours from
@@ -7893,7 +8122,8 @@ class _SheetScreenState extends State<SheetScreen> {
 
       Color bgColor() {
         if (isEditing) return Colors.white;
-        if (isSelected) return const Color(0xFFBBD3FB);
+        if (isActiveCell) return const Color(0xFFBBD3FB);
+        if (isInSel) return const Color(0xFFD2E3FC);
         if (isRowSelected) return const Color(0xFFE8F0FE);
         if (totalQtyBgColor != null) return totalQtyBgColor;
         return rowBg;
@@ -7940,9 +8170,15 @@ class _SheetScreenState extends State<SheetScreen> {
           if (_editingRow != null) {
             _saveEdit();
             _recalcInventoryTotals();
-            _saveSheet();
           }
-          if (colIdx >= 0) _selectCell(rowIndex, colIdx);
+          if (colIdx >= 0) {
+            final isShift = HardwareKeyboard.instance.isShiftPressed;
+            if (isShift && _selectedRow != null && _selectedCol != null) {
+              _extendSelectionTo(rowIndex, colIdx);
+            } else {
+              _selectCell(rowIndex, colIdx);
+            }
+          }
           _spreadsheetFocusNode.requestFocus();
         },
         onDoubleTap: (editable && !autoCalc && colIdx >= 0)
@@ -7976,32 +8212,10 @@ class _SheetScreenState extends State<SheetScreen> {
                         isDense: true,
                         contentPadding: EdgeInsets.zero,
                       ),
-                      onChanged: isDateInOut
-                          ? (val) {
-                              // Live-update _data and recalc while typing
-                              final prev = _data[rowIndex][colKey] ?? '';
-                              setState(() {
-                                _data[rowIndex][colKey] = val;
-                              });
-                              _recalcInventoryTotals();
-                              if (val != prev) {
-                                _markDirty();
-                                // ── Immediately broadcast to other users ──
-                                if (_currentSheet != null) {
-                                  SocketService.instance.cellUpdate(
-                                    _currentSheet!.id,
-                                    rowIndex,
-                                    colKey,
-                                    val,
-                                  );
-                                }
-                              }
-                            }
-                          : null,
+                      onChanged: isDateInOut ? (_) {} : null,
                       onSubmitted: (_) {
                         _saveEdit();
                         _recalcInventoryTotals();
-                        _saveSheet();
                       },
                     )
                   : Text(
@@ -8017,6 +8231,46 @@ class _SheetScreenState extends State<SheetScreen> {
                       textAlign: TextAlign.center,
                     ),
             ),
+            if (isActiveCell && !isEditing && colIdx >= 0)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: AppColors.primaryBlue,
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (isInSel && !isActiveCell && !isEditing && colIdx >= 0)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: _isSelectionEdge(rowIndex, colIdx, 'top')
+                            ? const BorderSide(
+                                color: AppColors.primaryBlue, width: 1.5)
+                            : BorderSide.none,
+                        bottom: _isSelectionEdge(rowIndex, colIdx, 'bottom')
+                            ? const BorderSide(
+                                color: AppColors.primaryBlue, width: 1.5)
+                            : BorderSide.none,
+                        left: _isSelectionEdge(rowIndex, colIdx, 'left')
+                            ? const BorderSide(
+                                color: AppColors.primaryBlue, width: 1.5)
+                            : BorderSide.none,
+                        right: _isSelectionEdge(rowIndex, colIdx, 'right')
+                            ? const BorderSide(
+                                color: AppColors.primaryBlue, width: 1.5)
+                            : BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             // ── Presence overlay: show colored border + initials avatar ──
             if (cellOccupant != null)
               Positioned.fill(
@@ -8129,7 +8383,7 @@ class _SheetScreenState extends State<SheetScreen> {
       ));
     }
 
-    return Row(children: cells);
+    return RepaintBoundary(child: Row(children: cells));
   }
 
   // ═══════════════════════════════════════════════════════
@@ -8248,15 +8502,59 @@ class _SheetScreenState extends State<SheetScreen> {
                                     alignment: Alignment.topLeft,
                                     child: SizedBox(
                                       width: dataCellsWidth,
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: _data
-                                            .asMap()
-                                            .entries
-                                            .map((e) => _buildDataRow(e.key,
-                                                includeRowNum: false))
-                                            .toList(),
+                                      child: Listener(
+                                        behavior: HitTestBehavior.translucent,
+                                        onPointerDown: (event) {
+                                          if ((event.buttons &
+                                                  kPrimaryMouseButton) ==
+                                              0) {
+                                            return;
+                                          }
+                                          final cell =
+                                              _getCellFromDataAreaPosition(
+                                                  event.localPosition);
+                                          if (cell == null) return;
+
+                                          if (_editingRow != null) {
+                                            _saveEdit();
+                                          }
+
+                                          _isDragging = true;
+                                          final isShift = HardwareKeyboard
+                                              .instance.isShiftPressed;
+                                          if (isShift &&
+                                              _selectedRow != null &&
+                                              _selectedCol != null) {
+                                            _extendSelectionTo(
+                                                cell['row']!, cell['col']!);
+                                          } else {
+                                            _selectCell(
+                                                cell['row']!, cell['col']!);
+                                          }
+                                          _spreadsheetFocusNode.requestFocus();
+                                        },
+                                        onPointerMove: (event) {
+                                          if (!_isDragging) return;
+                                          final cell =
+                                              _getCellFromDataAreaPosition(
+                                                  event.localPosition);
+                                          if (cell == null) return;
+                                          _extendSelectionTo(
+                                              cell['row']!, cell['col']!);
+                                        },
+                                        onPointerUp: (_) => _isDragging = false,
+                                        onPointerCancel: (_) =>
+                                            _isDragging = false,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: _data
+                                              .asMap()
+                                              .entries
+                                              .map((e) => _buildDataRow(e.key,
+                                                  includeRowNum: false))
+                                              .toList(),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -8482,6 +8780,9 @@ class _SheetScreenState extends State<SheetScreen> {
                   final int row = _selectedRow!;
                   final colKey = _columns[_selectedCol!];
                   final oldVal = _data[row][colKey] ?? '';
+                  if (value != oldVal) {
+                    _pushUndoSnapshot();
+                  }
                   setState(() {
                     _data[row][colKey] = value;
                     _editingRow = null;
@@ -8761,320 +9062,326 @@ class _SheetScreenState extends State<SheetScreen> {
     final rowHeight = _getRowHeight(rowIndex);
     final isCollapsed = _collapsedRows.contains(rowIndex);
 
-    return Row(
-      children: [
-        if (includeRowNum) _buildRowNumCellWidget(rowIndex),
-        // Data cells
-        ..._columns.asMap().entries.map((entry) {
-          final colIndex = entry.key;
-          final colName = entry.value;
+    return RepaintBoundary(
+      child: Row(
+        children: [
+          if (includeRowNum) _buildRowNumCellWidget(rowIndex),
+          // Data cells
+          ..._columns.asMap().entries.map((entry) {
+            final colIndex = entry.key;
+            final colName = entry.value;
 
-          // Skip cells that are covered by merged ranges
-          if (_shouldSkipCell(rowIndex, colIndex)) {
-            return const SizedBox.shrink();
-          }
-
-          final colWidth = _getColumnWidth(colIndex);
-          final isEditing = _editingRow == rowIndex &&
-              _editingCol == colIndex &&
-              !isCollapsed;
-          final isActiveCell =
-              _selectedRow == rowIndex && _selectedCol == colIndex;
-          final isInSel = _isInSelection(rowIndex, colIndex);
-          final value = _data[rowIndex][colName] ?? '';
-
-          // Check if this is a merged cell
-          final mergeBounds = _getMergedCellBounds(rowIndex, colIndex);
-          final isMerged = mergeBounds != null;
-          double cellWidth = colWidth;
-          double cellHeight = rowHeight;
-
-          // Calculate merged cell dimensions
-          if (isMerged && _isTopLeftOfMergedRange(rowIndex, colIndex)) {
-            // Calculate total width
-            cellWidth = 0;
-            for (int c = mergeBounds['minCol']!;
-                c <= mergeBounds['maxCol']!;
-                c++) {
-              cellWidth += _getColumnWidth(c);
+            // Skip cells that are covered by merged ranges
+            if (_shouldSkipCell(rowIndex, colIndex)) {
+              return const SizedBox.shrink();
             }
-            // Calculate total height
-            cellHeight = 0;
-            for (int r = mergeBounds['minRow']!;
-                r <= mergeBounds['maxRow']!;
-                r++) {
-              cellHeight += _getRowHeight(r);
+
+            final colWidth = _getColumnWidth(colIndex);
+            final isEditing = _editingRow == rowIndex &&
+                _editingCol == colIndex &&
+                !isCollapsed;
+            final isActiveCell =
+                _selectedRow == rowIndex && _selectedCol == colIndex;
+            final isInSel = _isInSelection(rowIndex, colIndex);
+            final value = _data[rowIndex][colName] ?? '';
+
+            // Check if this is a merged cell
+            final mergeBounds = _getMergedCellBounds(rowIndex, colIndex);
+            final isMerged = mergeBounds != null;
+            double cellWidth = colWidth;
+            double cellHeight = rowHeight;
+
+            // Calculate merged cell dimensions
+            if (isMerged && _isTopLeftOfMergedRange(rowIndex, colIndex)) {
+              // Calculate total width
+              cellWidth = 0;
+              for (int c = mergeBounds['minCol']!;
+                  c <= mergeBounds['maxCol']!;
+                  c++) {
+                cellWidth += _getColumnWidth(c);
+              }
+              // Calculate total height
+              cellHeight = 0;
+              for (int r = mergeBounds['minRow']!;
+                  r <= mergeBounds['maxRow']!;
+                  r++) {
+                cellHeight += _getRowHeight(r);
+              }
             }
-          }
 
-          // Get custom borders
-          final ck = _cellKey(rowIndex, colIndex);
-          final customBorders = _cellBorders[ck];
+            // Get custom borders
+            final ck = _cellKey(rowIndex, colIndex);
+            final customBorders = _cellBorders[ck];
 
-          return GestureDetector(
-            onTap: () {
-              if (_isResizingColumn) return;
-              if (isCollapsed) {
-                // If row is collapsed, expand it on cell click
-                _toggleRowCollapse(rowIndex);
-                return;
-              }
-              if (_editingRow != null) _saveEdit();
-              final isShift = HardwareKeyboard.instance.isShiftPressed;
-              if (isShift && _selectedRow != null && _selectedCol != null) {
-                // Shift+click: extend selection
-                setState(() {
-                  _selectionEndRow = rowIndex;
-                  _selectionEndCol = colIndex;
-                });
-              } else {
-                _selectCell(rowIndex, colIndex);
-              }
-              _spreadsheetFocusNode.requestFocus();
-            },
-            onDoubleTap: () {
-              if (_isResizingColumn || isCollapsed) return;
-              _startEditing(rowIndex, colIndex);
-            },
-            child: Container(
-              width: cellWidth,
-              height: cellHeight,
-              decoration: BoxDecoration(
-                border: customBorders != null
-                    ? Border(
-                        top: customBorders['top'] == true
-                            ? const BorderSide(color: Colors.black, width: 2)
-                            : BorderSide(color: Colors.grey[300]!, width: 1),
-                        right: customBorders['right'] == true
-                            ? const BorderSide(color: Colors.black, width: 2)
-                            : BorderSide(color: Colors.grey[300]!, width: 1),
-                        bottom: customBorders['bottom'] == true
-                            ? const BorderSide(color: Colors.black, width: 2)
-                            : BorderSide(color: Colors.grey[300]!, width: 1),
-                        left: customBorders['left'] == true
-                            ? const BorderSide(color: Colors.black, width: 2)
-                            : BorderSide(color: Colors.grey[300]!, width: 1),
-                      )
-                    : Border(
-                        right: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1,
-                        ),
-                        bottom: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1,
-                        ),
-                      ),
-                color: () {
-                  final ck = _cellKey(rowIndex, colIndex);
-                  final customBg = _cellBackgroundColors[ck];
-                  if (customBg != null && customBg != Colors.transparent) {
-                    return customBg;
-                  }
-                  return isEditing
-                      ? Colors.white
-                      : isActiveCell
-                          ? const Color(0xFFE8F0FE)
-                          : isInSel
-                              ? const Color(0xFFD2E3FC)
-                              : (rowIndex % 2 == 0
-                                  ? Colors.white
-                                  : const Color(0xFFFAFAFA));
-                }(),
-              ),
-              child: Stack(
-                children: [
-                  // Cell content (hidden when collapsed)
-                  if (!isCollapsed) ...[
-                    if (isEditing)
-                      TextField(
-                        controller: _editController,
-                        focusNode: _focusNode,
-                        style: const TextStyle(
-                            fontSize: 13, fontFamily: 'Segoe UI'),
-                        decoration: InputDecoration(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 4, vertical: 6),
-                          border: InputBorder.none,
-                          isDense: true,
-                          filled: true,
-                          fillColor: Colors.white,
-                        ),
-                        onSubmitted: (_) {
-                          _saveEdit();
-                          if (rowIndex < _data.length - 1) {
-                            _selectCell(rowIndex + 1, colIndex);
-                          }
-                          _spreadsheetFocusNode.requestFocus();
-                        },
-                      )
-                    else
-                      Builder(builder: (_) {
-                        final ck = _cellKey(rowIndex, colIndex);
-                        final fmts = _cellFormats[ck] ?? <String>{};
-                        final fontSize = _cellFontSizes[ck] ?? 13.0;
-                        final align = _cellAlignments[ck];
-                        Alignment cellAlign;
-                        if (align == TextAlign.center) {
-                          cellAlign = Alignment.center;
-                        } else if (align == TextAlign.right) {
-                          cellAlign = Alignment.centerRight;
-                        } else if (align == TextAlign.left) {
-                          cellAlign = Alignment.centerLeft;
-                        } else {
-                          cellAlign = _isNumeric(value)
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft;
-                        }
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 4, vertical: 6),
-                          child: Align(
-                            alignment: cellAlign,
-                            child: Text(
-                              value.startsWith('=')
-                                  ? _evaluateFormula(value)
-                                  : value,
-                              style: TextStyle(
-                                fontSize: fontSize,
-                                color: _cellTextColors[ck] ?? Colors.black87,
-                                fontFamily: 'Segoe UI',
-                                fontWeight: fmts.contains('bold')
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                fontStyle: fmts.contains('italic')
-                                    ? FontStyle.italic
-                                    : FontStyle.normal,
-                                decoration: fmts.contains('underline')
-                                    ? TextDecoration.underline
-                                    : TextDecoration.none,
-                              ),
-                              overflow: isMerged
-                                  ? TextOverflow.visible
-                                  : TextOverflow.ellipsis,
-                              maxLines: isMerged ? null : 1,
-                            ),
+            return GestureDetector(
+              onTap: () {
+                if (_isResizingColumn) return;
+                if (isCollapsed) {
+                  // If row is collapsed, expand it on cell click
+                  _toggleRowCollapse(rowIndex);
+                  return;
+                }
+                if (_editingRow != null) _saveEdit();
+                final isShift = HardwareKeyboard.instance.isShiftPressed;
+                if (isShift && _selectedRow != null && _selectedCol != null) {
+                  // Shift+click: extend selection
+                  setState(() {
+                    _selectionEndRow = rowIndex;
+                    _selectionEndCol = colIndex;
+                  });
+                } else {
+                  _selectCell(rowIndex, colIndex);
+                }
+                _spreadsheetFocusNode.requestFocus();
+              },
+              onDoubleTap: () {
+                if (_isResizingColumn || isCollapsed) return;
+                _startEditing(rowIndex, colIndex);
+              },
+              child: Container(
+                width: cellWidth,
+                height: cellHeight,
+                decoration: BoxDecoration(
+                  border: customBorders != null
+                      ? Border(
+                          top: customBorders['top'] == true
+                              ? const BorderSide(color: Colors.black, width: 2)
+                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                          right: customBorders['right'] == true
+                              ? const BorderSide(color: Colors.black, width: 2)
+                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                          bottom: customBorders['bottom'] == true
+                              ? const BorderSide(color: Colors.black, width: 2)
+                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                          left: customBorders['left'] == true
+                              ? const BorderSide(color: Colors.black, width: 2)
+                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                        )
+                      : Border(
+                          right: BorderSide(
+                            color: Colors.grey[300]!,
+                            width: 1,
                           ),
-                        );
-                      }),
-                  ],
-                  // Active cell border (thick blue like Excel) - hidden when collapsed
-                  if (isActiveCell && !isEditing && !isCollapsed)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: AppColors.primaryBlue,
-                              width: 2,
-                            ),
+                          bottom: BorderSide(
+                            color: Colors.grey[300]!,
+                            width: 1,
                           ),
                         ),
-                      ),
-                    ),
-                  // Selection border (thin blue for range) - hidden when collapsed
-                  if (isInSel && !isActiveCell && !isCollapsed)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border(
-                              top: _isSelectionEdge(rowIndex, colIndex, 'top')
-                                  ? const BorderSide(
-                                      color: AppColors.primaryBlue, width: 1.5)
-                                  : BorderSide.none,
-                              bottom:
-                                  _isSelectionEdge(rowIndex, colIndex, 'bottom')
-                                      ? const BorderSide(
-                                          color: AppColors.primaryBlue,
-                                          width: 1.5)
-                                      : BorderSide.none,
-                              left: _isSelectionEdge(rowIndex, colIndex, 'left')
-                                  ? const BorderSide(
-                                      color: AppColors.primaryBlue, width: 1.5)
-                                  : BorderSide.none,
-                              right:
-                                  _isSelectionEdge(rowIndex, colIndex, 'right')
-                                      ? const BorderSide(
-                                          color: AppColors.primaryBlue,
-                                          width: 1.5)
-                                      : BorderSide.none,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  // ── Presence indicator: full highlight when another user is on this cell ──
-                  Builder(builder: (_) {
-                    final cellRef = _getCellReference(rowIndex, colIndex);
-                    final userIds = _cellPresenceUserIds[cellRef];
-                    if (userIds == null || userIds.isEmpty) {
-                      return const SizedBox.shrink();
+                  color: () {
+                    final ck = _cellKey(rowIndex, colIndex);
+                    final customBg = _cellBackgroundColors[ck];
+                    if (customBg != null && customBg != Colors.transparent) {
+                      return customBg;
                     }
-                    final firstId = userIds.first;
-                    final presenceUser = _presenceInfoMap[firstId] ??
-                        _presenceUsers
-                            .where((u) => u.userId == firstId)
-                            .firstOrNull;
-                    final color = presenceUser?.color ?? Colors.green;
-                    final initials = presenceUser?.initials ?? '?';
-                    final name = presenceUser?.username ?? 'User';
-                    return Positioned.fill(
-                      child: IgnorePointer(
-                        child: Tooltip(
-                          message: '$name is editing',
+                    return isEditing
+                        ? Colors.white
+                        : isActiveCell
+                            ? const Color(0xFFE8F0FE)
+                            : isInSel
+                                ? const Color(0xFFD2E3FC)
+                                : (rowIndex % 2 == 0
+                                    ? Colors.white
+                                    : const Color(0xFFFAFAFA));
+                  }(),
+                ),
+                child: Stack(
+                  children: [
+                    // Cell content (hidden when collapsed)
+                    if (!isCollapsed) ...[
+                      if (isEditing)
+                        TextField(
+                          controller: _editController,
+                          focusNode: _focusNode,
+                          style: const TextStyle(
+                              fontSize: 13, fontFamily: 'Segoe UI'),
+                          decoration: InputDecoration(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 6),
+                            border: InputBorder.none,
+                            isDense: true,
+                            filled: true,
+                            fillColor: Colors.white,
+                          ),
+                          onSubmitted: (_) {
+                            _saveEdit();
+                            if (rowIndex < _data.length - 1) {
+                              _selectCell(rowIndex + 1, colIndex);
+                            }
+                            _spreadsheetFocusNode.requestFocus();
+                          },
+                        )
+                      else
+                        Builder(builder: (_) {
+                          final ck = _cellKey(rowIndex, colIndex);
+                          final fmts = _cellFormats[ck] ?? <String>{};
+                          final fontSize = _cellFontSizes[ck] ?? 13.0;
+                          final align = _cellAlignments[ck];
+                          Alignment cellAlign;
+                          if (align == TextAlign.center) {
+                            cellAlign = Alignment.center;
+                          } else if (align == TextAlign.right) {
+                            cellAlign = Alignment.centerRight;
+                          } else if (align == TextAlign.left) {
+                            cellAlign = Alignment.centerLeft;
+                          } else {
+                            cellAlign = _isNumeric(value)
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft;
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 6),
+                            child: Align(
+                              alignment: cellAlign,
+                              child: Text(
+                                value.startsWith('=')
+                                    ? _evaluateFormula(value)
+                                    : value,
+                                style: TextStyle(
+                                  fontSize: fontSize,
+                                  color: _cellTextColors[ck] ?? Colors.black87,
+                                  fontFamily: 'Segoe UI',
+                                  fontWeight: fmts.contains('bold')
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                  fontStyle: fmts.contains('italic')
+                                      ? FontStyle.italic
+                                      : FontStyle.normal,
+                                  decoration: fmts.contains('underline')
+                                      ? TextDecoration.underline
+                                      : TextDecoration.none,
+                                ),
+                                overflow: isMerged
+                                    ? TextOverflow.visible
+                                    : TextOverflow.ellipsis,
+                                maxLines: isMerged ? null : 1,
+                              ),
+                            ),
+                          );
+                        }),
+                    ],
+                    // Active cell border (thick blue like Excel) - hidden when collapsed
+                    if (isActiveCell && !isEditing && !isCollapsed)
+                      Positioned.fill(
+                        child: IgnorePointer(
                           child: Container(
                             decoration: BoxDecoration(
-                              color: color.withOpacity(0.15),
-                              border: Border.all(color: color, width: 1.5),
+                              border: Border.all(
+                                color: AppColors.primaryBlue,
+                                width: 2,
+                              ),
                             ),
-                            child: Align(
-                              alignment: Alignment.topRight,
-                              child: Container(
-                                margin: const EdgeInsets.only(top: 1, right: 2),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 3, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: color,
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                                child: Text(
-                                  initials,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    // Selection border (thin blue for range) - hidden when collapsed
+                    if (isInSel && !isActiveCell && !isCollapsed)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border(
+                                top: _isSelectionEdge(rowIndex, colIndex, 'top')
+                                    ? const BorderSide(
+                                        color: AppColors.primaryBlue,
+                                        width: 1.5)
+                                    : BorderSide.none,
+                                bottom: _isSelectionEdge(
+                                        rowIndex, colIndex, 'bottom')
+                                    ? const BorderSide(
+                                        color: AppColors.primaryBlue,
+                                        width: 1.5)
+                                    : BorderSide.none,
+                                left:
+                                    _isSelectionEdge(rowIndex, colIndex, 'left')
+                                        ? const BorderSide(
+                                            color: AppColors.primaryBlue,
+                                            width: 1.5)
+                                        : BorderSide.none,
+                                right: _isSelectionEdge(
+                                        rowIndex, colIndex, 'right')
+                                    ? const BorderSide(
+                                        color: AppColors.primaryBlue,
+                                        width: 1.5)
+                                    : BorderSide.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    // ── Presence indicator: full highlight when another user is on this cell ──
+                    Builder(builder: (_) {
+                      final cellRef = _getCellReference(rowIndex, colIndex);
+                      final userIds = _cellPresenceUserIds[cellRef];
+                      if (userIds == null || userIds.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      final firstId = userIds.first;
+                      final presenceUser = _presenceInfoMap[firstId] ??
+                          _presenceUsers
+                              .where((u) => u.userId == firstId)
+                              .firstOrNull;
+                      final color = presenceUser?.color ?? Colors.green;
+                      final initials = presenceUser?.initials ?? '?';
+                      final name = presenceUser?.username ?? 'User';
+                      return Positioned.fill(
+                        child: IgnorePointer(
+                          child: Tooltip(
+                            message: '$name is editing',
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.15),
+                                border: Border.all(color: color, width: 1.5),
+                              ),
+                              child: Align(
+                                alignment: Alignment.topRight,
+                                child: Container(
+                                  margin:
+                                      const EdgeInsets.only(top: 1, right: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 3, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                  child: Text(
+                                    initials,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  }),
-                  // ── Lock icon overlay for historical inventory cells ──
-                  if (_isInventoryHistoricalCell(rowIndex, colIndex) &&
-                      !_grantedCells
-                          .contains(_getCellReference(rowIndex, colIndex)))
-                    Positioned(
-                      top: 2,
-                      right: 2,
-                      child: IgnorePointer(
-                        child: Tooltip(
-                          message:
-                              'Historical record — request admin unlock to edit',
-                          child: Icon(Icons.lock,
-                              size: 10, color: Colors.grey[500]),
+                      );
+                    }),
+                    // ── Lock icon overlay for historical inventory cells ──
+                    if (_isInventoryHistoricalCell(rowIndex, colIndex) &&
+                        !_grantedCells
+                            .contains(_getCellReference(rowIndex, colIndex)))
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: IgnorePointer(
+                          child: Tooltip(
+                            message:
+                                'Historical record — request admin unlock to edit',
+                            child: Icon(Icons.lock,
+                                size: 10, color: Colors.grey[500]),
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
-        }),
-      ],
+            );
+          }),
+        ],
+      ),
     );
   }
 

@@ -59,6 +59,28 @@ class MyApp extends StatelessWidget {
         navigatorKey: navigatorKey,
         title: AppConfig.appName,
         debugShowCheckedModeBanner: false,
+        builder: (context, child) {
+          if (child == null) return const SizedBox.shrink();
+
+          final media = MediaQuery.of(context);
+          final width = media.size.width;
+          final height = media.size.height;
+
+          // Keep app filling the full window, and only scale text slightly
+          // on smaller sizes to improve responsiveness without shrinking canvas.
+          const desktopBaseWidth = 1366.0;
+          const desktopBaseHeight = 768.0;
+          final widthScale = (width / desktopBaseWidth).clamp(0.88, 1.0);
+          final heightScale = (height / desktopBaseHeight).clamp(0.88, 1.0);
+          final textScale = widthScale < heightScale ? widthScale : heightScale;
+
+          return MediaQuery(
+            data: media.copyWith(
+              textScaler: TextScaler.linear(textScale),
+            ),
+            child: child,
+          );
+        },
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: AppColors.primaryBlue,
