@@ -161,6 +161,7 @@ class _FileListScreenState extends State<FileListScreen> {
   // ============== Actions ==============
 
   Future<void> _importFile() async {
+    final dataProvider = context.read<DataProvider>();
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['xlsx', 'xls', 'csv'],
@@ -172,11 +173,11 @@ class _FileListScreenState extends State<FileListScreen> {
 
       final name = await _showNameDialog(title: 'Import File');
       if (name != null && name.isNotEmpty) {
-        final success = await context.read<DataProvider>().uploadFile(
-              filePath,
-              fileName,
-              name,
-            );
+        final success = await dataProvider.uploadFile(
+          filePath,
+          fileName,
+          name,
+        );
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

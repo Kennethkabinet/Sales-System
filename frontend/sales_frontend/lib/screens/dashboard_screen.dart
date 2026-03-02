@@ -361,57 +361,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
               });
             }
           },
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: _sidebarExpanded ? 14 : 0,
-              vertical: 12,
-            ),
-            child: Row(
-              mainAxisAlignment: _sidebarExpanded
-                  ? MainAxisAlignment.start
-                  : MainAxisAlignment.center,
-              children: [
-                Icon(
-                  item.icon,
-                  color: selected ? _kSidebarBg : const Color(0xFF5F6368),
-                  size: 20,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final canShowLabel =
+                  _sidebarExpanded && constraints.maxWidth >= 120;
+              return Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: canShowLabel ? 14 : 0,
+                  vertical: 12,
                 ),
-                if (_sidebarExpanded) ...[
-                  const SizedBox(width: 12),
-                  Flexible(
-                    child: Text(
-                      item.label,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: selected ? _kSidebarBg : const Color(0xFF5F6368),
-                        fontWeight:
-                            selected ? FontWeight.w600 : FontWeight.w400,
-                        fontSize: 13,
-                      ),
+                child: Row(
+                  mainAxisAlignment: canShowLabel
+                      ? MainAxisAlignment.start
+                      : MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      item.icon,
+                      color: selected ? _kSidebarBg : const Color(0xFF5F6368),
+                      size: 20,
                     ),
-                  ),
-                  // Badge for Edit Requests
-                  if (item.label == 'Edit Requests' &&
-                      _pendingEditRequestCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.orange[700],
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '$_pendingEditRequestCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                    if (canShowLabel) ...[
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          item.label,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: selected
+                                ? _kSidebarBg
+                                : const Color(0xFF5F6368),
+                            fontWeight:
+                                selected ? FontWeight.w600 : FontWeight.w400,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              ],
-            ),
+                      if (item.label == 'Edit Requests' &&
+                          _pendingEditRequestCount > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange[700],
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '$_pendingEditRequestCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -581,7 +588,7 @@ class _DashboardContentState extends State<_DashboardContent> {
         borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 4,
             offset: const Offset(0, 1),
           )
@@ -1067,8 +1074,8 @@ class _StatCardState extends State<_StatCard> {
           boxShadow: [
             BoxShadow(
               color: _hovered
-                  ? d.color.withOpacity(0.15)
-                  : Colors.black.withOpacity(0.04),
+                  ? d.color.withValues(alpha: 0.15)
+                  : Colors.black.withValues(alpha: 0.04),
               blurRadius: _hovered ? 18 : 8,
               offset: const Offset(0, 4),
             ),
@@ -1108,7 +1115,7 @@ class _StatCardState extends State<_StatCard> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 7, vertical: 3),
                               decoration: BoxDecoration(
-                                color: d.color.withOpacity(0.1),
+                                color: d.color.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Row(
@@ -1201,16 +1208,14 @@ class _StockQtyFilterDropdownState extends State<_StockQtyFilterDropdown> {
         decoration: BoxDecoration(
           color: _hovered ? const Color(0xFFE3F2FD) : const Color(0xFFF5F7FA),
           border: Border.all(
-            color: _hovered
-                ? const Color(0xFF0277BD)
-                : const Color(0xFFCFD8DC),
+            color: _hovered ? const Color(0xFF0277BD) : const Color(0xFFCFD8DC),
             width: 1,
           ),
           borderRadius: BorderRadius.circular(20),
           boxShadow: _hovered
               ? [
                   BoxShadow(
-                    color: const Color(0xFF0277BD).withOpacity(0.10),
+                    color: const Color(0xFF0277BD).withValues(alpha: 0.10),
                     blurRadius: 4,
                     offset: const Offset(0, 1),
                   )
@@ -1223,9 +1228,8 @@ class _StockQtyFilterDropdownState extends State<_StockQtyFilterDropdown> {
             Icon(
               Icons.filter_list_rounded,
               size: 11,
-              color: _hovered
-                  ? const Color(0xFF0277BD)
-                  : const Color(0xFF78909C),
+              color:
+                  _hovered ? const Color(0xFF0277BD) : const Color(0xFF78909C),
             ),
             const SizedBox(width: 3),
             Expanded(
@@ -1310,7 +1314,7 @@ class _DashCard extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade200, width: 0.9),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1329,8 +1333,8 @@ class _DashCard extends StatelessWidget {
                     width: 28,
                     height: 28,
                     decoration: BoxDecoration(
-                      color:
-                          (iconColor ?? AppColors.primaryBlue).withOpacity(0.1),
+                      color: (iconColor ?? AppColors.primaryBlue)
+                          .withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(7),
                     ),
                     child: Icon(icon,
@@ -1462,7 +1466,7 @@ class _MonthlyUsageChart extends StatelessWidget {
             ),
             belowBarData: BarAreaData(
               show: true,
-              color: AppColors.primaryBlue.withOpacity(0.08),
+              color: AppColors.primaryBlue.withValues(alpha: 0.08),
             ),
           ),
         ],
@@ -1917,7 +1921,7 @@ class _SheetDropdownState extends State<_SheetDropdown> {
 
   @override
   void dispose() {
-    _closeDropdown();
+    _closeDropdown(updateState: false);
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -1931,10 +1935,14 @@ class _SheetDropdownState extends State<_SheetDropdown> {
     setState(() => _isOpen = true);
   }
 
-  void _closeDropdown() {
+  void _closeDropdown({bool updateState = true}) {
     _overlay?.remove();
     _overlay = null;
-    if (mounted) setState(() => _isOpen = false);
+    if (updateState && mounted) {
+      setState(() => _isOpen = false);
+    } else {
+      _isOpen = false;
+    }
   }
 
   OverlayEntry _buildOverlay() {
@@ -1988,7 +1996,7 @@ class _SheetDropdownState extends State<_SheetDropdown> {
             boxShadow: _isOpen
                 ? [
                     BoxShadow(
-                      color: AppColors.primaryBlue.withOpacity(0.08),
+                      color: AppColors.primaryBlue.withValues(alpha: 0.08),
                       blurRadius: 4,
                       offset: const Offset(0, 2),
                     )
@@ -2133,7 +2141,7 @@ class _SheetDropdownOverlayState extends State<_SheetDropdownOverlay> {
                 border: Border.all(color: Colors.grey.shade200),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.10),
+                    color: Colors.black.withValues(alpha: 0.10),
                     blurRadius: 14,
                     offset: const Offset(0, 4),
                   ),
@@ -2237,7 +2245,7 @@ class _DropdownItem extends StatelessWidget {
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         color: selected
-            ? AppColors.primaryBlue.withOpacity(0.06)
+            ? AppColors.primaryBlue.withValues(alpha: 0.06)
             : Colors.transparent,
         child: Row(
           children: [
@@ -2285,9 +2293,9 @@ class _AlertBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2344,7 +2352,7 @@ class _LowStockTable extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 8,
             offset: const Offset(0, 3),
           ),
@@ -2382,7 +2390,7 @@ class _LowStockTable extends StatelessWidget {
                   status == 'critical' && (item['current_stock'] as num?) == 0;
 
               final rowColor = isOut
-                  ? Colors.red.shade50.withOpacity(0.45)
+                  ? Colors.red.shade50.withValues(alpha: 0.45)
                   : index.isEven
                       ? Colors.white
                       : const Color(0xFFFAFBFD);
@@ -2516,9 +2524,9 @@ class _StatusChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
       ),
       child: Text(
         label,

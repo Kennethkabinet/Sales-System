@@ -207,6 +207,7 @@ class _SheetScreenState extends State<SheetScreen> {
       TextEditingController();
   double _criticalThreshold =
       0.80; // fraction used before red alert (default 80%)
+  bool _invalidInventoryDialogOpen = false;
 
   // Zoom level for the spreadsheet grid
   double _zoomLevel = 1.0;
@@ -476,6 +477,7 @@ class _SheetScreenState extends State<SheetScreen> {
   // ── Password protection helpers ──
 
   /// Show dialog to enter password; returns true if verification passed.
+  // ignore: unused_element
   Future<bool> _showVerifyPasswordDialog(String title) async {
     final controller = TextEditingController();
     final result = await showDialog<bool>(
@@ -2562,6 +2564,15 @@ class _SheetScreenState extends State<SheetScreen> {
       final cellRef = _getCellReference(savedRow, savedCol);
       final colName = _columns[savedCol];
       final newValue = _editController.text;
+      if (_handleInvalidInventoryOutSubmission(
+        rowIndex: savedRow,
+        colName: colName,
+        proposedValueRaw: newValue,
+        previousValue: _originalCellValue,
+        cellRef: cellRef,
+      )) {
+        return;
+      }
       final changed = newValue != _originalCellValue;
       if (changed) {
         _pushUndoSnapshot();
@@ -4034,6 +4045,7 @@ class _SheetScreenState extends State<SheetScreen> {
   // ═══════════════════════════════════════════════════════
   //  Red Header Bar
   // ═══════════════════════════════════════════════════════
+  // ignore: unused_element
   Widget _buildRedHeader() {
     return Container(
       height: 44,
@@ -4132,6 +4144,7 @@ class _SheetScreenState extends State<SheetScreen> {
     }
 
     // ── Compact presence avatar row ──────────────────────────────────────────
+    // ignore: unused_element
     Widget presenceRow() {
       final authUser = authProv.user;
       final effective = _buildEffectivePresenceUsers();
@@ -4887,7 +4900,7 @@ class _SheetScreenState extends State<SheetScreen> {
       return;
     }
 
-    double tempThreshold = _criticalThreshold;
+    double tempThreshold = _criticalThreshold.clamp(0.01, 1.0);
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -4917,7 +4930,7 @@ class _SheetScreenState extends State<SheetScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Turn Total Quantity red when used quantity reaches this percentage of total quantity.',
+                  'Set when an item becomes critical based on used percentage.',
                   style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 20),
@@ -4933,9 +4946,9 @@ class _SheetScreenState extends State<SheetScreen> {
                 ),
                 Slider(
                   value: tempThreshold,
-                  min: 0.5,
+                  min: 0.01,
                   max: 1.0,
-                  divisions: 10,
+                  divisions: 99,
                   activeColor: const Color(0xFFC0392B),
                   inactiveColor: Colors.grey[300],
                   label: '${(tempThreshold * 100).round()}%',
@@ -4944,7 +4957,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('50%',
+                    Text('1%',
                         style:
                             TextStyle(fontSize: 11, color: Colors.grey[500])),
                     Text('100%',
@@ -4967,8 +4980,7 @@ class _SheetScreenState extends State<SheetScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          'Products whose usage reaches '
-                          '${(tempThreshold * 100).round()}% or more will be highlighted red.',
+                          'Items at ${(tempThreshold * 100).round()}% used or higher will be marked critical.',
                           style: const TextStyle(
                               fontSize: 11, color: Color(0xFFC0392B)),
                         ),
@@ -5008,6 +5020,22 @@ class _SheetScreenState extends State<SheetScreen> {
     final code = (row['QB Code'] ?? row['QC Code'] ?? '').trim();
     if (productName.isEmpty && code.isEmpty) return null;
 
+    double? numVal(String key) {
+      final raw = (row[key] ?? '').replaceAll(',', '').trim();
+      if (raw.isEmpty) return null;
+      return double.tryParse(raw);
+    }
+
+    final maintaining = numVal('Maintaining');
+    final totalQty = numVal('Total Quantity');
+
+    // Primary rule: depletion% is based on maintaining target.
+    // Example: Maintaining=100, Total Quantity=10 => 90% used.
+    if (maintaining != null && maintaining > 0 && totalQty != null) {
+      final pct = (maintaining - totalQty) / maintaining;
+      return pct.clamp(0.0, 1.0);
+    }
+
     double totalIn = 0;
     double totalOut = 0;
     for (final col in _columns) {
@@ -5018,18 +5046,18 @@ class _SheetScreenState extends State<SheetScreen> {
       }
     }
 
-    // Primary rule: usage% = used quantity / total quantity
+    // Fallback: usage% = used quantity / total quantity
     // where used quantity is sum(OUT) and total quantity is sum(IN).
     if (totalIn > 0) {
       final pct = totalOut / totalIn;
       return pct.clamp(0.0, 1.0);
     }
 
-    // Fallback for legacy rows without date transactions.
-    final stock = double.tryParse(row['Stock'] ?? '');
-    final total = double.tryParse(row['Total Quantity'] ?? '');
-    if (stock == null || stock <= 0 || total == null) return null;
-    final pct = (stock - total) / stock;
+    // Final fallback for legacy rows without date transactions.
+    final stock = numVal('Stock');
+    final total = numVal('Total Quantity');
+    if (stock == null || total == null || total <= 0) return null;
+    final pct = (total - stock) / total;
     return pct.clamp(0.0, 1.0);
   }
 
@@ -5041,9 +5069,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
       final total = double.tryParse(row['Total Quantity'] ?? '') ?? 0;
       final stock = double.tryParse(row['Stock'] ?? '') ?? 0;
+      final maintaining = double.tryParse(row['Maintaining'] ?? '') ?? 0;
       criticalRows.add({
         'Product Name': row['Product Name'] ?? '',
         'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
+        'Maintaining': maintaining.toStringAsFixed(0),
         'Stock': stock.toStringAsFixed(0),
         'Total Quantity': total.toStringAsFixed(0),
         'usedPct': (usedPct * 100).toStringAsFixed(1),
@@ -5158,51 +5188,45 @@ class _SheetScreenState extends State<SheetScreen> {
                   ),
                   const SizedBox(height: 24),
                 ] else ...[
-                  // Column header
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryBlue,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Row(
-                      children: [
-                        Expanded(
-                            flex: 3,
-                            child: Text('Product',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('Stock',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('Total Qty',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('Used',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12))),
-                      ],
-                    ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFF4FF),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'Threshold: ${(_criticalThreshold * 100).round()}%',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primaryBlue,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFEBEE),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '${criticalRows.length} critical item${criticalRows.length == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFC0392B),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Flexible(
                     child: ListView.separated(
                       shrinkWrap: true,
@@ -5337,40 +5361,31 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final userRole = authProvider.user?.role ?? '';
-    final canCollab =
+    final canManage =
         userRole == 'admin' || userRole == 'editor' || userRole == 'user';
+    final currentUsername = authProvider.user?.username ?? '';
     final isLockedByMe = _isLocked &&
         _lockedByUser != null &&
-        (_lockedByUser == authProvider.user?.username || userRole == 'admin');
+        (_lockedByUser == currentUsername || userRole == 'admin');
 
     return Row(
       children: [
         _buildRibbonButton(Icons.undo, 'Undo', _canUndo ? _undo : null),
         const SizedBox(width: 6),
         _buildRibbonButton(Icons.redo, 'Redo', _canRedo ? _redo : null),
-        const SizedBox(width: 6),
-
-        // ── Edit button ──
-        if (canCollab)
-          _buildRibbonButton(
-            Icons.edit,
-            'Edit',
-            _isLocked ? (isLockedByMe ? null : null) : _lockSheet,
-          ),
-        if (canCollab) const SizedBox(width: 6),
-
-        // ── Lock / Unlock button ──
-        if (canCollab)
+        if (canManage) ...[
+          const SizedBox(width: 6),
+          _buildRibbonButton(Icons.edit, 'Edit', _isLocked ? null : _lockSheet),
+          const SizedBox(width: 6),
           _buildRibbonButton(
             _isLocked ? Icons.lock : Icons.lock_outline,
             _isLocked ? 'Unlock' : 'Lock',
             _isLocked ? (isLockedByMe ? _unlockSheet : null) : _lockSheet,
           ),
-        if (canCollab) const SizedBox(width: 6),
-
-        // ── Show / Hide button (admin and editor) ──
+        ],
         if ((userRole == 'admin' || userRole == 'editor') &&
-            _currentSheet != null)
+            _currentSheet != null) ...[
+          const SizedBox(width: 6),
           _buildRibbonButton(
             _currentSheet!.shownToViewers
                 ? Icons.visibility
@@ -5381,25 +5396,30 @@ class _SheetScreenState extends State<SheetScreen> {
               !_currentSheet!.shownToViewers,
             ),
           ),
+        ],
       ],
     );
   }
 
-  // ── Formatting helpers ──
   String _cellKey(int row, int col) => '$row,$col';
 
-  void _toggleFormat(String fmt) {
+  void _toggleFormat(String format) {
     if (_selectedRow == null || _selectedCol == null) return;
     final bounds = _getSelectionBounds();
     setState(() {
       for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
         for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
-          final k = _cellKey(r, c);
-          _cellFormats.putIfAbsent(k, () => <String>{});
-          if (_cellFormats[k]!.contains(fmt)) {
-            _cellFormats[k]!.remove(fmt);
+          final key = _cellKey(r, c);
+          final current = Set<String>.from(_cellFormats[key] ?? <String>{});
+          if (current.contains(format)) {
+            current.remove(format);
           } else {
-            _cellFormats[k]!.add(fmt);
+            current.add(format);
+          }
+          if (current.isEmpty) {
+            _cellFormats.remove(key);
+          } else {
+            _cellFormats[key] = current;
           }
         }
       }
@@ -6650,6 +6670,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // (collaborative controls are now inlined in _buildEditRibbon)
 
+  // ignore: unused_element
   Widget _buildStatusBar() {
     if (_currentSheet == null) return const SizedBox();
 
@@ -6995,6 +7016,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   /// Presence avatar row shown above the spreadsheet grid.
+  // ignore: unused_element
   Widget _buildPresencePanel() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final authUser = authProvider.user;
@@ -7587,6 +7609,174 @@ class _SheetScreenState extends State<SheetScreen> {
     });
   }
 
+  void _applyInvalidInventoryOutFallback({
+    required int rowIndex,
+    required String colName,
+    required String previousValue,
+    String? cellRef,
+  }) {
+    const fallbackValue = '0';
+    final changed = previousValue != fallbackValue;
+    if (changed) {
+      _pushUndoSnapshot();
+    }
+
+    setState(() {
+      _data[rowIndex][colName] = fallbackValue;
+      _editingRow = null;
+      _editingCol = null;
+      if (cellRef != null) {
+        _grantedCells.remove(cellRef);
+      }
+      _updateFormulaBar();
+    });
+
+    _recalcInventoryTotals();
+
+    if (_currentSheet != null) {
+      if (cellRef != null) {
+        SocketService.instance.cellBlur(_currentSheet!.id, cellRef);
+      }
+      if (changed) {
+        SocketService.instance.cellUpdate(
+          _currentSheet!.id,
+          rowIndex,
+          colName,
+          fallbackValue,
+        );
+      }
+    }
+
+    if (changed) {
+      _markDirty();
+      _saveSheet();
+    }
+
+    _showInvalidInventoryAmountDialog();
+    _spreadsheetFocusNode.requestFocus();
+  }
+
+  bool _isInventoryRowIdentityEmpty(Map<String, String> row) {
+    final productName = (row['Product Name'] ?? '').trim();
+    final code = _inventoryRowCode(row).trim();
+    return productName.isEmpty && code.isEmpty;
+  }
+
+  int _parseInventoryQtyOrZero(String? raw) {
+    final trimmed = (raw ?? '').trim();
+    return int.tryParse(trimmed.isEmpty ? '0' : trimmed) ?? 0;
+  }
+
+  Map<String, int> _inventoryTotalsForRow(
+    Map<String, String> row, {
+    String? overrideOutCol,
+    int? overrideOutValue,
+  }) {
+    int totalIn = 0;
+    int totalOut = 0;
+
+    for (final c in _columns) {
+      if (c.startsWith('DATE:') && c.endsWith(':IN')) {
+        totalIn += _parseInventoryQtyOrZero(row[c]);
+      } else if (c.startsWith('DATE:') && c.endsWith(':OUT')) {
+        final value = (overrideOutCol != null && c == overrideOutCol)
+            ? overrideOutValue ?? 0
+            : _parseInventoryQtyOrZero(row[c]);
+        totalOut += value;
+      }
+    }
+
+    return {
+      'totalIn': totalIn,
+      'totalOut': totalOut,
+      'net': totalIn - totalOut,
+    };
+  }
+
+  bool _handleInvalidInventoryOutSubmission({
+    required int rowIndex,
+    required String colName,
+    required String proposedValueRaw,
+    required String previousValue,
+    String? cellRef,
+  }) {
+    if (!_isInventoryOutEditInvalid(
+      rowIndex: rowIndex,
+      colName: colName,
+      proposedValueRaw: proposedValueRaw,
+    )) {
+      return false;
+    }
+
+    _applyInvalidInventoryOutFallback(
+      rowIndex: rowIndex,
+      colName: colName,
+      previousValue: previousValue,
+      cellRef: cellRef,
+    );
+    return true;
+  }
+
+  bool _isInventoryOutEditInvalid({
+    required int rowIndex,
+    required String colName,
+    required String proposedValueRaw,
+  }) {
+    if (!_isInventoryTrackerSheet()) return false;
+    if (!colName.startsWith('DATE:') || !colName.endsWith(':OUT')) return false;
+    if (rowIndex < 0 || rowIndex >= _data.length) return false;
+
+    final row = _data[rowIndex];
+    if (_isInventoryRowIdentityEmpty(row)) return false;
+
+    final proposedTrimmed = proposedValueRaw.trim();
+    final proposedOut =
+        int.tryParse(proposedTrimmed.isEmpty ? '0' : proposedTrimmed);
+    if (proposedOut == null || proposedOut < 0) return true;
+
+    final currentOut = _parseInventoryQtyOrZero(row[colName]);
+    final netBefore = _inventoryTotalsForRow(row)['net'] ?? 0;
+    final netAfter = _inventoryTotalsForRow(
+          row,
+          overrideOutCol: colName,
+          overrideOutValue: proposedOut,
+        )['net'] ??
+        0;
+
+    if (netAfter >= 0) return false;
+
+    final isReducingOut = proposedOut <= currentOut;
+    if (netBefore < 0 && isReducingOut && netAfter >= netBefore) {
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _showInvalidInventoryAmountDialog() async {
+    if (!mounted || _invalidInventoryDialogOpen) return;
+    _invalidInventoryDialogOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Invalid Amount'),
+          content: const Text(
+            'Invalid amount. OUT is set to 0 because total quantity cannot be negative.',
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _invalidInventoryDialogOpen = false;
+    }
+  }
+
   void _deleteInventoryDateColumn(String dateStr) {
     showDialog(
       context: context,
@@ -7626,6 +7816,7 @@ class _SheetScreenState extends State<SheetScreen> {
   // ── Grid rendering ────────────────────────────────────
 
   // ── Inventory search bar ──
+  // ignore: unused_element
   Widget _buildInventorySearchBar() {
     return Container(
       color: const Color(0xFFF5F5F5),
@@ -7935,6 +8126,8 @@ class _SheetScreenState extends State<SheetScreen> {
           ),
         );
 
+    final double fullHeaderH = _invHeaderH1 + _invHeaderH2;
+
     Widget hCell(String label, double w, double h, Color bg,
             {bool bold = true}) =>
         Container(
@@ -7954,121 +8147,93 @@ class _SheetScreenState extends State<SheetScreen> {
           ),
         );
 
-    // Date group header cell with optional delete button.
+    // Date group header with embedded IN/OUT sub-header (no gap).
     Widget dateGroupCell(String date) {
       final isToday = date == todayStr;
       final bg = isToday ? todayCol : midBlue;
+      final subBg = isToday ? todaySub : subBlue;
       final label = isToday
           ? '${_inventoryDateLabel(date)}  TODAY'
           : _inventoryDateLabel(date);
-      return Container(
+      return SizedBox(
         width: _invSubColW * 2,
-        height: _invHeaderH1,
-        decoration: deco(bg),
-        child: Stack(
-          alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: EdgeInsets.only(right: canDelete ? 18.0 : 0),
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: textCol,
-                ),
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
+            Container(
+              width: _invSubColW * 2,
+              height: _invHeaderH1,
+              decoration: deco(bg),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.only(right: canDelete ? 18.0 : 0),
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: textCol,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  if (canDelete)
+                    Positioned(
+                      right: 2,
+                      top: 2,
+                      child: GestureDetector(
+                        onTap: () => _deleteInventoryDateColumn(date),
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            color: Colors.red[700],
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            size: 11,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-            if (canDelete)
-              Positioned(
-                right: 2,
-                top: 2,
-                child: GestureDetector(
-                  onTap: () => _deleteInventoryDateColumn(date),
-                  child: Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: Colors.red[700],
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child:
-                        const Icon(Icons.close, size: 11, color: Colors.white),
-                  ),
-                ),
-              ),
+            Row(
+              children: [
+                hCell('IN', _invSubColW, _invHeaderH2, subBg, bold: false),
+                hCell('OUT', _invSubColW, _invHeaderH2, subBg, bold: false),
+              ],
+            ),
           ],
         ),
       );
     }
 
-    return Column(
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Row 1: row# | fixed left | date group headers | misc | fixed right ──
-        Row(
-          children: [
-            Container(
-              width: _rowNumWidth,
-              height: _invHeaderH1,
-              decoration: deco(darkNavy),
-              child: const Center(
-                child: Icon(Icons.inventory_2_outlined,
-                    size: 14, color: Colors.white70),
-              ),
-            ),
-            for (final col in frozenLeft)
-              hCell(col, _invFixedColW, _invHeaderH1, navy),
-            for (final date in visibleDates) dateGroupCell(date),
-            for (final col in miscCols)
-              hCell(col, _invFixedColW, _invHeaderH1, navy),
-            for (final col in frozenRight)
-              hCell(col, _invFixedColW, _invHeaderH1, darkNavy),
-          ],
+        Container(
+          width: _rowNumWidth,
+          height: fullHeaderH,
+          decoration: deco(darkNavy),
+          child: const Center(
+            child: Icon(Icons.inventory_2_outlined,
+                size: 14, color: Colors.white70),
+          ),
         ),
-        // ── Row 2: bordered cells (left) | IN/OUT pairs | bordered cells (right) ──
-        Row(
-          children: [
-            // Row number placeholder
-            Container(
-              width: _rowNumWidth,
-              height: _invHeaderH2,
-              decoration: deco(darkNavy),
-            ),
-            // Fixed left column placeholders
-            for (final _ in frozenLeft)
-              Container(
-                width: _invFixedColW,
-                height: _invHeaderH2,
-                decoration: deco(navy),
-              ),
-            // IN/OUT sub-headers
-            for (final date in visibleDates) ...[
-              hCell('IN', _invSubColW, _invHeaderH2,
-                  date == todayStr ? todaySub : subBlue,
-                  bold: false),
-              hCell('OUT', _invSubColW, _invHeaderH2,
-                  date == todayStr ? todaySub : subBlue,
-                  bold: false),
-            ],
-            // Misc column placeholders
-            for (final _ in miscCols)
-              Container(
-                width: _invFixedColW,
-                height: _invHeaderH2,
-                decoration: deco(navy),
-              ),
-            // Frozen right column placeholders
-            for (final _ in frozenRight)
-              Container(
-                width: _invFixedColW,
-                height: _invHeaderH2,
-                decoration: deco(darkNavy),
-              ),
-          ],
-        ),
+        for (final col in frozenLeft)
+          hCell(col, _invFixedColW, fullHeaderH, navy),
+        for (final date in visibleDates) dateGroupCell(date),
+        for (final col in miscCols)
+          hCell(col, _invFixedColW, fullHeaderH, navy),
+        for (final col in frozenRight)
+          hCell(col, _invFixedColW, fullHeaderH, darkNavy),
       ],
     );
   }
@@ -8778,8 +8943,19 @@ class _SheetScreenState extends State<SheetScreen> {
                     _selectedCol != null &&
                     !isReadOnly) {
                   final int row = _selectedRow!;
-                  final colKey = _columns[_selectedCol!];
+                  final int col = _selectedCol!;
+                  final colKey = _columns[col];
+                  final cellRef = _getCellReference(row, col);
                   final oldVal = _data[row][colKey] ?? '';
+                  if (_handleInvalidInventoryOutSubmission(
+                    rowIndex: row,
+                    colName: colKey,
+                    proposedValueRaw: value,
+                    previousValue: oldVal,
+                    cellRef: cellRef,
+                  )) {
+                    return;
+                  }
                   if (value != oldVal) {
                     _pushUndoSnapshot();
                   }

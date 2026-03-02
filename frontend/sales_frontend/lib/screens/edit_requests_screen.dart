@@ -3,6 +3,8 @@ import '../config/constants.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 
+// cspell:ignore Colour collab
+
 // ── Colour constants ──
 const Color _kNavy = AppColors.darkText;
 const Color _kAccent = AppColors.primaryBlue;
@@ -49,17 +51,19 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
       final data = await ApiService.getAllEditRequests(
         status: _statusFilter == 'All' ? null : _statusFilter,
       );
-      if (mounted)
+      if (mounted) {
         setState(() {
           _requests = data;
           _isLoading = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _isLoading = false;
         });
+      }
     }
   }
 
@@ -361,9 +365,9 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
       DataCell(Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: statusColor.withOpacity(0.12),
+          color: statusColor.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: statusColor.withOpacity(0.6)),
+          border: Border.all(color: statusColor.withValues(alpha: 0.6)),
         ),
         child: Text(_capitalize(status),
             style: TextStyle(
@@ -430,11 +434,12 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
                   .map((v) => DropdownMenuItem(value: v, child: Text('$v')))
                   .toList(),
               onChanged: (v) {
-                if (v != null)
+                if (v != null) {
                   setState(() {
                     _itemsPerPage = v;
                     _currentPage = 1;
                   });
+                }
               },
             ),
           ),

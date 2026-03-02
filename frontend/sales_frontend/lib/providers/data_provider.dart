@@ -246,7 +246,7 @@ class DataProvider extends ChangeNotifier {
         name: name,
       );
 
-      print('uploadFile response: $response'); // Debug
+      debugPrint('uploadFile response: $response');
 
       if (response['success'] == true && response['file'] != null) {
         // Reload files to get the new file in the list
@@ -256,7 +256,7 @@ class DataProvider extends ChangeNotifier {
       return false;
     } catch (e) {
       _error = e.toString();
-      print('uploadFile error: $_error'); // Debug
+      debugPrint('uploadFile error: $_error');
       notifyListeners();
       return false;
     } finally {
@@ -543,7 +543,8 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _inventoryDashboardData = await ApiService.getInventoryOverview(sheetIds: sheetIds);
+      _inventoryDashboardData =
+          await ApiService.getInventoryOverview(sheetIds: sheetIds);
     } catch (e) {
       _error = e.toString();
     } finally {

@@ -7,6 +7,8 @@ import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../config/constants.dart';
 
+// cspell:ignore colours maint
+
 // ─── Theme colours ─────────────────────────────────────────────────────────────
 const Color _kNavy = AppColors.primaryBlue; // primary blue for headings
 const Color _kAccent = AppColors.primaryRed; // primary red for accents
@@ -794,7 +796,7 @@ class _TxRow extends StatelessWidget {
               message: tx.createdByName ?? '',
               child: CircleAvatar(
                 radius: 12,
-                backgroundColor: _kNavy.withOpacity(0.15),
+                backgroundColor: _kNavy.withValues(alpha: 0.15),
                 child: Text(
                   (tx.createdByName ?? '?').substring(0, 1).toUpperCase(),
                   style: const TextStyle(fontSize: 10, color: _kNavy),
@@ -834,18 +836,18 @@ class _TxRow extends StatelessWidget {
   Future<void> _confirmDelete(BuildContext ctx) async {
     final ok = await showDialog<bool>(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Delete Transaction'),
         content: Text('Delete ${tx.productName} transaction '
             '(IN:${tx.qtyIn}, OUT:${tx.qtyOut})?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(_, false),
+              onPressed: () => Navigator.pop(dialogCtx, false),
               child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
                 backgroundColor: _kCriticalText, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(_, true),
+            onPressed: () => Navigator.pop(dialogCtx, true),
             child: const Text('Delete'),
           ),
         ],
@@ -1076,19 +1078,19 @@ class _ProductMasterTabState extends State<_ProductMasterTab> {
     if (p.isActive) {
       final ok = await showDialog<bool>(
         context: context,
-        builder: (_) => AlertDialog(
+        builder: (dialogCtx) => AlertDialog(
           title: const Text('Deactivate Product'),
           content: Text(
               'Deactivate "${p.productName}"? It will no longer appear in transaction dropdowns.'),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(_, false),
+                onPressed: () => Navigator.pop(dialogCtx, false),
                 child: const Text('Cancel')),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                   backgroundColor: _kCriticalText,
                   foregroundColor: Colors.white),
-              onPressed: () => Navigator.pop(_, true),
+              onPressed: () => Navigator.pop(dialogCtx, true),
               child: const Text('Deactivate'),
             ),
           ],
@@ -1185,7 +1187,7 @@ class _AddTransactionDialogState extends State<_AddTransactionDialog> {
                 ),
               DropdownButtonFormField<ProductMaster>(
                 decoration: _inputDeco('Product *'),
-                value: _selectedProduct,
+                initialValue: _selectedProduct,
                 hint: const Text('Select product…'),
                 items: widget.products
                     .where((p) => p.isActive)
