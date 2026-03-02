@@ -905,65 +905,28 @@ class _DashboardContentState extends State<_DashboardContent> {
     final totalStockQty = _selectedStockQty(inv);
     final cards = [
       _StatCardData(
-        title: 'Total Product Category',
-        value: '$totalCategories',
-        icon: Icons.inventory_2_outlined,
-        color: AppColors.primaryBlue,
-        bgColor: AppColors.lightBlue,
-      ),
-      _StatCardData(
         title: 'Total Stock Qty',
         value: _fmt(totalStockQty),
         icon: Icons.stacked_bar_chart_rounded,
         color: const Color(0xFF0277BD),
         bgColor: const Color(0xFFE1F5FE),
         compactControl: inv != null && inv.productStocks.isNotEmpty
-            ? Container(
-                margin: const EdgeInsets.only(top: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedProductStockKey,
-                    isDense: true,
-                    isExpanded: true,
-                    borderRadius: BorderRadius.circular(8),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF5F6368),
-                      fontWeight: FontWeight.w500,
-                    ),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => _selectedProductStockKey = value);
-                    },
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: '__all__',
-                        child: Text('All Products'),
-                      ),
-                      ...inv.productStocks.map((p) {
-                        final name = p['product_name']?.toString() ?? '-';
-                        final code = p['qb_code']?.toString() ??
-                            p['qc_code']?.toString() ??
-                            '';
-                        return DropdownMenuItem<String>(
-                          value: _productStockKey(p),
-                          child: Text(
-                            code.isEmpty ? name : '$name ($code)',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
+            ? _StockQtyFilterDropdown(
+                selectedKey: _selectedProductStockKey,
+                productStocks: inv.productStocks,
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _selectedProductStockKey = value);
+                },
               )
             : null,
+      ),
+      _StatCardData(
+        title: 'Total Product Category',
+        value: '$totalCategories',
+        icon: Icons.inventory_2_outlined,
+        color: AppColors.primaryBlue,
+        bgColor: AppColors.lightBlue,
       ),
       _StatCardData(
         title: 'Low Stock Items',
@@ -1199,6 +1162,121 @@ class _StatCardState extends State<_StatCard> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Total Stock Qty filter dropdown ───────────────────────────────────────────
+class _StockQtyFilterDropdown extends StatefulWidget {
+  final String selectedKey;
+  final List<Map<String, dynamic>> productStocks;
+  final ValueChanged<String?> onChanged;
+
+  const _StockQtyFilterDropdown({
+    required this.selectedKey,
+    required this.productStocks,
+    required this.onChanged,
+  });
+
+  @override
+  State<_StockQtyFilterDropdown> createState() =>
+      _StockQtyFilterDropdownState();
+}
+
+class _StockQtyFilterDropdownState extends State<_StockQtyFilterDropdown> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.only(top: 4),
+        height: 26,
+        padding: const EdgeInsets.symmetric(horizontal: 7),
+        decoration: BoxDecoration(
+          color: _hovered ? const Color(0xFFE3F2FD) : const Color(0xFFF5F7FA),
+          border: Border.all(
+            color: _hovered
+                ? const Color(0xFF0277BD)
+                : const Color(0xFFCFD8DC),
+            width: 1,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: _hovered
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF0277BD).withOpacity(0.10),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  )
+                ]
+              : [],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.filter_list_rounded,
+              size: 11,
+              color: _hovered
+                  ? const Color(0xFF0277BD)
+                  : const Color(0xFF78909C),
+            ),
+            const SizedBox(width: 3),
+            Expanded(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: widget.selectedKey,
+                  isDense: true,
+                  isExpanded: true,
+                  borderRadius: BorderRadius.circular(10),
+                  icon: Icon(
+                    Icons.expand_more_rounded,
+                    size: 13,
+                    color: _hovered
+                        ? const Color(0xFF0277BD)
+                        : const Color(0xFF78909C),
+                  ),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: _hovered
+                        ? const Color(0xFF0277BD)
+                        : const Color(0xFF37474F),
+                  ),
+                  onChanged: widget.onChanged,
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: '__all__',
+                      child: Text('All Products'),
+                    ),
+                    ...widget.productStocks.map((p) {
+                      final name = p['product_name']?.toString() ?? '-';
+                      final code = p['qb_code']?.toString() ??
+                          p['qc_code']?.toString() ??
+                          '';
+                      // Must match _productStockKey format: '$name|$code' lowercase
+                      final key =
+                          '${name.trim().toLowerCase()}|${code.trim().toLowerCase()}';
+                      return DropdownMenuItem<String>(
+                        value: key,
+                        child: Text(
+                          code.isEmpty ? name : '$name ($code)',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
