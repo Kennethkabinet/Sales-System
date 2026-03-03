@@ -11,6 +11,7 @@ import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../models/collaboration.dart';
 import '../config/constants.dart';
+import 'inventory_template_seed.dart';
 
 /// Sheet model for spreadsheet data
 class SheetModel {
@@ -1011,14 +1012,7 @@ class _SheetScreenState extends State<SheetScreen> {
         if (_columns.contains('Product Name') &&
             (_columns.contains('QB Code') || _columns.contains('QC Code')) &&
             _columns.contains('Total Quantity')) {
-          const legacy = [
-            'Critical',
-            'Reference No.',
-            'Remarks',
-            'Date',
-            'IN',
-            'OUT'
-          ];
+          const legacy = ['Reference No.', 'Remarks', 'Date', 'IN', 'OUT'];
           for (final col in legacy) {
             _columns.remove(col);
             for (final row in _data) {
@@ -1034,6 +1028,17 @@ class _SheetScreenState extends State<SheetScreen> {
             for (final row in _data) {
               final current = (row['Total Quantity'] ?? '').trim();
               row['Stock'] = current.isEmpty ? '0' : current;
+            }
+          }
+
+          // Ensure Inventory Tracker has a dedicated Critical threshold column.
+          if (!_columns.contains('Critical')) {
+            final maintainingIdx = _columns.indexOf('Maintaining');
+            final insertAt = maintainingIdx >= 0 ? maintainingIdx + 1 : 4;
+            _columns.insert(insertAt, 'Critical');
+            for (final row in _data) {
+              final maintaining = (row['Maintaining'] ?? '').trim();
+              row['Critical'] = maintaining.isEmpty ? '0' : maintaining;
             }
           }
         }
@@ -1166,27 +1171,13 @@ class _SheetScreenState extends State<SheetScreen> {
       'colorValue': 0xFF1E3A6E,
       'columns': [
         'Product Name',
-        'QB Code',
+        'QC Code',
         'Stock',
         'Maintaining',
+        'Critical',
         'Total Quantity',
       ],
-      'rows': [
-        {
-          'Product Name': 'Product A',
-          'QB Code': 'QB-001',
-          'Stock': '0',
-          'Maintaining': '20',
-          'Total Quantity': '0',
-        },
-        {
-          'Product Name': 'Product B',
-          'QB Code': 'QB-002',
-          'Stock': '0',
-          'Maintaining': '15',
-          'Total Quantity': '0',
-        },
-      ],
+      'rows': kInventoryTrackerSeedRows,
     },
     {
       'id': 'sales_report',
@@ -1324,7 +1315,8 @@ class _SheetScreenState extends State<SheetScreen> {
       // Build row data from template sample rows, padded to 100 rows
       final templateRows =
           List<Map<String, dynamic>>.from(template['rows'] as List);
-      final data = List<Map<String, String>>.generate(100, (i) {
+      final initialRowCount = templateRows.length.clamp(1, 10000);
+      final data = List<Map<String, String>>.generate(initialRowCount, (i) {
         final row = <String, String>{};
         for (final col in cols) {
           // For DATE:* columns not in the template, default to empty string
@@ -1356,7 +1348,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _currentSheet = sheet;
         _columns = cols;
         _data = data;
-        _rowLabels = List.generate(100, (i) => '${i + 1}');
+        _rowLabels = List.generate(initialRowCount, (i) => '${i + 1}');
         _selectedRow = null;
         _selectedCol = null;
         _selectionEndRow = null;
@@ -1367,7 +1359,7 @@ class _SheetScreenState extends State<SheetScreen> {
       });
       _clearHistory();
 
-      // Recalc totals so Total Quantity shows correct value from Maintaining
+      // Recalc totals so Stock/Total Quantity reflect IN/OUT values.
       if (template['id'] == 'inventory_tracker') {
         _recalcInventoryTotals();
         await _saveSheet();
@@ -4867,11 +4859,6 @@ class _SheetScreenState extends State<SheetScreen> {
                 }),
               ),
               _buildRibbonButton(
-                Icons.tune,
-                'Alert: ${(_criticalThreshold * 100).round()}%',
-                _showCriticalThresholdDialog,
-              ),
-              _buildRibbonButton(
                 Icons.warning_amber_rounded,
                 'Critical Alerts',
                 _showCriticalAlertsModal,
@@ -4933,12 +4920,6 @@ class _SheetScreenState extends State<SheetScreen> {
         if (isAdmin) ...[
           const SizedBox(width: 6),
           _buildRibbonButton(
-            Icons.tune,
-            'Alert: ${(_criticalThreshold * 100).round()}%',
-            _showCriticalThresholdDialog,
-          ),
-          const SizedBox(width: 6),
-          _buildRibbonButton(
             Icons.warning_amber_rounded,
             'Critical Alerts',
             _showCriticalAlertsModal,
@@ -4949,6 +4930,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ── Inventory: configurable critical alert threshold dialog ──
+  // ignore: unused_element
   void _showCriticalThresholdDialog() {
     final role =
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
@@ -5077,7 +5059,7 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   // ── Inventory: critical alerts modal ──
-  double? _criticalUsedPctForRow(Map<String, String> row) {
+  double? _criticalDeficitPctForRow(Map<String, String> row) {
     final productName = (row['Product Name'] ?? '').trim();
     final code = (row['QB Code'] ?? row['QC Code'] ?? '').trim();
     if (productName.isEmpty && code.isEmpty) return null;
@@ -5088,57 +5070,37 @@ class _SheetScreenState extends State<SheetScreen> {
       return double.tryParse(raw);
     }
 
-    final maintaining = numVal('Maintaining');
+    final critical = numVal('Critical');
     final totalQty = numVal('Total Quantity');
 
-    // Primary rule: depletion% is based on maintaining target.
-    // Example: Maintaining=100, Total Quantity=10 => 90% used.
-    if (maintaining != null && maintaining > 0 && totalQty != null) {
-      final pct = (maintaining - totalQty) / maintaining;
-      return pct.clamp(0.0, 1.0);
-    }
+    // Critical rule: item is critical when Total Quantity is at or below Critical.
+    if (critical == null || totalQty == null || critical <= 0) return null;
+    if (totalQty > critical) return null;
 
-    double totalIn = 0;
-    double totalOut = 0;
-    for (final col in _columns) {
-      if (col.startsWith('DATE:') && col.endsWith(':IN')) {
-        totalIn += double.tryParse(row[col] ?? '0') ?? 0;
-      } else if (col.startsWith('DATE:') && col.endsWith(':OUT')) {
-        totalOut += double.tryParse(row[col] ?? '0') ?? 0;
-      }
-    }
-
-    // Fallback: usage% = used quantity / total quantity
-    // where used quantity is sum(OUT) and total quantity is sum(IN).
-    if (totalIn > 0) {
-      final pct = totalOut / totalIn;
-      return pct.clamp(0.0, 1.0);
-    }
-
-    // Final fallback for legacy rows without date transactions.
-    final stock = numVal('Stock');
-    final total = numVal('Total Quantity');
-    if (stock == null || total == null || total <= 0) return null;
-    final pct = (total - stock) / total;
+    final pct = (critical - totalQty) / critical;
     return pct.clamp(0.0, 1.0);
   }
 
   List<Map<String, String>> _buildCriticalRows() {
     final criticalRows = <Map<String, String>>[];
     for (final row in _data) {
-      final usedPct = _criticalUsedPctForRow(row);
-      if (usedPct == null || usedPct < _criticalThreshold) continue;
+      final deficitPct = _criticalDeficitPctForRow(row);
+      if (deficitPct == null) continue;
 
       final total = double.tryParse(row['Total Quantity'] ?? '') ?? 0;
       final stock = double.tryParse(row['Stock'] ?? '') ?? 0;
       final maintaining = double.tryParse(row['Maintaining'] ?? '') ?? 0;
+      final critical = double.tryParse(row['Critical'] ?? '') ?? 0;
+      final deficit = (critical - total).clamp(0, double.infinity);
       criticalRows.add({
         'Product Name': row['Product Name'] ?? '',
         'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
         'Maintaining': maintaining.toStringAsFixed(0),
+        'Critical': critical.toStringAsFixed(0),
         'Stock': stock.toStringAsFixed(0),
         'Total Quantity': total.toStringAsFixed(0),
-        'usedPct': (usedPct * 100).toStringAsFixed(1),
+        'deficitQty': deficit.toStringAsFixed(0),
+        'deficitPct': (deficitPct * 100).toStringAsFixed(1),
       });
     }
     return criticalRows;
@@ -5198,7 +5160,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           Text(
                             criticalRows.isEmpty
                                 ? 'All products are within safe levels'
-                                : '${criticalRows.length} product${criticalRows.length == 1 ? '' : 's'} below ${(_criticalThreshold * 100).round()}% threshold',
+                                : '${criticalRows.length} product${criticalRows.length == 1 ? '' : 's'} at/below Critical quantity',
                             style: TextStyle(
                                 fontSize: 12, color: Colors.grey[600]),
                           ),
@@ -5240,7 +5202,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'All products are stocked above\nthe ${(_criticalThreshold * 100).round()}% usage threshold.',
+                          'All products are stocked above\ntheir Critical quantity.',
                           textAlign: TextAlign.center,
                           style:
                               TextStyle(fontSize: 13, color: Colors.grey[500]),
@@ -5262,7 +5224,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          'Threshold: ${(_criticalThreshold * 100).round()}%',
+                          'Rule: Total Quantity ≤ Critical',
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -5296,11 +5258,11 @@ class _SheetScreenState extends State<SheetScreen> {
                       separatorBuilder: (_, __) => const SizedBox(height: 6),
                       itemBuilder: (_, i) {
                         final r = criticalRows[i];
-                        final usedPctDouble =
-                            double.tryParse(r['usedPct'] ?? '0') ?? 0;
-                        final severity = usedPctDouble >= 95
+                        final deficitPctDouble =
+                            double.tryParse(r['deficitPct'] ?? '0') ?? 0;
+                        final severity = deficitPctDouble >= 50
                             ? const Color(0xFF7B0000)
-                            : usedPctDouble >= 90
+                            : deficitPctDouble >= 25
                                 ? const Color(0xFFC0392B)
                                 : const Color(0xFFE57373);
                         return Container(
@@ -5367,7 +5329,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
-                                    '${r['usedPct']}%',
+                                    'CRIT ${r['Critical']}',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                         fontSize: 12,
@@ -5389,10 +5351,10 @@ class _SheetScreenState extends State<SheetScreen> {
                 // ─ Footer
                 Row(
                   children: [
-                    Icon(Icons.tune, size: 13, color: Colors.grey[400]),
+                    Icon(Icons.rule, size: 13, color: Colors.grey[400]),
                     const SizedBox(width: 4),
                     Text(
-                      'Threshold: ${(_criticalThreshold * 100).round()}% used',
+                      'Rule: critical when Total Quantity ≤ Critical',
                       style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
                     const Spacer(),
@@ -7431,6 +7393,7 @@ class _SheetScreenState extends State<SheetScreen> {
       if (codeCol != null) codeCol,
       'Stock',
       'Maintaining',
+      'Critical',
     ].where(_columns.contains).toList();
   }
 
@@ -7438,7 +7401,7 @@ class _SheetScreenState extends State<SheetScreen> {
       ['Total Quantity'].where(_columns.contains).toList();
 
   /// Columns that are neither frozen nor date columns.
-  static const _kLegacyInventoryCols = {'Critical', 'Reference No.', 'Remarks'};
+  static const _kLegacyInventoryCols = {'Reference No.', 'Remarks'};
 
   List<String> _inventoryMiscCols() => _columns
       .where((c) =>
@@ -8315,14 +8278,11 @@ class _SheetScreenState extends State<SheetScreen> {
         rowIndex.isEven ? Colors.white : const Color(0xFFF8F9FA);
 
     // ── Total Quantity colour logic ──────────────────────────────────────────
-    // usedPercent = (Stock - TotalQty) / Stock
-    //   ≥ threshold → red (critical alert)
+    // Critical when Total Quantity <= Critical.
     Color? totalQtyColor() {
-      final usedPct = _criticalUsedPctForRow(row);
-      if (usedPct == null) return null;
-      return usedPct >= _criticalThreshold
-          ? const Color(0xFFC0392B)
-          : AppColors.primaryBlue;
+      final deficitPct = _criticalDeficitPctForRow(row);
+      if (deficitPct == null) return AppColors.primaryBlue;
+      return const Color(0xFFC0392B);
     }
 
     Widget dataCell({
@@ -8338,7 +8298,7 @@ class _SheetScreenState extends State<SheetScreen> {
       final value = row[colKey] ?? '';
 
       // For the Total Quantity cell, derive background + text colours from
-      // the usage-percentage rule; fall back to the standard autoCalc colour.
+      // the Critical column rule.
       final bool isTotalQty = colKey == 'Total Quantity';
       final Color? totalQtyFgColor = isTotalQty ? totalQtyColor() : null;
       final Color? totalQtyBgColor = (isTotalQty &&
