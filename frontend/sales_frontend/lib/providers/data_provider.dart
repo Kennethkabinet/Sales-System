@@ -174,10 +174,14 @@ class DataProvider extends ChangeNotifier {
     loadFiles(folderId: target['id'] as int);
   }
 
-  Future<bool> createFolder(String name) async {
+  Future<bool> createFolder(String name, {int? parentId}) async {
+    final targetParentId = parentId ?? _currentFolderId;
+    debugPrint(
+      '[folders:create:file] payload => {name: $name, parent_id: $targetParentId}',
+    );
     try {
-      await ApiService.createFolder(name, parentId: _currentFolderId);
-      await loadFiles(folderId: _currentFolderId);
+      await ApiService.createFolder(name, parentId: targetParentId);
+      await loadFiles(folderId: targetParentId);
       return true;
     } catch (e) {
       _error = e.toString();

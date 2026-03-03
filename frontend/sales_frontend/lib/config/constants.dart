@@ -86,6 +86,8 @@ class ApiEndpoints {
 
   // Sheets
   static const String sheets = '/sheets';
+  static const String sheetLinks = '/sheet-links';
+  static const String workspaces = '/workspaces';
 
   // Inventory
   static const String inventoryStock = '/inventory/stock';
@@ -93,4 +95,6 @@ class ApiEndpoints {
   static const String inventoryTransactions = '/inventory/transactions';
   static const String inventoryDates = '/inventory/dates';
   static const String inventoryAudit = '/inventory/audit';
+  static const String inventoryRecalculate = '/inventory/recalculate';
+  static const String productionLines = '/inventory/production-lines';
 }

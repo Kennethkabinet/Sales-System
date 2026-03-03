@@ -655,6 +655,22 @@ router.patch('/:id/move', authenticate, requireFileAccess, async (req, res) => {
 router.post('/folders', authenticate, requireFileAccess, async (req, res) => {
   try {
     const { name, parent_id } = req.body;
+    const normalizedParentId =
+      parent_id === undefined || parent_id === null || String(parent_id).trim() === ''
+        ? null
+        : parseInt(parent_id, 10);
+
+    const isDebugFolderCreate =
+      process.env.DEBUG_FOLDER_CREATE === 'true' ||
+      process.env.NODE_ENV !== 'production';
+
+    if (isDebugFolderCreate) {
+      console.log('[folders:create:file]', {
+        name,
+        parent_id: normalizedParentId,
+        user_id: req.user.id,
+      });
+    }
 
     if (!name || !name.trim()) {
       return res.status(400).json({
@@ -663,11 +679,34 @@ router.post('/folders', authenticate, requireFileAccess, async (req, res) => {
       });
     }
 
+    if (normalizedParentId !== null && (Number.isNaN(normalizedParentId) || normalizedParentId <= 0)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid parent_id' }
+      });
+    }
+
+    if (normalizedParentId !== null) {
+      const parentFolder = await pool.query(
+        `SELECT id
+         FROM folders
+         WHERE id = $1 AND is_active = TRUE`,
+        [normalizedParentId]
+      );
+
+      if (parentFolder.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Parent folder not found' }
+        });
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO folders (name, parent_id, created_by)
        VALUES ($1, $2, $3)
        RETURNING id, name, parent_id, created_at, updated_at`,
-      [name.trim(), parent_id || null, req.user.id]
+      [name.trim(), normalizedParentId, req.user.id]
     );
 
     await auditService.log({
@@ -675,7 +714,7 @@ router.post('/folders', authenticate, requireFileAccess, async (req, res) => {
       action: 'CREATE',
       entityType: 'folders',
       entityId: result.rows[0].id,
-      metadata: { name: name.trim(), parent_id: parent_id || null }
+      metadata: { name: name.trim(), parent_id: normalizedParentId }
     });
 
     res.status(201).json({ success: true, folder: result.rows[0] });

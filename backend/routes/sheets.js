@@ -368,6 +368,80 @@ router.get('/folders', authenticate, async (req, res) => {
   }
 });
 
+// POST /sheets/folders - Create a folder for Sheets module
+router.post('/folders', authenticate, requireSheetEditAccess, async (req, res) => {
+  try {
+    const { name, parent_id } = req.body;
+    const normalizedParentId =
+      parent_id === undefined || parent_id === null || String(parent_id).trim() === ''
+        ? null
+        : parseInt(parent_id, 10);
+
+    const isDebugFolderCreate =
+      process.env.DEBUG_FOLDER_CREATE === 'true' ||
+      process.env.NODE_ENV !== 'production';
+
+    if (isDebugFolderCreate) {
+      console.log('[folders:create:sheet]', {
+        name,
+        parent_id: normalizedParentId,
+        user_id: req.user.id,
+      });
+    }
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Folder name is required' },
+      });
+    }
+
+    if (normalizedParentId !== null && (Number.isNaN(normalizedParentId) || normalizedParentId <= 0)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid parent_id' },
+      });
+    }
+
+    if (normalizedParentId !== null) {
+      const isAdmin = req.user.role === 'admin';
+      const parentFolder = await pool.query(
+        `SELECT id
+         FROM folders
+         WHERE id = $1
+           AND is_active = TRUE
+           AND ($2::boolean = TRUE OR created_by = $3)`,
+        [normalizedParentId, isAdmin, req.user.id]
+      );
+
+      if (parentFolder.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Parent folder not found' },
+        });
+      }
+    }
+
+    const result = await pool.query(
+      `INSERT INTO folders (name, parent_id, created_by)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, parent_id, created_by, created_at, updated_at`,
+      [String(name).trim(), normalizedParentId, req.user.id]
+    );
+
+    res.status(201).json({
+      success: true,
+      folder: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Create sheet folder error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to create sheet folder' },
+    });
+  }
+});
+
 // PUT /sheets/folders/:folderId/set-password - Set or remove a folder password (Admin/Editor)
 router.put('/folders/:folderId/set-password', authenticate, async (req, res) => {
   try {

@@ -18,6 +18,12 @@ class FileListScreen extends StatefulWidget {
 class _FileListScreenState extends State<FileListScreen> {
   final Set<int> _selectedFileIds = {};
 
+  static const List<String> _scenarioFolders = [
+    'Inventory',
+    'Suppliers',
+    'Production',
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -101,6 +107,136 @@ class _FileListScreenState extends State<FileListScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _openOrCreateScenarioFolder(String folderName) async {
+    final data = context.read<DataProvider>();
+    await data.loadFiles(folderId: null);
+    if (!mounted) return;
+
+    FolderModel? folder;
+    for (final f in data.folders) {
+      if (f.name.trim().toLowerCase() == folderName.toLowerCase()) {
+        folder = f;
+        break;
+      }
+    }
+
+    if (folder == null) {
+      await ApiService.createFolder(folderName);
+      await data.loadFiles(folderId: null);
+      if (!mounted) return;
+      for (final f in data.folders) {
+        if (f.name.trim().toLowerCase() == folderName.toLowerCase()) {
+          folder = f;
+          break;
+        }
+      }
+    }
+
+    if (folder != null && mounted) {
+      data.navigateToFolder(folder.id, folder.name);
+    }
+  }
+
+  Future<void> _createMonthlyInventoryWorkspace() async {
+    final now = DateTime.now();
+    final yearController = TextEditingController(text: '${now.year}');
+    final monthController = TextEditingController(text: '${now.month}');
+
+    final values = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create Monthly Inventory Workspace'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: yearController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Year',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: monthController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Month (1-12)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final y = int.tryParse(yearController.text.trim());
+              final m = int.tryParse(monthController.text.trim());
+              if (y == null || m == null) return;
+              Navigator.pop(context, {'year': y, 'month': m});
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (values == null || !mounted) return;
+
+    try {
+      final response = await ApiService.createMonthlyInventoryWorkspace(
+        year: values['year']!,
+        month: values['month']!,
+      );
+      final workspace = response['workspace'] as Map<String, dynamic>?;
+      final inventoryYearFolder =
+          workspace?['folders']?['inventory_year'] as Map<String, dynamic>?;
+      final inventorySheet =
+          workspace?['sheets']?['inventory'] as Map<String, dynamic>?;
+
+      final data = context.read<DataProvider>();
+      await data.loadFiles(folderId: null);
+
+      if (inventoryYearFolder != null) {
+        final inventoryYearFolderId = inventoryYearFolder['id'] as int?;
+        final inventoryYearFolderName =
+            (inventoryYearFolder['name'] ?? '').toString();
+        if (inventoryYearFolderId != null &&
+            inventoryYearFolderName.isNotEmpty &&
+            mounted) {
+          await _openOrCreateScenarioFolder('Inventory');
+          data.navigateToFolder(inventoryYearFolderId, inventoryYearFolderName);
+        }
+      }
+
+      final createdSheetName = (inventorySheet?['name'] ?? '').toString();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(createdSheetName.isEmpty
+                ? 'Linked monthly sheets created successfully'
+                : 'Linked monthly sheets created: $createdSheetName'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to create workspace: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // ============== Bulk Actions ==============
@@ -203,7 +339,16 @@ class _FileListScreenState extends State<FileListScreen> {
   Future<void> _createNewFolder() async {
     final name = await _showNameDialog(title: 'New Folder');
     if (name != null && name.isNotEmpty && mounted) {
-      final success = await context.read<DataProvider>().createFolder(name);
+      final dataProvider = context.read<DataProvider>();
+      final breadcrumbs = dataProvider.folderBreadcrumbs;
+      final selectedParentId = breadcrumbs.isNotEmpty
+          ? breadcrumbs.last['id'] as int?
+          : dataProvider.currentFolderId;
+
+      final success = await dataProvider.createFolder(
+        name,
+        parentId: selectedParentId,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -544,6 +689,23 @@ class _FileListScreenState extends State<FileListScreen> {
                             ],
                             if (file.sourceSheetId != null) ...[
                               const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEAF4FF),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Text(
+                                  'Linked',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppColors.primaryBlue,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
                               Tooltip(
                                 message: 'Auto-saved from Sheet',
                                 child: Icon(Icons.sync,
@@ -677,6 +839,12 @@ class _FileListScreenState extends State<FileListScreen> {
                 Row(
                   children: [
                     OutlinedButton.icon(
+                      onPressed: _createMonthlyInventoryWorkspace,
+                      icon: const Icon(Icons.account_tree_outlined),
+                      label: const Text('Create Monthly Inventory Workspace'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
                       onPressed: _createNewFolder,
                       icon: const Icon(Icons.create_new_folder),
                       label: const Text('New Folder'),
@@ -753,6 +921,26 @@ class _FileListScreenState extends State<FileListScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (data.currentFolderId == null) ...[
+                            const Text('Scenario Folders',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 14)),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: _scenarioFolders
+                                  .map((name) => ActionChip(
+                                        avatar: const Icon(Icons.folder,
+                                            size: 16, color: Colors.amber),
+                                        label: Text(name),
+                                        onPressed: () =>
+                                            _openOrCreateScenarioFolder(name),
+                                      ))
+                                  .toList(),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
                           // ── Folders grid ──
                           if (folders.isNotEmpty) ...[
                             const Text('Folders',

@@ -7,7 +7,6 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:async';
 import '../providers/auth_provider.dart';
-import '../providers/data_provider.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../models/collaboration.dart';
@@ -845,7 +844,7 @@ class _SheetScreenState extends State<SheetScreen> {
       // Start periodic heartbeat
       _startEditSessionHeartbeat();
     } catch (e) {
-      print('Failed to start edit session: $e');
+      debugPrint('Failed to start edit session: $e');
     }
   }
 
@@ -859,7 +858,7 @@ class _SheetScreenState extends State<SheetScreen> {
           await ApiService.startEditSession(_currentSheet!.id);
           _startEditSessionHeartbeat();
         } catch (e) {
-          print('Edit session heartbeat failed: $e');
+          debugPrint('Edit session heartbeat failed: $e');
         }
       }
     });
@@ -900,7 +899,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _lastShownLockUser = null;
       }
     } catch (e) {
-      print('Failed to refresh sheet status: $e');
+      debugPrint('Failed to refresh sheet status: $e');
     }
   }
 
@@ -1563,9 +1562,21 @@ class _SheetScreenState extends State<SheetScreen> {
         return;
       }
 
-      // Create the folder
-      final success =
-          await context.read<DataProvider>().createFolder(trimmedName);
+      // Create the folder in current Sheets folder context
+      bool success = false;
+      debugPrint(
+        '[folders:create:sheet] payload => {name: $trimmedName, parent_id: $_currentSheetFolderId}',
+      );
+      try {
+        await ApiService.createSheetFolder(
+          trimmedName,
+          parentId: _currentSheetFolderId,
+        );
+        await _loadSheets();
+        success = true;
+      } catch (_) {
+        success = false;
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2940,9 +2951,9 @@ class _SheetScreenState extends State<SheetScreen> {
       final c = expr[i];
       if (c == ')') {
         depth++;
-      } else if (c == '(')
+      } else if (c == '(') {
         depth--;
-      else if (depth == 0 && (c == '+' || c == '-') && i > 0) {
+      } else if (depth == 0 && (c == '+' || c == '-') && i > 0) {
         final left = _evalExpr(expr.substring(0, i));
         final right = _evalExpr(expr.substring(i + 1));
         return c == '+' ? left + right : left - right;
@@ -2954,9 +2965,9 @@ class _SheetScreenState extends State<SheetScreen> {
       final c = expr[i];
       if (c == ')') {
         depth++;
-      } else if (c == '(')
+      } else if (c == '(') {
         depth--;
-      else if (depth == 0 && (c == '*' || c == '/')) {
+      } else if (depth == 0 && (c == '*' || c == '/')) {
         final left = _evalExpr(expr.substring(0, i));
         final right = _evalExpr(expr.substring(i + 1));
         return c == '*'
@@ -3041,8 +3052,8 @@ class _SheetScreenState extends State<SheetScreen> {
     return {'row': row, 'col': col};
   }
 
-  void _handleKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     final isShift = HardwareKeyboard.instance.isShiftPressed;
     final isCtrl = HardwareKeyboard.instance.isControlPressed;
@@ -3054,11 +3065,11 @@ class _SheetScreenState extends State<SheetScreen> {
       } else {
         _undo();
       }
-      return;
+      return KeyEventResult.handled;
     }
     if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY) {
       _redo();
-      return;
+      return KeyEventResult.handled;
     }
 
     if (_editingRow != null && _editingCol != null) {
@@ -3066,6 +3077,7 @@ class _SheetScreenState extends State<SheetScreen> {
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         _cancelEdit();
         _spreadsheetFocusNode.requestFocus();
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.enter) {
         final row = _editingRow!;
         final col = _editingCol!;
@@ -3075,6 +3087,7 @@ class _SheetScreenState extends State<SheetScreen> {
           _selectCell(row + 1, col);
         }
         _spreadsheetFocusNode.requestFocus();
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.tab) {
         final row = _editingRow!;
         final col = _editingCol!;
@@ -3086,7 +3099,9 @@ class _SheetScreenState extends State<SheetScreen> {
           _selectCell(row + 1, 0);
         }
         _spreadsheetFocusNode.requestFocus();
+        return KeyEventResult.handled;
       }
+      return KeyEventResult.ignored;
     } else if (_selectedRow != null && _selectedCol != null) {
       // In selection mode
 
@@ -3098,18 +3113,19 @@ class _SheetScreenState extends State<SheetScreen> {
           _selectionEndRow = _data.length - 1;
           _selectionEndCol = _columns.length - 1;
         });
-        return;
+        return KeyEventResult.handled;
       }
 
       // Ctrl+C: Copy selected cells
       if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyC) {
         _copySelection();
-        return;
+        return KeyEventResult.handled;
       }
 
       if (event.logicalKey == LogicalKeyboardKey.enter ||
           event.logicalKey == LogicalKeyboardKey.f2) {
         _startEditing(_selectedRow!, _selectedCol!);
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
         if (isShift) {
           // Extend selection
@@ -3120,6 +3136,7 @@ class _SheetScreenState extends State<SheetScreen> {
         } else if (_selectedRow! > 0) {
           _selectCell(_selectedRow! - 1, _selectedCol!);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
         if (isShift) {
           final endRow = (_selectionEndRow ?? _selectedRow!) + 1;
@@ -3129,6 +3146,7 @@ class _SheetScreenState extends State<SheetScreen> {
         } else if (_selectedRow! < _data.length - 1) {
           _selectCell(_selectedRow! + 1, _selectedCol!);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
         if (isShift) {
           final endCol = (_selectionEndCol ?? _selectedCol!) - 1;
@@ -3138,6 +3156,7 @@ class _SheetScreenState extends State<SheetScreen> {
         } else if (_selectedCol! > 0) {
           _selectCell(_selectedRow!, _selectedCol! - 1);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
         if (isShift) {
           final endCol = (_selectionEndCol ?? _selectedCol!) + 1;
@@ -3147,27 +3166,32 @@ class _SheetScreenState extends State<SheetScreen> {
         } else if (_selectedCol! < _columns.length - 1) {
           _selectCell(_selectedRow!, _selectedCol! + 1);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.tab) {
         if (_selectedCol! < _columns.length - 1) {
           _selectCell(_selectedRow!, _selectedCol! + 1);
         } else if (_selectedRow! < _data.length - 1) {
           _selectCell(_selectedRow! + 1, 0);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.delete ||
           event.logicalKey == LogicalKeyboardKey.backspace) {
         _clearSelectedCells();
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.home) {
         if (isCtrl) {
           _selectCell(0, 0);
         } else {
           _selectCell(_selectedRow!, 0);
         }
+        return KeyEventResult.handled;
       } else if (event.logicalKey == LogicalKeyboardKey.end) {
         if (isCtrl) {
           _selectCell(_data.length - 1, _columns.length - 1);
         } else {
           _selectCell(_selectedRow!, _columns.length - 1);
         }
+        return KeyEventResult.handled;
       } else {
         // Start editing on any printable key press
         final key = event.character;
@@ -3176,9 +3200,13 @@ class _SheetScreenState extends State<SheetScreen> {
           _editController.text = key;
           _editController.selection =
               TextSelection.collapsed(offset: key.length);
+          return KeyEventResult.handled;
         }
       }
+      return KeyEventResult.ignored;
     }
+
+    return KeyEventResult.ignored;
   }
 
   /// Copy selected cells to clipboard as tab-separated text
@@ -3421,7 +3449,9 @@ class _SheetScreenState extends State<SheetScreen> {
             const Text(
               'Folders',
               style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.bold, color: _kHeaderMaroon),
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: _kHeaderMaroon),
             ),
             const SizedBox(height: 10),
             Wrap(
@@ -6826,7 +6856,8 @@ class _SheetScreenState extends State<SheetScreen> {
         debugPrint(
             '[Presence] sheet=${_currentSheet?.id} users=${users.map((u) => u.username).join(', ')}');
       } catch (e) {
-        print('[Presence] Failed to parse presence_update: $e | data=$data');
+        debugPrint(
+            '[Presence] Failed to parse presence_update: $e | data=$data');
       }
     };
 
@@ -7940,9 +7971,7 @@ class _SheetScreenState extends State<SheetScreen> {
     return Focus(
       focusNode: _spreadsheetFocusNode,
       onKeyEvent: (node, event) {
-        _handleKeyEvent(event);
-        if (_editingRow != null) return KeyEventResult.ignored;
-        return KeyEventResult.handled;
+        return _handleKeyEvent(event);
       },
       child: Listener(
         onPointerSignal: (signal) {
@@ -8602,9 +8631,7 @@ class _SheetScreenState extends State<SheetScreen> {
     return Focus(
       focusNode: _spreadsheetFocusNode,
       onKeyEvent: (node, event) {
-        _handleKeyEvent(event);
-        if (_editingRow != null) return KeyEventResult.ignored;
-        return KeyEventResult.handled;
+        return _handleKeyEvent(event);
       },
       child: Listener(
         onPointerSignal: (signal) {

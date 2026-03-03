@@ -119,46 +119,43 @@ class _LoginScreenState extends State<LoginScreen> {
     final outerRadius = BorderRadius.circular(10);
     final innerRadius = BorderRadius.circular(8.8);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(),
-      child: ClipRRect(
-        borderRadius: outerRadius,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: outerRadius,
-            gradient: isFocused ? gradient : null,
-            border: isFocused
-                ? null
-                : Border.all(color: const Color(0xFFD1D5DB), width: 1),
-            color: Colors.white,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(1.2),
-            child: ClipRRect(
-              borderRadius: innerRadius,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: innerRadius,
+    return ClipRRect(
+      borderRadius: outerRadius,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: outerRadius,
+          gradient: isFocused ? gradient : null,
+          border: isFocused
+              ? null
+              : Border.all(color: const Color(0xFFD1D5DB), width: 1),
+          color: Colors.white,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(1.2),
+          child: ClipRRect(
+            borderRadius: innerRadius,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: innerRadius,
+              ),
+              child: TextFormField(
+                controller: controller,
+                focusNode: focusNode,
+                style: GoogleFonts.inter(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w400,
+                  color: const Color(0xFF111827),
                 ),
-                child: TextFormField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  style: GoogleFonts.inter(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w400,
-                    color: const Color(0xFF111827),
-                  ),
-                  decoration: _fieldDecoration(
-                    hint,
-                    label,
-                    suffixIcon: suffixIcon,
-                  ),
-                  obscureText: obscureText,
-                  textInputAction: textInputAction,
-                  onFieldSubmitted: onFieldSubmitted,
-                  validator: validator,
+                decoration: _fieldDecoration(
+                  hint,
+                  label,
+                  suffixIcon: suffixIcon,
                 ),
+                obscureText: obscureText,
+                textInputAction: textInputAction,
+                onFieldSubmitted: onFieldSubmitted,
+                validator: validator,
               ),
             ),
           ),

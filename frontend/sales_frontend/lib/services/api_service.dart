@@ -526,6 +526,16 @@ class ApiService {
     return await _get('${ApiEndpoints.sheets}/folders');
   }
 
+  static Future<Map<String, dynamic>> createSheetFolder(
+    String name, {
+    int? parentId,
+  }) async {
+    return await _post('${ApiEndpoints.sheets}/folders', {
+      'name': name,
+      if (parentId != null) 'parent_id': parentId,
+    });
+  }
+
   static Future<Map<String, dynamic>> moveSheetToFolder(
       int sheetId, int? folderId) async {
     return await _put('${ApiEndpoints.sheets}/$sheetId/move', {
@@ -660,6 +670,51 @@ class ApiService {
       int sheetId, List<List<dynamic>> data) async {
     return await _post('${ApiEndpoints.sheets}/$sheetId/import', {
       'data': data,
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getSheetLinks(
+      {int? sheetId}) async {
+    String endpoint = ApiEndpoints.sheetLinks;
+    if (sheetId != null) {
+      endpoint += '?sheet_id=$sheetId';
+    }
+    final response = await _get(endpoint);
+    return List<Map<String, dynamic>>.from(response['links'] as List? ?? []);
+  }
+
+  static Future<Map<String, dynamic>> createSheetLink({
+    required int sourceSheetId,
+    required int targetSheetId,
+    required String linkType,
+    Map<String, dynamic> columnMapping = const {},
+    bool enabled = true,
+  }) async {
+    return await _post(ApiEndpoints.sheetLinks, {
+      'source_sheet_id': sourceSheetId,
+      'target_sheet_id': targetSheetId,
+      'link_type': linkType,
+      'column_mapping': columnMapping,
+      'enabled': enabled,
+    });
+  }
+
+  static Future<Map<String, dynamic>> updateSheetLink(
+      int linkId, Map<String, dynamic> body) async {
+    return await _patch('${ApiEndpoints.sheetLinks}/$linkId', body);
+  }
+
+  static Future<Map<String, dynamic>> deleteSheetLink(int linkId) async {
+    return await _delete('${ApiEndpoints.sheetLinks}/$linkId');
+  }
+
+  static Future<Map<String, dynamic>> createMonthlyInventoryWorkspace({
+    required int year,
+    required int month,
+  }) async {
+    return await _post('${ApiEndpoints.workspaces}/inventory-month', {
+      'year': year,
+      'month': month,
     });
   }
 
@@ -899,6 +954,39 @@ class ApiService {
   static Future<Map<String, dynamic>> getInventoryAudit(
       {int page = 1, int limit = 100}) async {
     return await _get('${ApiEndpoints.inventoryAudit}?page=$page&limit=$limit');
+  }
+
+  static Future<Map<String, dynamic>> recalculateInventorySheet(
+      int inventorySheetId) async {
+    return await _post(
+        '${ApiEndpoints.inventoryRecalculate}/$inventorySheetId', {});
+  }
+
+  static Future<List<Map<String, dynamic>>> getProductionLines(
+      {bool includeInactive = false}) async {
+    final response = await _get(
+        '${ApiEndpoints.productionLines}?include_inactive=$includeInactive');
+    return List<Map<String, dynamic>>.from(
+        response['production_lines'] as List? ?? []);
+  }
+
+  static Future<Map<String, dynamic>> createProductionLine({
+    required String name,
+    String? description,
+  }) async {
+    return await _post(ApiEndpoints.productionLines, {
+      'name': name,
+      if (description != null) 'description': description,
+    });
+  }
+
+  static Future<Map<String, dynamic>> updateProductionLine(
+      int id, Map<String, dynamic> body) async {
+    return await _patch('${ApiEndpoints.productionLines}/$id', body);
+  }
+
+  static Future<Map<String, dynamic>> deleteProductionLine(int id) async {
+    return await _delete('${ApiEndpoints.productionLines}/$id');
   }
 }
 
