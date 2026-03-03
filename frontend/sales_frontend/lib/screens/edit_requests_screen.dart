@@ -5,10 +5,12 @@ import '../services/socket_service.dart';
 
 // cspell:ignore Colour collab
 
-// ── Colour constants ──
-const Color _kNavy = AppColors.darkText;
-const Color _kAccent = AppColors.primaryBlue;
-const Color _kBg = AppColors.white;
+// ── Colour constants (Warm cream & Maroon palette) ──
+const Color _kNavy = Color(0xFF3E2723);
+const Color _kAccent = Color(0xFF6B1C1C);
+const Color _kBg = Color(0xFFFAF0E6);
+const Color _kHeaderMaroon = Color(0xFF283593); // dark blue header
+const Color _kWarmBorder = Color(0xFFDDD5CC);
 
 class EditRequestsScreen extends StatefulWidget {
   const EditRequestsScreen({super.key});
@@ -182,23 +184,33 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
   // ── Header ──
   Widget _buildHeader() {
     return Row(children: [
-      const Icon(Icons.lock_open, color: _kAccent, size: 28),
-      const SizedBox(width: 10),
-      const Expanded(
+      Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Edit Requests',
+            const Text('EDIT REQUESTS',
                 style: TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.w700, color: _kNavy)),
-            SizedBox(height: 2),
-            Text('Review and approve or reject editor cell-edit requests.',
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: _kHeaderMaroon,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 4),
+            Container(
+              width: 50,
+              height: 3,
+              decoration: BoxDecoration(
+                color: _kHeaderMaroon,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text('Review and approve or reject cell-edit requests.',
                 style: TextStyle(fontSize: 13, color: Colors.grey)),
           ],
         ),
       ),
       IconButton(
-        icon: const Icon(Icons.refresh),
+        icon: const Icon(Icons.refresh, color: _kHeaderMaroon),
         tooltip: 'Refresh',
         onPressed: _load,
       ),
@@ -209,7 +221,10 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
   Widget _buildFilterBar() {
     return Row(children: [
       const Text('Status:',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: _kHeaderMaroon)),
       const SizedBox(width: 8),
       ..._statusOptions.map((s) {
         final selected = _statusFilter == s;
@@ -226,11 +241,13 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
             selectedColor: s == 'pending'
                 ? Colors.orange[700]
                 : s == 'approved'
-                    ? Colors.green[600]
+                    ? const Color(0xFF2E7D32)
                     : s == 'rejected'
-                        ? Colors.red[600]
-                        : _kAccent,
-            backgroundColor: Colors.grey[100],
+                        ? const Color(0xFFB71C1C)
+                        : _kHeaderMaroon,
+            backgroundColor: Colors.white,
+            side: BorderSide(
+                color: selected ? Colors.transparent : _kWarmBorder),
             onSelected: (_) {
               setState(() {
                 _statusFilter = s;
@@ -279,38 +296,50 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
     }
 
     return Container(
+      width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _kWarmBorder),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SingleChildScrollView(
-            child: DataTable(
-              headingRowColor: WidgetStateProperty.all(const Color(0xFFF5F7FA)),
-              headingTextStyle: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: _kNavy),
-              dataTextStyle:
-                  const TextStyle(fontSize: 12, color: Colors.black87),
-              columnSpacing: 24,
-              horizontalMargin: 16,
-              columns: const [
-                DataColumn(label: Text('Sheet')),
-                DataColumn(label: Text('Requester')),
-                DataColumn(label: Text('Cell')),
-                DataColumn(label: Text('Column')),
-                DataColumn(label: Text('Proposed Value')),
-                DataColumn(label: Text('Requested At')),
-                DataColumn(label: Text('Status')),
-                DataColumn(label: Text('Reviewed By')),
-                DataColumn(label: Text('Actions')),
-              ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowColor:
+                    WidgetStateProperty.all(Colors.white),
+                headingRowHeight: 56,
+                dataRowMinHeight: 64,
+                dataRowMaxHeight: 72,
+                dividerThickness: 1.0,
+                headingTextStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _kHeaderMaroon),
+                dataTextStyle:
+                    const TextStyle(fontSize: 13, color: Colors.black87),
+                columnSpacing: 36,
+                horizontalMargin: 24,
+                columns: const [
+                  DataColumn(label: Text('Sheet')),
+                  DataColumn(label: Text('Requester')),
+                  DataColumn(label: Text('Cell')),
+                  DataColumn(label: Text('Column')),
+                  DataColumn(label: Text('Proposed Value')),
+                  DataColumn(label: Text('Requested At')),
+                  DataColumn(label: Text('Status')),
+                  DataColumn(label: Text('Reviewed By')),
+                  DataColumn(label: Text('Actions')),
+                ],
               rows: _paged.map(_buildRow).toList(),
             ),
-          ),
+            ),
+            const Spacer(),
+          ],
         ),
       ),
     );
@@ -414,17 +443,20 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _kWarmBorder),
       ),
       child: Row(children: [
         // Items per page
         const Text('Show:',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: _kNavy)),
         const SizedBox(width: 8),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: _kWarmBorder),
               borderRadius: BorderRadius.circular(6)),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<int>(

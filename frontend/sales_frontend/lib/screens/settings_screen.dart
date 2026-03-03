@@ -4,12 +4,12 @@ import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../config/constants.dart';
 
-// ── Colour constants (Blue & Red brand palette) ──
-const Color _kAccent = AppColors.primaryBlue;
-const Color _kNavyS = AppColors.darkText;
+// ── Colour constants (Warm cream & Blue header palette) ──
+const Color _kAccent = Color(0xFF283593);
+const Color _kNavyS = Color(0xFF3E2723);
 const Color _kGray = AppColors.grayText;
-const Color _kBorder = AppColors.border;
-const Color _kBg = AppColors.bgLight;
+const Color _kBorder = Color(0xFFDDD5CC);
+const Color _kBg = Color(0xFFFAF0E6);
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -39,7 +39,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ];
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: _kBg,
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
         child: Column(
@@ -47,12 +47,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             // ── Page title ──
             const Text(
-              'Settings',
+              'SETTINGS',
               style: TextStyle(
                 fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: _kNavyS,
-                letterSpacing: 0.2,
+                fontWeight: FontWeight.w800,
+                color: _kAccent,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              width: 50,
+              height: 3,
+              decoration: BoxDecoration(
+                color: _kAccent,
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
             const SizedBox(height: 4),
@@ -133,7 +142,7 @@ class _SectionTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: Material(
-        color: selected ? AppColors.lightBlue : Colors.transparent,
+        color: selected ? const Color(0xFFE8EDF8) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: onTap,
@@ -246,7 +255,7 @@ class _AccountSectionState extends State<_AccountSection> {
             children: [
               CircleAvatar(
                 radius: 30,
-                backgroundColor: AppColors.lightBlue,
+                backgroundColor: const Color(0xFFE8EDF8),
                 child: Icon(Icons.person, color: _kAccent, size: 32),
               ),
               const SizedBox(width: 16),
@@ -389,9 +398,9 @@ class _SecuritySectionState extends State<_SecuritySection> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFFF0F4FF),
+              color: const Color(0xFFF5F0E8),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFBDD0F8)),
+              border: Border.all(color: _kBorder),
             ),
             child: Row(
               children: [
@@ -401,7 +410,7 @@ class _SecuritySectionState extends State<_SecuritySection> {
                   child: Text(
                     'Use a strong password of at least 8 characters with a mix of letters and numbers.',
                     style:
-                        TextStyle(fontSize: 12, color: AppColors.primaryBlue),
+                        TextStyle(fontSize: 12, color: _kAccent),
                   ),
                 ),
               ],
@@ -664,7 +673,7 @@ Widget _sectionHeader(IconData icon, String title, String subtitle) {
             width: 34,
             height: 34,
             decoration: BoxDecoration(
-              color: const Color(0xFFE8F0FE),
+            color: const Color(0xFFE8EDF8),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(icon, size: 18, color: _kAccent),
@@ -863,9 +872,9 @@ class _RoleBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (role.toLowerCase()) {
-      'admin' => AppColors.primaryBlue,
-      'editor' => AppColors.primaryRed,
-      'manager' => const Color(0xFF9334E6),
+      'admin' => _kAccent,
+      'editor' => const Color(0xFFD4760A),
+      'manager' => const Color(0xFF6A1B9A),
       _ => AppColors.grayText,
     };
     return Container(

@@ -14,9 +14,13 @@ import 'sheet_screen.dart';
 import 'user_management_screen.dart';
 import 'settings_screen.dart';
 
-// ─── Theme colors (Blue & Red brand palette) ───
-const Color _kSidebarBg = AppColors.primaryBlue; // primary blue
-const Color _kContentBg = AppColors.white; // white base
+// ─── Theme colors (Red sidebar + warm cream content) ───
+const Color _kSidebarBg = Color(0xFFC0392B); // deep red sidebar
+const Color _kSidebarBgDark = Color(0xFFAD2E23); // slightly darker red for active/hover
+const Color _kSidebarText = Colors.white;
+const Color _kContentBg = Color(0xFFFAF0E6); // warm cream/linen background
+const Color _kHeaderMaroon = Color(0xFF283593); // dark blue for titles
+const Color _kWarmBorder = Color(0xFFDDD5CC); // warm-tinted border
 
 enum _LowestStockLabelMode { byName, byCode }
 
@@ -131,11 +135,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             duration: const Duration(milliseconds: 200),
             width: _sidebarExpanded ? 220 : 68,
             clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(
-                right: BorderSide(color: Colors.grey.shade200, width: 1),
-              ),
+            decoration: const BoxDecoration(
+              color: _kSidebarBg,
             ),
             child: Column(
               children: [
@@ -154,19 +155,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         : MainAxisAlignment.center,
                     children: [
                       if (_sidebarExpanded) ...[
-                        // Logo
-                        SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: Image.asset(
-                              'assets/images/logo.png',
-                              fit: BoxFit.contain,
-                              errorBuilder: (_, __, ___) => const Icon(
-                                Icons.diamond,
-                                size: 22,
-                                color: AppColors.primaryRed,
+                        // Logo with white circle background
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 26,
+                              height: 26,
+                              child: Image.asset(
+                                'assets/images/logo.png',
+                                fit: BoxFit.contain,
+                                errorBuilder: (_, __, ___) => const Icon(
+                                  Icons.diamond,
+                                  size: 18,
+                                  color: AppColors.primaryRed,
+                                ),
                               ),
                             ),
                           ),
@@ -178,14 +186,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.primaryBlue,
+                              color: Colors.white,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ),
                         IconButton(
-                          icon: Icon(Icons.menu,
-                              color: Colors.grey.shade600, size: 22),
+                          icon: const Icon(Icons.menu,
+                              color: Colors.white70, size: 22),
                           onPressed: () => setState(
                               () => _sidebarExpanded = !_sidebarExpanded),
                           padding: EdgeInsets.zero,
@@ -194,8 +202,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       ] else
                         IconButton(
-                          icon: Icon(Icons.menu,
-                              color: Colors.grey.shade600, size: 22),
+                          icon: const Icon(Icons.menu,
+                              color: Colors.white70, size: 22),
                           onPressed: () => setState(
                               () => _sidebarExpanded = !_sidebarExpanded),
                           padding: EdgeInsets.zero,
@@ -236,22 +244,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 // Top bar (only for Dashboard page – other pages have their own header)
                 if (_selectedIndex == 0)
                   Container(
-                    height: 56,
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    height: 60,
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: _kContentBg,
                       border: Border(
-                        bottom: BorderSide(color: Colors.grey.shade100),
+                        bottom: BorderSide(color: _kWarmBorder.withOpacity(0.5)),
                       ),
                     ),
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      _currentTitle,
+                      _currentTitle.toUpperCase(),
                       style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF202124),
-                        letterSpacing: 0.2,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        color: _kHeaderMaroon,
+                        letterSpacing: 1.2,
                       ),
                     ),
                   ),
@@ -286,8 +294,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: CircleAvatar(
           radius: 18,
-          backgroundColor: Colors.grey[300],
-          child: Icon(Icons.person, color: Colors.grey[600], size: 20),
+          backgroundColor: Colors.white24,
+          child: const Icon(Icons.person, color: Colors.white, size: 20),
         ),
       );
     }
@@ -297,15 +305,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: Colors.white.withOpacity(0.1),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 20,
-            backgroundColor: AppColors.lightBlue,
-            child: Icon(Icons.person, color: _kSidebarBg, size: 22),
+            backgroundColor: Colors.white24,
+            child: const Icon(Icons.person, color: Colors.white, size: 22),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -315,9 +323,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text(
                   (auth.user?.fullName ?? 'ADMINISTRATOR').toUpperCase(),
                   style: const TextStyle(
-                    color: Color(0xFF202124),
+                    color: Colors.white,
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     letterSpacing: 0.2,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -326,7 +334,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text(
                   auth.user?.role ?? 'Administrator',
                   style: const TextStyle(
-                    color: Color(0xFF5F6368),
+                    color: Colors.white70,
                     fontSize: 11,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -345,11 +353,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: Material(
-        color: selected ? Colors.white : Colors.transparent,
+        color: selected ? _kSidebarBgDark : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         clipBehavior: Clip.hardEdge,
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
+          hoverColor: Colors.white.withOpacity(0.08),
+          splashColor: Colors.white.withOpacity(0.12),
           onTap: () {
             if (item.index >= 0) {
               setState(() {
@@ -377,7 +387,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     Icon(
                       item.icon,
-                      color: selected ? _kSidebarBg : const Color(0xFF5F6368),
+                      color: Colors.white,
                       size: 20,
                     ),
                     if (canShowLabel) ...[
@@ -387,11 +397,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           item.label,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: selected
-                                ? _kSidebarBg
-                                : const Color(0xFF5F6368),
+                            color: Colors.white,
                             fontWeight:
-                                selected ? FontWeight.w600 : FontWeight.w400,
+                                selected ? FontWeight.w700 : FontWeight.w400,
                             fontSize: 13,
                           ),
                         ),
@@ -402,7 +410,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.orange[700],
+                            color: Colors.orange[400],
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
@@ -429,60 +437,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildLogoutButton(AuthProvider auth) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: InkWell(
+      child: Material(
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(10),
-        onTap: () async {
-          final confirmed = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              scrollable: true,
-              title: const Text('Logout'),
-              content: const Text('Are you sure you want to logout?'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryRed,
-                    foregroundColor: Colors.white,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          hoverColor: Colors.white.withOpacity(0.08),
+          splashColor: Colors.white.withOpacity(0.12),
+          onTap: () async {
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                scrollable: true,
+                title: const Text('Logout'),
+                content: const Text('Are you sure you want to logout?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
                   ),
-                  child: const Text('Logout'),
-                ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryRed,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Logout'),
+                  ),
+                ],
+              ),
+            );
+            if (confirmed == true) {
+              await auth.logout();
+              if (mounted) {
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                );
+              }
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              mainAxisAlignment: _sidebarExpanded
+                  ? MainAxisAlignment.start
+                  : MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.logout, color: Colors.white70, size: 20),
+                if (_sidebarExpanded) ...[
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Logout',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w400,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
             ),
-          );
-          if (confirmed == true) {
-            await auth.logout();
-            if (mounted) {
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-              );
-            }
-          }
-        },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            mainAxisAlignment: _sidebarExpanded
-                ? MainAxisAlignment.start
-                : MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.logout, color: Color(0xFF5F6368), size: 20),
-              if (_sidebarExpanded) ...[
-                const SizedBox(width: 12),
-                const Text(
-                  'Logout',
-                  style: TextStyle(
-                    color: Color(0xFF5F6368),
-                    fontWeight: FontWeight.w400,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ],
           ),
         ),
       ),
@@ -584,7 +598,7 @@ class _DashboardContentState extends State<_DashboardContent> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _kWarmBorder.withOpacity(0.6)),
         borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
@@ -1002,9 +1016,9 @@ class _SectionTitle extends StatelessWidget {
       children: [
         Container(
           width: 4,
-          height: 20,
+          height: 22,
           decoration: BoxDecoration(
-            color: AppColors.primaryBlue,
+            color: _kHeaderMaroon,
             borderRadius: BorderRadius.circular(2),
           ),
         ),
@@ -1012,10 +1026,10 @@ class _SectionTitle extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF202124),
-            letterSpacing: 0.1,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: _kHeaderMaroon,
+            letterSpacing: 0.2,
           ),
         ),
       ],
@@ -1070,7 +1084,7 @@ class _StatCardState extends State<_StatCard> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.grey.shade200, width: 0.9),
+          border: Border.all(color: _kWarmBorder.withOpacity(0.6), width: 0.9),
           boxShadow: [
             BoxShadow(
               color: _hovered
@@ -1089,7 +1103,7 @@ class _StatCardState extends State<_StatCard> {
             children: [
               // Accent top stripe (always present, color varies)
               Container(
-                height: 3,
+                height: 4,
                 color: d.color,
               ),
               Expanded(
@@ -1311,7 +1325,7 @@ class _DashCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey.shade200, width: 0.9),
+        border: Border.all(color: _kWarmBorder.withOpacity(0.6), width: 0.9),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -1333,12 +1347,12 @@ class _DashCard extends StatelessWidget {
                     width: 28,
                     height: 28,
                     decoration: BoxDecoration(
-                      color: (iconColor ?? AppColors.primaryBlue)
+                      color: (iconColor ?? _kHeaderMaroon)
                           .withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(7),
                     ),
                     child: Icon(icon,
-                        size: 16, color: iconColor ?? AppColors.primaryBlue),
+                        size: 16, color: iconColor ?? _kHeaderMaroon),
                   ),
                   const SizedBox(width: 8),
                 ],
@@ -1346,7 +1360,7 @@ class _DashCard extends StatelessWidget {
                   title,
                   style: const TextStyle(
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     color: Color(0xFF202124),
                     letterSpacing: 0.1,
                   ),

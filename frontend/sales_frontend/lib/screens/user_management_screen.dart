@@ -5,9 +5,11 @@ import '../services/api_service.dart';
 import '../models/user.dart';
 import '../config/constants.dart';
 
-// ── Colour constants (Blue & Red brand palette) ──
-const Color _kContentBg = AppColors.white;
-const Color _kNavy = AppColors.darkText;
+// ── Colour constants (Warm cream & Maroon palette) ──
+const Color _kContentBg = Color(0xFFFAF0E6); // warm cream / linen
+const Color _kNavy = Color(0xFF3E2723); // warm near-black
+const Color _kHeaderMaroon = Color(0xFF283593); // dark blue header
+const Color _kWarmBorder = Color(0xFFDDD5CC); // warm border
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -1482,14 +1484,28 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // ── Title ──
-                      const Text(
-                        'User Management',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          color: _kNavy,
-                          letterSpacing: 0.2,
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'USER MANAGEMENT',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: _kHeaderMaroon,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 50,
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: _kHeaderMaroon,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 20),
 
@@ -1569,8 +1585,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.grey[200],
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kWarmBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.brown.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1580,7 +1604,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               style: const TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
-                color: _kNavy,
+                color: _kHeaderMaroon,
               ),
             ),
             const SizedBox(height: 2),
@@ -1603,7 +1627,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _kWarmBorder),
       ),
       child: Row(
         children: [
@@ -1613,7 +1637,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
-              color: _kNavy,
+              color: _kHeaderMaroon,
             ),
           ),
           const SizedBox(width: 16),
@@ -1623,7 +1647,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             child: Container(
               height: 36,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: _kWarmBorder),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: TextField(
@@ -1689,7 +1713,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade400),
+                  border: Border.all(color: _kWarmBorder),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Text(
@@ -1724,7 +1748,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey.shade400),
+          border: Border.all(color: _kWarmBorder),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -1761,8 +1785,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   TextStyle _headerStyle() {
-    return TextStyle(
-        fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600]);
+    return const TextStyle(
+        fontSize: 12, fontWeight: FontWeight.w600, color: _kHeaderMaroon);
   }
 
   // ════════════════════════════════════════════
@@ -1813,8 +1837,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
       decoration: BoxDecoration(
-        color: Colors.grey[200],
+        color: Colors.white,
         borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kWarmBorder),
       ),
       child: Row(
         children: [
@@ -1987,7 +2012,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: _kWarmBorder),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2008,7 +2033,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade300),
+                  border: Border.all(color: _kWarmBorder),
                   borderRadius: BorderRadius.circular(8),
                   color: Colors.white,
                 ),
@@ -2144,10 +2169,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           height: 36,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: isActive ? _kNavy : Colors.transparent,
+            color: isActive ? _kHeaderMaroon : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isActive ? _kNavy : Colors.grey.shade300,
+              color: isActive ? _kHeaderMaroon : _kWarmBorder,
               width: 1,
             ),
           ),
@@ -2225,11 +2250,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Color _getRoleColor(String role) {
     switch (role.toLowerCase()) {
       case 'admin':
-        return AppColors.primaryBlue;
+        return _kHeaderMaroon;
       case 'editor':
-        return AppColors.primaryRed;
+        return const Color(0xFFD4760A); // warm orange
       case 'viewer':
-        return const Color(0xFF42A5F5); // lighter blue for viewer
+        return const Color(0xFF2E7D32); // warm green
       default:
         return Colors.grey;
     }

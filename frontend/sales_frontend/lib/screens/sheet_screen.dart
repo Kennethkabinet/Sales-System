@@ -3217,11 +3217,13 @@ class _SheetScreenState extends State<SheetScreen> {
     super.dispose();
   }
 
-  // ─── Theme colors (Blue & Red brand palette) ───
-  static const Color _kSidebarBg = AppColors.primaryBlue; // primary blue
-  static const Color _kContentBg = AppColors.white; // pure white base
-  static const Color _kNavy = AppColors.darkText; // near-black text
-  static const Color _kBlue = AppColors.primaryBlue; // primary blue
+  // ─── Theme colors (Warm cream & Maroon palette) ───
+  static const Color _kSidebarBg = Color(0xFF6B1C1C); // deep maroon
+  static const Color _kContentBg = Color(0xFFFAF0E6); // warm cream / linen
+  static const Color _kNavy = Color(0xFF3E2723); // warm near-black
+  static const Color _kBlue = Color(0xFF6B1C1C); // maroon accent
+  static const Color _kWarmBorder = Color(0xFFDDD5CC); // warm border
+  static const Color _kHeaderMaroon = Color(0xFF283593); // dark blue header
 
   @override
   Widget build(BuildContext context) {
@@ -3332,14 +3334,28 @@ class _SheetScreenState extends State<SheetScreen> {
                       color: _kSidebarBg),
                 ),
               ] else
-                const Text(
-                  'Work Sheets',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: _kNavy,
-                    letterSpacing: 0.2,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'WORK SHEETS',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: _kHeaderMaroon,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Container(
+                      width: 50,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: _kHeaderMaroon,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ],
                 ),
             ],
           ),
@@ -3385,12 +3401,12 @@ class _SheetScreenState extends State<SheetScreen> {
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('New Sheet'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _kNavy,
+                    backgroundColor: _kHeaderMaroon,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 18, vertical: 12),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(22),
                     ),
                     elevation: 0,
                   ),
@@ -3405,7 +3421,7 @@ class _SheetScreenState extends State<SheetScreen> {
             const Text(
               'Folders',
               style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.bold, color: _kNavy),
+                  fontSize: 15, fontWeight: FontWeight.bold, color: _kHeaderMaroon),
             ),
             const SizedBox(height: 10),
             Wrap(
@@ -3430,7 +3446,14 @@ class _SheetScreenState extends State<SheetScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.amber.shade200),
+                          border: Border.all(color: const Color(0xFFDDD5CC)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.brown.withOpacity(0.06),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: Row(
                           children: [
@@ -3541,7 +3564,7 @@ class _SheetScreenState extends State<SheetScreen> {
               style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.bold,
-                color: _kSidebarBg,
+                color: _kHeaderMaroon,
               ),
             ),
             const SizedBox(height: 12),
@@ -3570,7 +3593,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.bold,
-                  color: _kBlue,
+                  color: _kHeaderMaroon,
                 ),
               ),
               const Spacer(),
@@ -3629,7 +3652,7 @@ class _SheetScreenState extends State<SheetScreen> {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade200),
+                border: Border.all(color: const Color(0xFFDDD5CC)),
               ),
               child: Column(
                 children: [
@@ -3664,7 +3687,14 @@ class _SheetScreenState extends State<SheetScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: const Color(0xFFDDD5CC)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.brown.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3673,7 +3703,7 @@ class _SheetScreenState extends State<SheetScreen> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: Colors.green[600],
+                color: const Color(0xFF2E7D32),
                 borderRadius: BorderRadius.circular(6),
               ),
               child:
@@ -3727,7 +3757,7 @@ class _SheetScreenState extends State<SheetScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.lightBlue),
+            border: Border.all(color: _kWarmBorder),
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
@@ -3744,7 +3774,7 @@ class _SheetScreenState extends State<SheetScreen> {
               children: [
                 // Header
                 TableRow(
-                  decoration: BoxDecoration(color: Colors.grey.shade50),
+                  decoration: const BoxDecoration(color: Color(0xFFF5EDE3)),
                   children: [
                     TableCell(
                       verticalAlignment: TableCellVerticalAlignment.middle,
@@ -3787,10 +3817,10 @@ class _SheetScreenState extends State<SheetScreen> {
                   final sheet = entry.value;
                   final isSelected = _selectedSheetIds.contains(sheet.id);
                   final rowBg = isSelected
-                      ? AppColors.lightBlue
+                      ? const Color(0xFFF5EDE3)
                       : idx.isEven
                           ? Colors.white
-                          : const Color(0xFFF9FBF9);
+                          : const Color(0xFFFAF5EF);
                   return TableRow(
                     decoration: BoxDecoration(color: rowBg),
                     children: [
@@ -3828,7 +3858,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                   width: 28,
                                   height: 28,
                                   decoration: BoxDecoration(
-                                    color: Colors.green[600],
+                                    color: const Color(0xFF2E7D32),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Icon(Icons.description,
@@ -4016,12 +4046,14 @@ class _SheetScreenState extends State<SheetScreen> {
   }) {
     return OutlinedButton.icon(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18, color: _kNavy),
-      label: Text(label, style: const TextStyle(color: _kNavy, fontSize: 13)),
+      icon: Icon(icon, size: 18, color: _kHeaderMaroon),
+      label: Text(label,
+          style: const TextStyle(color: _kHeaderMaroon, fontSize: 13)),
       style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: _kNavy),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        side: const BorderSide(color: _kWarmBorder, width: 1.5),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        backgroundColor: Colors.white,
       ),
     );
   }
@@ -4050,9 +4082,9 @@ class _SheetScreenState extends State<SheetScreen> {
     return Container(
       height: 44,
       decoration: const BoxDecoration(
-        color: Colors.white,
+        color: Color(0xFFFAF0E6),
         border: Border(
-          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
+          bottom: BorderSide(color: Color(0xFFDDD5CC), width: 1),
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -4060,7 +4092,7 @@ class _SheetScreenState extends State<SheetScreen> {
         children: [
           IconButton(
             icon: const Icon(Icons.arrow_back,
-                size: 20, color: Color(0xFF5F6368)),
+                size: 20, color: Color(0xFF6B1C1C)),
             tooltip: 'Back to Work Sheets',
             onPressed: () {
               setState(() {
@@ -4079,7 +4111,7 @@ class _SheetScreenState extends State<SheetScreen> {
           const Text(
             'Work Sheets',
             style: TextStyle(
-              color: Color(0xFF202124),
+              color: Color(0xFF6B1C1C),
               fontWeight: FontWeight.w600,
               fontSize: 14,
               letterSpacing: 0.2,
