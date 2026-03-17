@@ -1166,6 +1166,7 @@ class DashboardStats {
 class InventoryDashboardData {
   final Map<String, dynamic> summary;
   final List<Map<String, dynamic>> monthlyTrend;
+  final List<Map<String, dynamic>> dailyTrend;
   final List<Map<String, dynamic>> categoryBreakdown;
   final List<Map<String, dynamic>> inkBreakdown;
   final List<Map<String, dynamic>> lowStockItems;
@@ -1174,6 +1175,7 @@ class InventoryDashboardData {
   InventoryDashboardData({
     required this.summary,
     required this.monthlyTrend,
+    required this.dailyTrend,
     required this.categoryBreakdown,
     required this.inkBreakdown,
     required this.lowStockItems,
@@ -1186,6 +1188,8 @@ class InventoryDashboardData {
       monthlyTrend: List<Map<String, dynamic>>.from(
           (json['monthly_trend'] ?? [])
               .map((e) => Map<String, dynamic>.from(e))),
+      dailyTrend: List<Map<String, dynamic>>.from(
+          (json['daily_trend'] ?? []).map((e) => Map<String, dynamic>.from(e))),
       categoryBreakdown: List<Map<String, dynamic>>.from(
           (json['category_breakdown'] ?? [])
               .map((e) => Map<String, dynamic>.from(e))),

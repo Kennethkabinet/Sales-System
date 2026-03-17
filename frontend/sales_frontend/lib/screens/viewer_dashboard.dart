@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/theme_provider.dart';
 import '../config/constants.dart';
 import 'login_screen.dart';
 import 'sheet_screen.dart';
+import 'settings_screen.dart';
 
 /// Viewer Module - For users with viewer role
 /// Viewers can ONLY view Excel sheets and settings (NO dashboard, NO editing)
@@ -15,318 +17,450 @@ class ViewerDashboard extends StatefulWidget {
 }
 
 class _ViewerDashboardState extends State<ViewerDashboard> {
-  bool _showSettings = false;
+  int _selectedIndex = 0; // 0 = Sheets, 1 = Settings
 
-  static const Color _kAccent = AppColors.primaryBlue;
-  static const Color _kNavy = AppColors.darkText;
-  static const Color _kGray = AppColors.grayText;
-  static const Color _kBg = AppColors.white;
-  static const Color _kBorder = AppColors.border;
-  static const Color _kAvatBg = AppColors.lightBlue;
+  static const Color _kGray = Color(0xFF6B7280);
+  static const Color _kBg = Color(0xFFF9FAFB);
+  static const Color _kBorder = Color(0xFFE5E7EB);
+  static const Color _kBlue = Color(0xFF4285F4);
+
+  String _getInitials(String? fullName, String? username) {
+    if (fullName != null && fullName.trim().isNotEmpty) {
+      final parts = fullName.trim().split(' ');
+      if (parts.length >= 2) {
+        return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+      } else if (parts.isNotEmpty) {
+        return parts.first[0].toUpperCase();
+      }
+    }
+    if (username != null && username.isNotEmpty) {
+      return username[0].toUpperCase();
+    }
+    return 'V';
+  }
 
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
+    final themeProvider = context.watch<ThemeProvider>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final pageBg = isDark ? const Color(0xFF111827) : _kBg;
+    final surfaceBg = isDark ? const Color(0xFF1F2937) : Colors.white;
+    final borderColor = isDark ? const Color(0xFF374151) : _kBorder;
+    final textPrimary =
+        isDark ? const Color(0xFFF3F4F6) : const Color(0xFF1F2937);
+    final textMuted =
+        isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280);
+    final searchBg = isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
+    final user = auth.user;
+    final initials = _getInitials(user?.fullName, user?.username);
 
     return Scaffold(
-      backgroundColor: _kBg,
-      body: Column(
+      backgroundColor: pageBg,
+      body: Row(
         children: [
-          // ── Top bar ──
+          // ── Sidebar ──
           Container(
-            height: 56,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: const BoxDecoration(
-              color: _kBg,
-              border: Border(
-                bottom: BorderSide(color: Color(0xFFE8EAED)),
-              ),
+            width: 220,
+            decoration: BoxDecoration(
+              color: surfaceBg,
+              border: Border(right: BorderSide(color: borderColor)),
             ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                    child: Row(
-                      children: [
-                        // App Title
-                        SizedBox(
-                          width: 30,
-                          height: 30,
-                          child: Image.asset(
-                            'assets/images/logo.png',
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => const Icon(
-                                Icons.diamond,
-                                size: 22,
-                                color: _kAccent),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Synergy Graphics',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: _kNavy,
-                          ),
-                        ),
-                        const SizedBox(width: 24),
-
-                        // Live Updates badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE6F4EA),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF34A853),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              const Text(
-                                'Live Updates',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                  color: Color(0xFF1E7E34),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-
-                        // Read-only badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.lock_outline, size: 13, color: _kGray),
-                              SizedBox(width: 5),
-                              Text(
-                                'Read-Only',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                  color: _kGray,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-
-                        // User info
-                        CircleAvatar(
-                          radius: 17,
-                          backgroundColor: _kAvatBg,
-                          child: Text(
-                            auth.user?.username[0].toUpperCase() ?? 'V',
-                            style: const TextStyle(
-                              color: _kAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              auth.user?.fullName ??
-                                  auth.user?.username ??
-                                  'Viewer',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: _kNavy,
-                              ),
-                            ),
-                            const Text(
-                              'Viewer',
-                              style: TextStyle(fontSize: 11, color: _kGray),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Settings button
-                        IconButton(
-                          icon: const Icon(Icons.settings_outlined,
-                              color: _kGray),
-                          tooltip: 'Settings',
-                          onPressed: () {
-                            setState(() => _showSettings = !_showSettings);
-                          },
-                        ),
-
-                        // Logout button
-                        IconButton(
-                          icon: const Icon(Icons.logout, color: _kGray),
-                          tooltip: 'Logout',
-                          onPressed: () async {
-                            final confirmed = await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                scrollable: true,
-                                title: const Text('Logout'),
-                                content: const Text(
-                                    'Are you sure you want to logout?'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, true),
-                                    child: const Text('Logout'),
-                                  ),
-                                ],
-                              ),
-                            );
-                            if (confirmed == true && context.mounted) {
-                              await auth.logout();
-                              if (context.mounted) {
-                                Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(
-                                    builder: (_) => const LoginScreen(),
-                                  ),
-                                );
-                              }
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // Settings Panel (collapsible)
-          if (_showSettings)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
-                color: Color(0xFFF8F9FA),
-                border: Border(
-                  bottom: BorderSide(color: _kBorder),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            child: Column(
+              children: [
+                // Header
+                Container(
+                  height: 64,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
                     children: [
-                      const Icon(Icons.settings, size: 18, color: _kAccent),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Settings',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: _kNavy,
+                      Expanded(
+                        child: SizedBox(
+                          height: 46,
+                          child: Image.asset(
+                            isDark
+                                ? 'assets/images/logo_combined_dark.png'
+                                : 'assets/images/logo_combined.png',
+                            fit: BoxFit.contain,
+                            alignment: Alignment.center,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.diamond,
+                              size: 18,
+                              color: AppColors.primaryOrange,
+                            ),
+                          ),
                         ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        iconSize: 20,
-                        onPressed: () => setState(() => _showSettings = false),
                       ),
                     ],
                   ),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  _buildSettingItem(
-                    context,
-                    icon: Icons.person,
-                    title: 'Username',
-                    value: auth.user?.username ?? '',
-                  ),
-                  _buildSettingItem(
-                    context,
-                    icon: Icons.email,
-                    title: 'Email',
-                    value: auth.user?.email ?? '',
-                  ),
-                  _buildSettingItem(
-                    context,
-                    icon: Icons.badge,
-                    title: 'Full Name',
-                    value: auth.user?.fullName ?? 'N/A',
-                  ),
-                  _buildSettingItem(
-                    context,
-                    icon: Icons.business,
-                    title: 'Department',
-                    value: auth.user?.departmentName ?? 'N/A',
-                  ),
-                ],
-              ),
-            ),
+                ),
 
-          // Sheet content (read-only) - Direct access, no navigation
-          const Expanded(
-            child: SheetScreen(readOnly: true),
+                // User profile card
+                Container(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: searchBg,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: _kBlue,
+                        child: Text(
+                          initials,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user?.fullName ?? user?.username ?? 'Viewer',
+                              style: TextStyle(
+                                color: textPrimary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'Viewer',
+                              style: TextStyle(
+                                color: textMuted,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Nav items
+                _buildNavItem(Icons.apps, 'Work Sheets', 0),
+                _buildNavItem(Icons.settings_outlined, 'Settings', 1),
+
+                const Spacer(),
+
+                // Logout
+                _buildLogoutButton(auth),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+
+          // ── Main content ──
+          Expanded(
+            child: Column(
+              children: [
+                // Top bar - HireGround style
+                Container(
+                  height: 60,
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  decoration: BoxDecoration(
+                    color: surfaceBg,
+                    border: Border(
+                        bottom:
+                            BorderSide(color: borderColor.withOpacity(0.8))),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        _selectedIndex == 0 ? 'Work Sheets' : 'Settings',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Read-only badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? const Color(0xFF111827)
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline,
+                                size: 13, color: textMuted),
+                            const SizedBox(width: 5),
+                            Text('Read-Only',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    color: textMuted)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Live updates badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE6F4EA),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: const BoxDecoration(
+                                  color: Color(0xFF34A853),
+                                  shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text('Live Updates',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    color: Color(0xFF1E7E34))),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      // Search bar
+                      Container(
+                        width: 300,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: searchBg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 12),
+                            Icon(Icons.search, size: 18, color: textMuted),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text('Search',
+                                  style: TextStyle(
+                                      fontSize: 13, color: textMuted)),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 3),
+                              margin: const EdgeInsets.only(right: 8),
+                              decoration: BoxDecoration(
+                                color: surfaceBg,
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: borderColor),
+                              ),
+                              child: Text('Ctrl+K',
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                      color: textMuted)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      _HeaderIconButton(
+                        icon: themeProvider.isDarkMode
+                            ? Icons.dark_mode_outlined
+                            : Icons.light_mode_outlined,
+                        onTap: () =>
+                            context.read<ThemeProvider>().toggleTheme(),
+                      ),
+                      const SizedBox(width: 8),
+                      _HeaderIconButton(
+                          icon: Icons.notifications_none_outlined,
+                          onTap: () {}),
+                      const SizedBox(width: 16),
+                      // User profile in header
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 18,
+                            backgroundColor: _kBlue,
+                            child: Text(initials,
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white)),
+                          ),
+                          const SizedBox(width: 10),
+                          Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(user?.fullName ?? user?.username ?? 'Viewer',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: textPrimary)),
+                              Text('Viewer',
+                                  style: TextStyle(
+                                      fontSize: 11, color: textMuted)),
+                            ],
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(Icons.keyboard_arrow_down,
+                              size: 18, color: textMuted),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Page content
+                Expanded(
+                  child: _selectedIndex == 0
+                      ? const SheetScreen(readOnly: true)
+                      : const SettingsScreen(),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSettingItem(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String value,
-  }) {
+  Widget _buildNavItem(IconData icon, String label, int index) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hoverColor =
+        isDark ? const Color(0xFF374151) : const Color(0xFFF3F4F6);
+    final selectedBg =
+        isDark ? const Color(0xFF1E3A8A) : const Color(0xFFE8F0FE);
+    final inactive = isDark ? const Color(0xFFD1D5DB) : _kGray;
+    final selected = _selectedIndex == index;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: _kAccent),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 110,
-            child: Text(
-              title,
-              style: const TextStyle(fontSize: 13, color: _kGray),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
+        color: selected ? selectedBg : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          hoverColor: hoverColor,
+          onTap: () => setState(() => _selectedIndex = index),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Icon(icon, color: selected ? _kBlue : inactive, size: 20),
+                const SizedBox(width: 12),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? _kBlue : inactive,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
             ),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: _kNavy,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogoutButton(AuthProvider auth) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hoverColor =
+        isDark ? const Color(0xFF374151) : const Color(0xFFF3F4F6);
+    final textColor =
+        isDark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          hoverColor: hoverColor,
+          onTap: () async {
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Logout'),
+                content: const Text('Are you sure you want to logout?'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryRed,
+                        foregroundColor: Colors.white),
+                    child: const Text('Logout'),
+                  ),
+                ],
               ),
+            );
+            if (confirmed == true) {
+              await auth.logout();
+              if (mounted) {
+                Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()));
+              }
+            }
+          },
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Icon(Icons.logout, color: textColor, size: 20),
+                const SizedBox(width: 12),
+                Text('Logout',
+                    style: TextStyle(color: textColor, fontSize: 13)),
+              ],
             ),
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
+    final border = isDark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
+    final iconColor =
+        isDark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: border),
+        ),
+        child: Icon(icon, size: 18, color: iconColor),
       ),
     );
   }

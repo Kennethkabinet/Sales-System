@@ -1,28 +1,33 @@
 import 'package:flutter/material.dart';
 
-/// App brand colours – Blue & Red theme
+/// App brand colours – Orange & Blue theme
 ///
-/// Primary Blue  : 0xFF1565C0  (Material Blue 800)
-/// Primary Red   : 0xFFD32F2F  (Material Red 700)
+/// Primary Orange: 0xFFE44408  (Brand Orange)
+/// Primary Blue  : 0xFF1C2172  (Brand Navy Blue)
 class AppColors {
   // ── Primary brand colours ──────────────────────────────────────
-  static const Color primaryBlue = Color(0xFF1565C0); // main blue
-  static const Color primaryRed = Color(0xFFD32F2F); // main red
+  static const Color primaryOrange = Color(0xFFE44408); // main orange
+  static const Color primaryBlue = Color(0xFF1C2172); // main navy blue
+  static const Color primaryRed =
+      Color(0xFFE44408); // alias for orange (backward compatibility)
 
   // ── Lighter tints (backgrounds, chips) ────────────────────────
-  static const Color lightBlue = Color(0xFFE3F2FD); // blue-tinted bg
-  static const Color lightRed = Color(0xFFFFEBEE); // red-tinted bg
+  static const Color lightOrange = Color(0xFFFFF3E0); // orange-tinted bg
+  static const Color lightBlue = Color(0xFFE8EAF6); // blue-tinted bg
+  static const Color lightRed = Color(0xFFFFF3E0); // alias for lightOrange
 
   // ── Header gradient ────────────────────────────────────────────
-  static const Color gradientStart = Color(0xFF1565C0); // blue
-  static const Color gradientEnd = Color(0xFFD32F2F); // red
+  static const Color gradientStart = Color(0xFFE44408); // orange
+  static const Color gradientEnd = Color(0xFF1C2172); // navy blue
 
   // ── Neutrals ──────────────────────────────────────────────────
   static const Color white = Color(0xFFFFFFFF);
-  static const Color darkText = Color(0xFF202124);
-  static const Color grayText = Color(0xFF5F6368);
-  static const Color border = Color(0xFFE8EAED);
-  static const Color bgLight = Color(0xFFF8F9FA);
+  static const Color black = Color(0xFF000000);
+  static const Color darkText = Color(0xFF1F2937);
+  static const Color grayText = Color(0xFF6B7280);
+  static const Color lightGray = Color(0xFF9CA3AF);
+  static const Color border = Color(0xFFE5E7EB);
+  static const Color bgLight = Color(0xFFF9FAFB);
 }
 
 /// App configuration constants

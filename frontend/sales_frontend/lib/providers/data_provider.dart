@@ -32,6 +32,8 @@ class DataProvider extends ChangeNotifier {
   AuditSummary? _auditSummary;
   InventoryDashboardData? _inventoryDashboardData;
   List<Map<String, dynamic>> _inventorySheets = [];
+  int? _currentSheetId;
+  String? _currentSheetName;
 
   // Collaboration
   List<ActiveUser> _activeUsers = [];
@@ -56,6 +58,8 @@ class DataProvider extends ChangeNotifier {
   AuditSummary? get auditSummary => _auditSummary;
   InventoryDashboardData? get inventoryDashboardData => _inventoryDashboardData;
   List<Map<String, dynamic>> get inventorySheets => _inventorySheets;
+  int? get currentSheetId => _currentSheetId;
+  String? get currentSheetName => _currentSheetName;
   List<ActiveUser> get activeUsers => _activeUsers;
   Map<String, String> get lockedRows => _lockedRows;
   bool get isLoading => _isLoading;
@@ -65,6 +69,18 @@ class DataProvider extends ChangeNotifier {
 
   DataProvider() {
     _setupSocketListeners();
+  }
+
+  void setCurrentSheet({required int sheetId, String? sheetName}) {
+    _currentSheetId = sheetId;
+    _currentSheetName = sheetName;
+    notifyListeners();
+  }
+
+  void clearCurrentSheet() {
+    _currentSheetId = null;
+    _currentSheetName = null;
+    notifyListeners();
   }
 
   void setAuth(String token, String userId) {
@@ -598,6 +614,8 @@ class DataProvider extends ChangeNotifier {
     _dashboardStats = null;
     _auditSummary = null;
     _inventoryDashboardData = null;
+    _currentSheetId = null;
+    _currentSheetName = null;
     _error = null;
     notifyListeners();
   }

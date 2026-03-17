@@ -114,6 +114,17 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Refresh user data from server
+  Future<void> refreshUser() async {
+    if (_token == null) return;
+    try {
+      _user = await ApiService.getCurrentUser();
+      notifyListeners();
+    } catch (e) {
+      // Ignore refresh errors
+    }
+  }
+
   Future<bool> register(
       {required String username,
       required String email,

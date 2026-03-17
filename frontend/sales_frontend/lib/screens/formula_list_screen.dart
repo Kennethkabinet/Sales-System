@@ -23,6 +23,7 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppColors.bgLight,
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

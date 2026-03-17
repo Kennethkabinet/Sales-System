@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
-import '../config/constants.dart';
 
-// ── Colour constants (Warm cream & Blue header palette) ──
-const Color _kAccent = Color(0xFF283593);
-const Color _kNavyS = Color(0xFF3E2723);
-const Color _kGray = AppColors.grayText;
-const Color _kBorder = Color(0xFFDDD5CC);
-const Color _kBg = Color(0xFFFAF0E6);
+const Color _kPrimaryBlue = Color(0xFF4285F4);
+const Color _kNavy = Color(0xFF1F2937);
+const Color _kGray = Color(0xFF6B7280);
+const Color _kLightGray = Color(0xFF9CA3AF);
+const Color _kBorder = Color(0xFFE5E7EB);
+const Color _kBg = Color(0xFFF3F4F6);
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -18,212 +17,513 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
-  int _section = 0; // 0=Account, 1=Security, 2=System, 3=About
+class _SettingsScreenState extends State<SettingsScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _bgColor => _isDark ? const Color(0xFF0B1220) : _kBg;
+  Color get _surfaceColor => _isDark ? const Color(0xFF111827) : Colors.white;
+  Color get _borderColor => _isDark ? const Color(0xFF334155) : _kBorder;
+  Color get _textPrimary => _isDark ? const Color(0xFFE5E7EB) : _kNavy;
+  Color get _textSecondary => _isDark ? const Color(0xFF94A3B8) : _kGray;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 4, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  String _getInitials(String? fullName, String? username) {
+    if (fullName != null && fullName.trim().isNotEmpty) {
+      final parts = fullName.trim().split(' ');
+      if (parts.length >= 2) {
+        return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+      } else if (parts.isNotEmpty) {
+        return parts.first[0].toUpperCase();
+      }
+    }
+    if (username != null && username.isNotEmpty) {
+      return username[0].toUpperCase();
+    }
+    return 'U';
+  }
 
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
-    final sections = [
-      _Section(Icons.person_outline, 'Account'),
-      _Section(Icons.lock_outline, 'Security'),
-      _Section(Icons.dns_outlined, 'System Status'),
-      _Section(Icons.info_outline, 'About'),
-    ];
-
-    final pages = [
-      _AccountSection(auth: auth),
-      _SecuritySection(auth: auth),
-      const _SystemSection(),
-      const _AboutSection(),
-    ];
+    final user = auth.user;
 
     return Scaffold(
-      backgroundColor: _kBg,
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Page title ──
-            const Text(
-              'SETTINGS',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: _kAccent,
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Container(
-              width: 50,
-              height: 3,
-              decoration: BoxDecoration(
-                color: _kAccent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Manage your account and system preferences',
-              style: TextStyle(fontSize: 13, color: _kGray),
-            ),
-            const SizedBox(height: 20),
-
-            // ── Two-column layout ──
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Left nav panel
-                  Container(
-                    width: 200,
+      backgroundColor: _bgColor,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Main content card - expands to fill remaining space
+                Expanded(
+                  child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBorder),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(
-                      children: sections.asMap().entries.map((e) {
-                        final selected = _section == e.key;
-                        return _SectionTile(
-                          section: e.value,
-                          selected: selected,
-                          onTap: () => setState(() => _section = e.key),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-
-                  // Right content panel
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _kBorder),
-                      ),
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: KeyedSubtree(
-                          key: ValueKey(_section),
-                          child: pages[_section],
+                      color: _surfaceColor,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.04),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
                         ),
-                      ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        // Blue gradient banner
+                        _buildBanner(),
+
+                        // Profile and content area - expands to fill
+                        Expanded(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Left profile sidebar
+                              _buildProfileSidebar(user),
+
+                              // Right content area with tabs
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Tab bar
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        border: Border(
+                                          bottom:
+                                              BorderSide(color: _borderColor),
+                                        ),
+                                      ),
+                                      child: TabBar(
+                                        controller: _tabController,
+                                        labelColor: _kPrimaryBlue,
+                                        unselectedLabelColor: _textSecondary,
+                                        indicatorColor: _kPrimaryBlue,
+                                        indicatorWeight: 2,
+                                        labelStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        unselectedLabelStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w400,
+                                        ),
+                                        isScrollable: true,
+                                        tabAlignment: TabAlignment.start,
+                                        tabs: const [
+                                          Tab(text: 'Account Settings'),
+                                          Tab(text: 'Security'),
+                                          Tab(text: 'System Status'),
+                                          Tab(text: 'About'),
+                                        ],
+                                      ),
+                                    ),
+
+                                    // Tab content - expands to fill
+                                    Expanded(
+                                      child: TabBarView(
+                                        controller: _tabController,
+                                        children: [
+                                          _AccountTab(auth: auth),
+                                          _SecurityTab(auth: auth),
+                                          const _SystemTab(),
+                                          const _AboutTab(),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
-}
 
-// ── Section tile for left nav ──
-class _SectionTile extends StatelessWidget {
-  final _Section section;
-  final bool selected;
-  final VoidCallback onTap;
+  Widget _buildBanner() {
+    return Container(
+      height: 120,
+      decoration: const BoxDecoration(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF5C6BC0),
+            Color(0xFF3949AB),
+            Color(0xFF303F9F),
+          ],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(painter: _BannerPatternPainter()),
+          ),
+        ],
+      ),
+    );
+  }
 
-  const _SectionTile({
-    required this.section,
-    required this.selected,
-    required this.onTap,
-  });
+  Widget _buildProfileSidebar(user) {
+    final initials = _getInitials(user?.fullName, user?.username);
 
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: Material(
-        color: selected ? const Color(0xFFE8EDF8) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
+    return Container(
+      width: 260,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: _borderColor)),
+      ),
+      child: Column(
+        children: [
+          // Profile avatar overlapping banner with initials
+          Transform.translate(
+            offset: const Offset(0, -50),
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 4),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: CircleAvatar(
+                radius: 50,
+                backgroundColor: _kPrimaryBlue,
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Name and role
+          Transform.translate(
+            offset: const Offset(0, -30),
+            child: Column(
               children: [
-                Icon(section.icon,
-                    size: 18, color: selected ? _kAccent : _kGray),
-                const SizedBox(width: 10),
                 Text(
-                  section.label,
+                  user?.fullName ?? user?.username ?? 'User',
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    color: selected ? _kAccent : _kNavyS,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: _textPrimary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  user?.email ?? 'No email set',
+                  style: TextStyle(fontSize: 13, color: _textSecondary),
+                ),
+                const SizedBox(height: 16),
+
+                // Stats
+                _buildStatRow('Username', user?.username ?? '-'),
+                _buildStatRow('Role', user?.role ?? 'User'),
+                _buildStatRow(
+                    'Status', user?.isActive == true ? 'Active' : 'Inactive'),
+
+                const SizedBox(height: 20),
+
+                // View profile button
+                OutlinedButton(
+                  onPressed: () {},
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _textSecondary,
+                    side: BorderSide(color: _borderColor),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text(
+                    'View Public Profile',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
                   ),
                 ),
               ],
             ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(fontSize: 13, color: _textSecondary)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: label == 'Status' && value == 'Active'
+                  ? const Color(0xFF34A853)
+                  : _kPrimaryBlue,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _Section {
-  final IconData icon;
-  final String label;
-  _Section(this.icon, this.label);
-}
+// Banner pattern painter
+class _BannerPatternPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.1)
+      ..style = PaintingStyle.fill;
 
-// ═══════════════════════════════════════════════════════
-//  ACCOUNT SECTION
-// ═══════════════════════════════════════════════════════
-class _AccountSection extends StatefulWidget {
-  final AuthProvider auth;
-  const _AccountSection({required this.auth});
+    final path1 = Path()
+      ..moveTo(size.width * 0.7, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width, size.height * 0.6)
+      ..close();
+    canvas.drawPath(path1, paint);
+
+    final path2 = Path()
+      ..moveTo(size.width * 0.5, size.height)
+      ..lineTo(size.width * 0.8, size.height)
+      ..lineTo(size.width * 0.65, size.height * 0.4)
+      ..close();
+    canvas.drawPath(path2, paint..color = Colors.white.withOpacity(0.05));
+  }
 
   @override
-  State<_AccountSection> createState() => _AccountSectionState();
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-class _AccountSectionState extends State<_AccountSection> {
+// ═══════════════════════════════════════════════════════
+//  ACCOUNT TAB
+// ═══════════════════════════════════════════════════════
+class _AccountTab extends StatefulWidget {
+  final AuthProvider auth;
+  const _AccountTab({required this.auth});
+
+  @override
+  State<_AccountTab> createState() => _AccountTabState();
+}
+
+class _AccountTabState extends State<_AccountTab> {
   final _formKey = GlobalKey<FormState>();
-  late TextEditingController _fullNameCtrl;
+  late TextEditingController _firstNameCtrl;
+  late TextEditingController _lastNameCtrl;
   late TextEditingController _emailCtrl;
+  late TextEditingController _usernameCtrl;
   bool _saving = false;
   String? _message;
   bool _success = false;
+
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _dialogSurface => _isDark ? const Color(0xFF111827) : Colors.white;
+  Color get _fieldFill => _isDark ? const Color(0xFF0F172A) : Colors.white;
+  Color get _readOnlyFill => _isDark ? const Color(0xFF1F2937) : _kBg;
+  Color get _labelColor => _isDark ? const Color(0xFFCBD5E1) : _kNavy;
+  Color get _hintColor => _isDark ? const Color(0xFF94A3B8) : _kLightGray;
+  Color get _fieldBorder => _isDark ? const Color(0xFF334155) : _kBorder;
 
   @override
   void initState() {
     super.initState();
     final u = widget.auth.user;
-    _fullNameCtrl = TextEditingController(text: u?.fullName ?? '');
+    // Split fullName into first and last name
+    final nameParts = (u?.fullName ?? '').trim().split(' ');
+    final firstName = nameParts.isNotEmpty ? nameParts.first : '';
+    final lastName = nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+
+    _firstNameCtrl = TextEditingController(text: firstName);
+    _lastNameCtrl = TextEditingController(text: lastName);
     _emailCtrl = TextEditingController(text: u?.email ?? '');
+    _usernameCtrl = TextEditingController(text: u?.username ?? '');
   }
 
   @override
   void dispose() {
-    _fullNameCtrl.dispose();
+    _firstNameCtrl.dispose();
+    _lastNameCtrl.dispose();
     _emailCtrl.dispose();
+    _usernameCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _save() async {
+  Future<void> _promptPasswordAndSave() async {
     if (!_formKey.currentState!.validate()) return;
+
+    final passwordCtrl = TextEditingController();
+    bool obscurePassword = true;
+    String? errorText;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: _dialogSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: _fieldBorder),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.lock_outline, color: _kPrimaryBlue, size: 24),
+              const SizedBox(width: 12),
+              Text('Confirm Password',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: _labelColor)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Please enter your current password to confirm changes.',
+                style: TextStyle(fontSize: 13, color: _hintColor),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passwordCtrl,
+                obscureText: obscurePassword,
+                autofocus: true,
+                style: TextStyle(fontSize: 14, color: _labelColor),
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  labelStyle: TextStyle(fontSize: 13, color: _hintColor),
+                  errorText: errorText,
+                  filled: true,
+                  fillColor: _fieldFill,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: _fieldBorder),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: _fieldBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide:
+                        const BorderSide(color: _kPrimaryBlue, width: 1.5),
+                  ),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      obscurePassword ? Icons.visibility_off : Icons.visibility,
+                      color: _hintColor,
+                      size: 20,
+                    ),
+                    onPressed: () => setDialogState(
+                        () => obscurePassword = !obscurePassword),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancel', style: TextStyle(color: _hintColor)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (passwordCtrl.text.isEmpty) {
+                  setDialogState(() => errorText = 'Password is required');
+                  return;
+                }
+                // Verify password by attempting login
+                try {
+                  await ApiService.login(
+                    widget.auth.user!.username,
+                    passwordCtrl.text,
+                  );
+                  Navigator.pop(ctx, true);
+                } catch (e) {
+                  setDialogState(() => errorText = 'Incorrect password');
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kPrimaryBlue,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6)),
+              ),
+              child: const Text('Confirm'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    passwordCtrl.dispose();
+
+    if (confirmed == true) {
+      await _save();
+    }
+  }
+
+  Future<void> _save() async {
     setState(() {
       _saving = true;
       _message = null;
     });
     try {
       final u = widget.auth.user!;
+      // Combine first and last name
+      final fullName =
+          '${_firstNameCtrl.text.trim()} ${_lastNameCtrl.text.trim()}'.trim();
+
       await ApiService.updateUser(
         userId: u.id,
-        fullName: _fullNameCtrl.text.trim(),
+        fullName: fullName,
         email: _emailCtrl.text.trim(),
+        username: _usernameCtrl.text.trim(),
       );
+      // Refresh user data
+      await widget.auth.refreshUser();
       setState(() {
         _saving = false;
         _success = true;
@@ -242,103 +542,162 @@ class _AccountSectionState extends State<_AccountSection> {
   Widget build(BuildContext context) {
     final u = widget.auth.user;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionHeader(Icons.person_outline, 'Account',
-              'Update your profile information'),
-          const SizedBox(height: 24),
-
-          // Avatar row
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 30,
-                backgroundColor: const Color(0xFFE8EDF8),
-                child: Icon(Icons.person, color: _kAccent, size: 32),
-              ),
-              const SizedBox(width: 16),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    u?.fullName ?? u?.username ?? '—',
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: _kNavyS),
-                  ),
-                  const SizedBox(height: 2),
-                  _RoleBadge(role: u?.role ?? ''),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          const Divider(color: _kBorder),
-          const SizedBox(height: 20),
-
-          Form(
-            key: _formKey,
-            child: Column(
+      padding: const EdgeInsets.all(24),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Two-column form layout - First Name and Last Name
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _fieldLabel('Full Name'),
-                const SizedBox(height: 6),
-                _textField(
-                  controller: _fullNameCtrl,
-                  hint: 'Enter your full name',
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Required' : null,
+                Expanded(
+                  child: _buildFormField(
+                    label: 'First Name',
+                    controller: _firstNameCtrl,
+                    hint: 'Enter your first name',
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'Required' : null,
+                  ),
                 ),
-                const SizedBox(height: 16),
-                _fieldLabel('Email Address'),
-                const SizedBox(height: 6),
-                _textField(
-                  controller: _emailCtrl,
-                  hint: 'Enter your email',
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Required';
-                    if (!v.contains('@')) return 'Enter a valid email';
-                    return null;
-                  },
+                const SizedBox(width: 20),
+                Expanded(
+                  child: _buildFormField(
+                    label: 'Last Name',
+                    controller: _lastNameCtrl,
+                    hint: 'Enter your last name',
+                  ),
                 ),
-                const SizedBox(height: 8),
-                _fieldLabel('Username', muted: true),
-                const SizedBox(height: 6),
-                _textField(
-                  controller: TextEditingController(text: u?.username ?? ''),
-                  hint: '',
-                  readOnly: true,
-                ),
-                const SizedBox(height: 24),
-                if (_message != null)
-                  _MessageBanner(message: _message!, success: _success),
-                const SizedBox(height: 12),
-                _SaveButton(saving: _saving, onPressed: _save),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 20),
+            // Username and Email
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildFormField(
+                    label: 'Username',
+                    controller: _usernameCtrl,
+                    hint: 'Enter your username',
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'Required' : null,
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: _buildFormField(
+                    label: 'Email Address',
+                    controller: _emailCtrl,
+                    hint: 'Enter your email',
+                    keyboardType: TextInputType.emailAddress,
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'Required';
+                      if (!v.contains('@')) return 'Enter a valid email';
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // Role (read-only)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildFormField(
+                    label: 'Role',
+                    controller: TextEditingController(text: u?.role ?? 'User'),
+                    readOnly: true,
+                  ),
+                ),
+                const Expanded(child: SizedBox()), // Empty space for alignment
+              ],
+            ),
+            const SizedBox(height: 24),
+            if (_message != null) ...[
+              _MessageBanner(message: _message!, success: _success),
+              const SizedBox(height: 16),
+            ],
+            _UpdateButton(saving: _saving, onPressed: _promptPasswordAndSave),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildFormField({
+    required String label,
+    required TextEditingController controller,
+    String? hint,
+    bool readOnly = false,
+    TextInputType? keyboardType,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: _labelColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          readOnly: readOnly,
+          keyboardType: keyboardType,
+          validator: validator,
+          style: TextStyle(fontSize: 14, color: _labelColor),
+          decoration: InputDecoration(
+            hintText: hint ?? '',
+            hintStyle: TextStyle(fontSize: 14, color: _hintColor),
+            filled: true,
+            fillColor: readOnly ? _readOnlyFill : _fieldFill,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: BorderSide(
+                  color: readOnly ? _fieldBorder : _fieldBorder, width: 1),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: _kPrimaryBlue, width: 1.5),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: Color(0xFFEA4335)),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide:
+                  const BorderSide(color: Color(0xFFEA4335), width: 1.5),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════
-//  SECURITY SECTION – Change Password
+//  SECURITY TAB
 // ═══════════════════════════════════════════════════════
-class _SecuritySection extends StatefulWidget {
+class _SecurityTab extends StatefulWidget {
   final AuthProvider auth;
-  const _SecuritySection({required this.auth});
+  const _SecurityTab({required this.auth});
 
   @override
-  State<_SecuritySection> createState() => _SecuritySectionState();
+  State<_SecurityTab> createState() => _SecurityTabState();
 }
 
-class _SecuritySectionState extends State<_SecuritySection> {
+class _SecurityTabState extends State<_SecurityTab> {
   final _formKey = GlobalKey<FormState>();
   final _newPassCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
@@ -385,99 +744,173 @@ class _SecuritySectionState extends State<_SecuritySection> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final infoBg = isDark
+        ? const Color(0xFF1E3A8A).withOpacity(0.20)
+        : const Color(0xFFE8F0FE);
+    final infoText = isDark ? const Color(0xFFBFDBFE) : _kPrimaryBlue;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionHeader(
-              Icons.lock_outline, 'Security', 'Change your account password'),
-          const SizedBox(height: 24),
-
-          // Info card
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF5F0E8),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kBorder),
+      padding: const EdgeInsets.all(24),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Info card
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: infoBg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: infoText),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Use a strong password of at least 8 characters with a mix of letters and numbers.',
+                      style: TextStyle(fontSize: 12, color: infoText),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: Row(
+            const SizedBox(height: 24),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.info_outline, size: 16, color: _kAccent),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Use a strong password of at least 8 characters with a mix of letters and numbers.',
-                    style:
-                        TextStyle(fontSize: 12, color: _kAccent),
+                Expanded(
+                  child: _buildPasswordField(
+                    label: 'New Password',
+                    controller: _newPassCtrl,
+                    hint: 'Enter new password',
+                    obscure: _obscureNew,
+                    onToggle: () => setState(() => _obscureNew = !_obscureNew),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'Required';
+                      if (v.trim().length < 6) return 'At least 6 characters';
+                      return null;
+                    },
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: _buildPasswordField(
+                    label: 'Confirm New Password',
+                    controller: _confirmPassCtrl,
+                    hint: 'Confirm new password',
+                    obscure: _obscureConfirm,
+                    onToggle: () =>
+                        setState(() => _obscureConfirm = !_obscureConfirm),
+                    validator: (v) {
+                      if (v != _newPassCtrl.text)
+                        return 'Passwords do not match';
+                      return null;
+                    },
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 24),
+            const SizedBox(height: 24),
+            if (_message != null) ...[
+              _MessageBanner(message: _message!, success: _success),
+              const SizedBox(height: 16),
+            ],
+            _UpdateButton(
+              saving: _saving,
+              label: 'Change Password',
+              onPressed: _changePassword,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _fieldLabel('New Password'),
-                const SizedBox(height: 6),
-                _passwordField(
-                  controller: _newPassCtrl,
-                  hint: 'Enter new password',
-                  obscure: _obscureNew,
-                  onToggle: () => setState(() => _obscureNew = !_obscureNew),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Required';
-                    if (v.trim().length < 6) return 'At least 6 characters';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                _fieldLabel('Confirm New Password'),
-                const SizedBox(height: 6),
-                _passwordField(
-                  controller: _confirmPassCtrl,
-                  hint: 'Confirm new password',
-                  obscure: _obscureConfirm,
-                  onToggle: () =>
-                      setState(() => _obscureConfirm = !_obscureConfirm),
-                  validator: (v) {
-                    if (v != _newPassCtrl.text) return 'Passwords do not match';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 24),
-                if (_message != null)
-                  _MessageBanner(message: _message!, success: _success),
-                const SizedBox(height: 12),
-                _SaveButton(
-                    saving: _saving,
-                    label: 'Change Password',
-                    onPressed: _changePassword),
-              ],
+  Widget _buildPasswordField({
+    required String label,
+    required TextEditingController controller,
+    required String hint,
+    required bool obscure,
+    required VoidCallback onToggle,
+    String? Function(String?)? validator,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final labelColor = isDark ? const Color(0xFFCBD5E1) : _kNavy;
+    final hintColor = isDark ? const Color(0xFF94A3B8) : _kLightGray;
+    final fillColor = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final fieldBorder = isDark ? const Color(0xFF334155) : _kBorder;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: labelColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          obscureText: obscure,
+          validator: validator,
+          style: TextStyle(fontSize: 14, color: labelColor),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(fontSize: 14, color: hintColor),
+            filled: true,
+            fillColor: fillColor,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            suffixIcon: IconButton(
+              icon: Icon(
+                  obscure
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 18,
+                  color: hintColor),
+              onPressed: onToggle,
+              splashRadius: 16,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: BorderSide(color: fieldBorder, width: 1),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: _kPrimaryBlue, width: 1.5),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: Color(0xFFEA4335)),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide:
+                  const BorderSide(color: Color(0xFFEA4335), width: 1.5),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════
-//  SYSTEM STATUS SECTION
+//  SYSTEM TAB
 // ═══════════════════════════════════════════════════════
-class _SystemSection extends StatefulWidget {
-  const _SystemSection();
+class _SystemTab extends StatefulWidget {
+  const _SystemTab();
 
   @override
-  State<_SystemSection> createState() => _SystemSectionState();
+  State<_SystemTab> createState() => _SystemTabState();
 }
 
-class _SystemSectionState extends State<_SystemSection> {
+class _SystemTabState extends State<_SystemTab> {
   bool _checking = false;
   String _apiStatus = '—';
   String _dbStatus = '—';
@@ -520,13 +953,17 @@ class _SystemSectionState extends State<_SystemSection> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textSecondary = isDark ? const Color(0xFF94A3B8) : _kGray;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionHeader(Icons.dns_outlined, 'System Status',
-              'Check backend and database connectivity'),
+          Text(
+            'Check backend and database connectivity',
+            style: TextStyle(fontSize: 13, color: textSecondary),
+          ),
           const SizedBox(height: 24),
           _StatusRow(label: 'API Server', status: _apiStatus, ok: _apiOk),
           const SizedBox(height: 12),
@@ -542,11 +979,11 @@ class _SystemSectionState extends State<_SystemSection> {
                 : const Icon(Icons.refresh, size: 16),
             label: Text(_checking ? 'Checking…' : 'Check Connection'),
             style: OutlinedButton.styleFrom(
-              foregroundColor: _kAccent,
-              side: const BorderSide(color: _kAccent),
+              foregroundColor: _kPrimaryBlue,
+              side: const BorderSide(color: _kPrimaryBlue),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
+                  borderRadius: BorderRadius.circular(6)),
             ),
           ),
         ],
@@ -565,6 +1002,9 @@ class _StatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final boxColor = isDark ? const Color(0xFF0F172A) : _kBg;
+    final labelColor = isDark ? const Color(0xFFCBD5E1) : _kNavy;
     final Color dot = status == '—' || status == 'Checking…'
         ? Colors.grey
         : ok
@@ -574,9 +1014,8 @@ class _StatusRow extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: boxColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _kBorder),
       ),
       child: Row(
         children: [
@@ -584,8 +1023,10 @@ class _StatusRow extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(label,
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: _kNavyS)),
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: labelColor)),
           ),
           Text(status,
               style: TextStyle(
@@ -597,39 +1038,41 @@ class _StatusRow extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════
-//  ABOUT SECTION
+//  ABOUT TAB
 // ═══════════════════════════════════════════════════════
-class _AboutSection extends StatelessWidget {
-  const _AboutSection();
+class _AboutTab extends StatelessWidget {
+  const _AboutTab();
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final boxColor = isDark ? const Color(0xFF0F172A) : _kBg;
+    final textPrimary = isDark ? const Color(0xFFE5E7EB) : _kNavy;
+    final textSecondary = isDark ? const Color(0xFF94A3B8) : _kGray;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionHeader(
-              Icons.info_outline, 'About', 'Application information'),
-          const SizedBox(height: 24),
-          _infoRow('Application', 'Sales Management System'),
-          _infoRow('Version', '1.0.0'),
-          _infoRow('Platform', 'Flutter Desktop (Windows)'),
-          _infoRow('Backend', 'Node.js + Express'),
-          _infoRow('Database', 'PostgreSQL'),
-          _infoRow('Developer', 'Internal Team'),
+          _infoRow('Application', 'Sales Management System', textPrimary,
+              textSecondary),
+          _infoRow('Version', '1.0.0', textPrimary, textSecondary),
+          _infoRow('Platform', 'Flutter Desktop (Windows)', textPrimary,
+              textSecondary),
+          _infoRow('Backend', 'Node.js + Express', textPrimary, textSecondary),
+          _infoRow('Database', 'PostgreSQL', textPrimary, textSecondary),
+          _infoRow('Developer', 'Internal Team', textPrimary, textSecondary),
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: _kBg,
+              color: boxColor,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kBorder),
             ),
-            child: const Text(
+            child: Text(
               '© 2026 Sales Management System. All rights reserved.\n'
               'This software is intended for internal use only.',
-              style: TextStyle(fontSize: 12, color: _kGray, height: 1.6),
+              style: TextStyle(fontSize: 12, color: textSecondary, height: 1.6),
             ),
           ),
         ],
@@ -637,7 +1080,8 @@ class _AboutSection extends StatelessWidget {
     );
   }
 
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(
+      String label, String value, Color textPrimary, Color textSecondary) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
@@ -645,14 +1089,18 @@ class _AboutSection extends StatelessWidget {
           SizedBox(
             width: 140,
             child: Text(label,
-                style: const TextStyle(
-                    fontSize: 13, color: _kGray, fontWeight: FontWeight.w400)),
+                style: TextStyle(
+                    fontSize: 13,
+                    color: textSecondary,
+                    fontWeight: FontWeight.w400)),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(value,
-                style: const TextStyle(
-                    fontSize: 13, color: _kNavyS, fontWeight: FontWeight.w500)),
+                style: TextStyle(
+                    fontSize: 13,
+                    color: textPrimary,
+                    fontWeight: FontWeight.w500)),
           ),
         ],
       ),
@@ -661,171 +1109,46 @@ class _AboutSection extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════
-//  SHARED HELPERS
+//  SHARED WIDGETS
 // ═══════════════════════════════════════════════════════
-Widget _sectionHeader(IconData icon, String title, String subtitle) {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-            color: const Color(0xFFE8EDF8),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, size: 18, color: _kAccent),
-          ),
-          const SizedBox(width: 12),
-          Text(title,
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w700, color: _kNavyS)),
-        ],
-      ),
-      const SizedBox(height: 4),
-      Padding(
-        padding: const EdgeInsets.only(left: 46),
-        child:
-            Text(subtitle, style: const TextStyle(fontSize: 12, color: _kGray)),
-      ),
-    ],
-  );
-}
-
-Widget _fieldLabel(String text, {bool muted = false}) {
-  return Text(
-    text,
-    style: TextStyle(
-      fontSize: 12,
-      fontWeight: FontWeight.w600,
-      color: muted ? _kGray : _kNavyS,
-    ),
-  );
-}
-
-Widget _textField({
-  required TextEditingController controller,
-  required String hint,
-  bool readOnly = false,
-  TextInputType? keyboardType,
-  String? Function(String?)? validator,
-}) {
-  return TextFormField(
-    controller: controller,
-    readOnly: readOnly,
-    keyboardType: keyboardType,
-    validator: validator,
-    style: const TextStyle(fontSize: 13, color: _kNavyS),
-    decoration: InputDecoration(
-      hintText: hint,
-      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFBDC1C6)),
-      filled: true,
-      fillColor: readOnly ? _kBg : Colors.white,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: _kBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: _kAccent, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFEA4335)),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFEA4335), width: 1.5),
-      ),
-      isDense: true,
-    ),
-  );
-}
-
-Widget _passwordField({
-  required TextEditingController controller,
-  required String hint,
-  required bool obscure,
-  required VoidCallback onToggle,
-  String? Function(String?)? validator,
-}) {
-  return TextFormField(
-    controller: controller,
-    obscureText: obscure,
-    validator: validator,
-    style: const TextStyle(fontSize: 13, color: _kNavyS),
-    decoration: InputDecoration(
-      hintText: hint,
-      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFBDC1C6)),
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      suffixIcon: IconButton(
-        icon: Icon(
-            obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-            size: 18,
-            color: _kGray),
-        onPressed: onToggle,
-        splashRadius: 16,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: _kBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: _kAccent, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFEA4335)),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFEA4335), width: 1.5),
-      ),
-      isDense: true,
-    ),
-  );
-}
-
-class _SaveButton extends StatelessWidget {
+class _UpdateButton extends StatelessWidget {
   final bool saving;
   final String label;
   final VoidCallback? onPressed;
 
-  const _SaveButton({
+  const _UpdateButton({
     required this.saving,
-    this.label = 'Save Changes',
+    this.label = 'Update',
     required this.onPressed,
   });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 38,
+      height: 42,
       child: ElevatedButton(
         onPressed: saving ? null : onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: _kAccent,
+          backgroundColor: _kPrimaryBlue,
           foregroundColor: Colors.white,
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          disabledBackgroundColor: const Color(0xFFBDC1C6),
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         ),
         child: saving
             ? const SizedBox(
-                width: 16,
-                height: 16,
+                width: 18,
+                height: 18,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white))
-            : Text(label,
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Text(
+                label,
                 style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
       ),
     );
   }
@@ -847,7 +1170,6 @@ class _MessageBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.4)),
       ),
       child: Row(
         children: [
@@ -860,34 +1182,6 @@ class _MessageBanner extends StatelessWidget {
                     fontSize: 12, color: color, fontWeight: FontWeight.w500)),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _RoleBadge extends StatelessWidget {
-  final String role;
-  const _RoleBadge({required this.role});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = switch (role.toLowerCase()) {
-      'admin' => _kAccent,
-      'editor' => const Color(0xFFD4760A),
-      'manager' => const Color(0xFF6A1B9A),
-      _ => AppColors.grayText,
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Text(
-        role.toUpperCase(),
-        style:
-            TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
       ),
     );
   }

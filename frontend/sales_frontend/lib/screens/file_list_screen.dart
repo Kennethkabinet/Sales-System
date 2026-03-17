@@ -821,6 +821,7 @@ class _FileListScreenState extends State<FileListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppColors.bgLight,
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

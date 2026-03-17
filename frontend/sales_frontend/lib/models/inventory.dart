@@ -1,4 +1,5 @@
 /// Inventory Module Models
+library;
 
 // ─── ProductMaster ────────────────────────────────────────────────────────────
 class ProductMaster {

@@ -110,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
     ValueChanged<String>? onFieldSubmitted,
   }) {
     const gradient = LinearGradient(
-      colors: [Color(0xFFC10000), Color(0xFF1C2172)],
+      colors: [Color(0xFFE44408), Color(0xFF1C2172)],
       begin: Alignment.centerLeft,
       end: Alignment.centerRight,
     );
@@ -324,12 +324,12 @@ class _LoginScreenState extends State<LoginScreen> {
                           return const Color(0xFFF59E72);
                         }
                         if (states.contains(WidgetState.pressed)) {
-                          return const Color(0xFFD9480F);
+                          return const Color(0xFFC43906);
                         }
                         if (states.contains(WidgetState.hovered)) {
-                          return const Color(0xFFEA580C);
+                          return const Color(0xFFD14007);
                         }
-                        return const Color(0xFFF15A24);
+                        return const Color(0xFFE44408);
                       }),
                     ),
                     child: auth.isLoading

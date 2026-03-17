@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:async';
 import '../providers/auth_provider.dart';
+import '../providers/data_provider.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../models/collaboration.dart';
@@ -76,6 +77,71 @@ class SheetModel {
   bool get isBeingEdited => editingUserId != null;
 }
 
+// ── Explorer types (used only inside the "All Sheets" container) ───────────
+class _ExplorerFolderContents {
+  final List<Map<String, dynamic>> folders;
+  final List<SheetModel> sheets;
+
+  const _ExplorerFolderContents({
+    required this.folders,
+    required this.sheets,
+  });
+}
+
+enum _ExplorerEntryKind { folder, sheet, loading, emptyFolder }
+
+class _ExplorerEntry {
+  final _ExplorerEntryKind kind;
+  final int depth;
+  final Map<String, dynamic>? folder;
+  final SheetModel? sheet;
+  final bool? isExpanded;
+  final bool? isLoading;
+
+  const _ExplorerEntry._({
+    required this.kind,
+    required this.depth,
+    this.folder,
+    this.sheet,
+    this.isExpanded,
+    this.isLoading,
+  });
+
+  factory _ExplorerEntry.folder({
+    required Map<String, dynamic> folder,
+    required int depth,
+    required bool isExpanded,
+    required bool isLoading,
+  }) {
+    return _ExplorerEntry._(
+      kind: _ExplorerEntryKind.folder,
+      depth: depth,
+      folder: folder,
+      isExpanded: isExpanded,
+      isLoading: isLoading,
+    );
+  }
+
+  factory _ExplorerEntry.sheet({
+    required SheetModel sheet,
+    required int depth,
+  }) {
+    return _ExplorerEntry._(
+      kind: _ExplorerEntryKind.sheet,
+      depth: depth,
+      sheet: sheet,
+    );
+  }
+
+  factory _ExplorerEntry.loading({required int depth}) {
+    return _ExplorerEntry._(kind: _ExplorerEntryKind.loading, depth: depth);
+  }
+
+  factory _ExplorerEntry.emptyFolder({required int depth}) {
+    return _ExplorerEntry._(kind: _ExplorerEntryKind.emptyFolder, depth: depth);
+  }
+}
+
 /// Represents one column formula row in the formula builder
 class _FormulaEntry {
   String? resultCol;
@@ -134,6 +200,13 @@ class _SheetScreenState extends State<SheetScreen> {
   List<Map<String, dynamic>> _sheetFolderBreadcrumbs = []; // [{id, name}]
   SheetModel? _currentSheet;
   bool _isLoading = true;
+  int? _openingSheetId;
+
+  // Explorer state (used only inside the "All Sheets" container)
+  final Set<int> _explorerExpandedFolderIds = {};
+  final Map<int, _ExplorerFolderContents> _explorerFolderCache = {};
+  final Set<int> _explorerLoadingFolderIds = {};
+  final Set<int> _explorerSelectedFolderIds = {};
 
   // Collaborative editing state
   bool _isLocked = false;
@@ -171,6 +244,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // Bulk sheet selection (All Sheets table)
   final Set<int> _selectedSheetIds = {};
+
+  // Hover states (Work Sheets landing view)
+  int? _hoveredAllSheetsRowIndex;
+  int? _hoveredFolderId;
+  int? _hoveredRecentSheetId;
 
   // Column widths for resizable columns
   final Map<int, double> _columnWidths = {};
@@ -520,7 +598,9 @@ class _SheetScreenState extends State<SheetScreen> {
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(title),
+        backgroundColor: _surfaceColor,
+        surfaceTintColor: Colors.transparent,
+        title: Text(title, style: TextStyle(color: _textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -530,7 +610,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
                   'A password is already set. Enter a new one to change it, or leave blank to remove it.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 13, color: _textSecondary),
                 ),
               )
             else
@@ -538,16 +618,18 @@ class _SheetScreenState extends State<SheetScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
                   'Anyone opening this item will need to enter this password.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 13, color: _textSecondary),
                 ),
               ),
             TextField(
               controller: controller,
               obscureText: true,
               autofocus: true,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'New password (blank to remove)',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                filled: true,
+                fillColor: _surfaceAltColor,
               ),
             ),
           ],
@@ -555,7 +637,7 @@ class _SheetScreenState extends State<SheetScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('Cancel')),
+              child: Text('Cancel', style: TextStyle(color: _textSecondary))),
           if (hasPassword)
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(''),
@@ -695,13 +777,27 @@ class _SheetScreenState extends State<SheetScreen> {
 
   Future<void> _openSheetWithPasswordCheck(SheetModel sheet) async {
     if (!sheet.hasPassword || _unlockedSheetIds.contains(sheet.id)) {
-      _loadSheetData(sheet.id);
+      if (mounted) setState(() => _openingSheetId = sheet.id);
+      try {
+        await _loadSheetData(sheet.id);
+      } finally {
+        if (mounted && _openingSheetId == sheet.id) {
+          setState(() => _openingSheetId = null);
+        }
+      }
       return;
     }
     final role = context.read<AuthProvider>().user?.role;
     // Only admins bypass the password check.
     if (role == 'admin') {
-      _loadSheetData(sheet.id);
+      if (mounted) setState(() => _openingSheetId = sheet.id);
+      try {
+        await _loadSheetData(sheet.id);
+      } finally {
+        if (mounted && _openingSheetId == sheet.id) {
+          setState(() => _openingSheetId = null);
+        }
+      }
       return;
     }
     final controller = TextEditingController();
@@ -750,7 +846,14 @@ class _SheetScreenState extends State<SheetScreen> {
           await ApiService.verifySheetPassword(sheet.id, controller.text);
       if (res['success'] == true) {
         _unlockedSheetIds.add(sheet.id);
-        _loadSheetData(sheet.id);
+        if (mounted) setState(() => _openingSheetId = sheet.id);
+        try {
+          await _loadSheetData(sheet.id);
+        } finally {
+          if (mounted && _openingSheetId == sheet.id) {
+            setState(() => _openingSheetId = null);
+          }
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1057,6 +1160,12 @@ class _SheetScreenState extends State<SheetScreen> {
         _saveStatus = 'saved';
         _hasUnsavedChanges = false;
       });
+      if (mounted) {
+        context.read<DataProvider>().setCurrentSheet(
+              sheetId: sheet.id,
+              sheetName: sheet.name,
+            );
+      }
       _clearHistory();
 
       // Refresh collaborative editing status
@@ -1134,6 +1243,15 @@ class _SheetScreenState extends State<SheetScreen> {
         _isLoading = false;
       });
       _clearHistory();
+
+      // Keep dashboard context in sync.
+      if (mounted) {
+        context.read<DataProvider>().setCurrentSheet(
+              sheetId: sheet.id,
+              sheetName: sheet.name,
+            );
+        context.read<DataProvider>().loadInventorySheets();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1359,6 +1477,15 @@ class _SheetScreenState extends State<SheetScreen> {
       });
       _clearHistory();
 
+      // Inventory dashboard sheet filter is driven by DataProvider.
+      if (mounted) {
+        context.read<DataProvider>().setCurrentSheet(
+              sheetId: sheet.id,
+              sheetName: sheet.name,
+            );
+        context.read<DataProvider>().loadInventorySheets();
+      }
+
       // Recalc totals so Stock/Total Quantity reflect IN/OUT values.
       if (template['id'] == 'inventory_tracker') {
         _recalcInventoryTotals();
@@ -1395,6 +1522,8 @@ class _SheetScreenState extends State<SheetScreen> {
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: _surfaceColor,
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
@@ -1415,9 +1544,10 @@ class _SheetScreenState extends State<SheetScreen> {
             const SizedBox(width: 12),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
+                color: _textPrimary,
               ),
             ),
           ],
@@ -1426,12 +1556,9 @@ class _SheetScreenState extends State<SheetScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Create a new folder to organize your worksheets',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey,
-              ),
+              style: TextStyle(fontSize: 14, color: _textSecondary),
             ),
             const SizedBox(height: 20),
             TextField(
@@ -1445,7 +1572,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 filled: true,
-                fillColor: Colors.grey[50],
+                fillColor: _surfaceAltColor,
               ),
               onSubmitted: (val) => Navigator.pop(context, val),
             ),
@@ -1456,7 +1583,7 @@ class _SheetScreenState extends State<SheetScreen> {
             onPressed: () => Navigator.pop(context),
             child: Text(
               'Cancel',
-              style: TextStyle(color: _kNavy),
+              style: TextStyle(color: _textSecondary),
             ),
           ),
           ElevatedButton.icon(
@@ -1478,7 +1605,172 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Future<void> _showCreateFolderDialog() async {
-    final name = await _showFolderNameDialog(title: 'New Folder');
+    // Fetch all folders so user can choose where to create the new folder.
+    List<Map<String, dynamic>> allFolders = [];
+    try {
+      final response = await ApiService.getSheetFolders();
+      allFolders = (response['folders'] as List?)
+              ?.cast<Map<String, dynamic>>()
+              .toList() ??
+          [];
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final folderIds = allFolders
+        .map((f) => (f['id'] is int)
+            ? f['id'] as int
+            : int.tryParse(f['id']?.toString() ?? ''))
+        .whereType<int>()
+        .toSet();
+
+    // Default location:
+    // - current folder if browsing inside one
+    // - else, if exactly one folder is selected in the explorer, use that
+    // - else root
+    int? initialParentId = _currentSheetFolderId;
+    if (initialParentId == null && _explorerSelectedFolderIds.length == 1) {
+      initialParentId = _explorerSelectedFolderIds.first;
+    }
+    if (initialParentId != null && !folderIds.contains(initialParentId)) {
+      initialParentId = null;
+    }
+
+    final nameController = TextEditingController();
+    int? selectedParentId = initialParentId;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setStateDialog) => AlertDialog(
+          backgroundColor: _surfaceColor,
+          surfaceTintColor: Colors.transparent,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(_isDark ? 0.18 : 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.create_new_folder,
+                  color: Colors.amber,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'New Folder',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: _textPrimary,
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Choose where to create this folder',
+                  style: TextStyle(fontSize: 14, color: _textSecondary),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int?>(
+                  value: selectedParentId,
+                  decoration: InputDecoration(
+                    labelText: 'Location',
+                    prefixIcon: const Icon(Icons.folder_open_outlined),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: _surfaceAltColor,
+                  ),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('Root (No Folder)'),
+                    ),
+                    ...allFolders.map((folder) {
+                      final id = (folder['id'] is int)
+                          ? folder['id'] as int
+                          : int.tryParse(folder['id']?.toString() ?? '');
+                      final name = folder['name']?.toString() ?? 'Folder';
+                      if (id == null) {
+                        return DropdownMenuItem<int?>(
+                          value: null,
+                          enabled: false,
+                          child: Text(name, overflow: TextOverflow.ellipsis),
+                        );
+                      }
+                      return DropdownMenuItem<int?>(
+                        value: id,
+                        child: Text(name, overflow: TextOverflow.ellipsis),
+                      );
+                    }),
+                  ],
+                  onChanged: (v) => setStateDialog(() => selectedParentId = v),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Folder Name',
+                    hintText: 'Enter folder name',
+                    prefixIcon: const Icon(Icons.folder_outlined),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: _surfaceAltColor,
+                  ),
+                  onSubmitted: (val) => Navigator.pop(ctx2, {
+                    'name': val,
+                    'parent_id': selectedParentId,
+                  }),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx2),
+              child: Text('Cancel', style: TextStyle(color: _textSecondary)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () => Navigator.pop(ctx2, {
+                'name': nameController.text,
+                'parent_id': selectedParentId,
+              }),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Create'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kNavy,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final name = result?['name']?.toString();
+    final parentId = result?['parent_id'] as int?;
+
     if (name != null && name.trim().isNotEmpty && mounted) {
       // Validate folder name
       final trimmedName = name.trim();
@@ -1557,14 +1849,51 @@ class _SheetScreenState extends State<SheetScreen> {
       // Create the folder in current Sheets folder context
       bool success = false;
       debugPrint(
-        '[folders:create:sheet] payload => {name: $trimmedName, parent_id: $_currentSheetFolderId}',
+        '[folders:create:sheet] payload => {name: $trimmedName, parent_id: $parentId}',
       );
       try {
         await ApiService.createSheetFolder(
           trimmedName,
-          parentId: _currentSheetFolderId,
+          parentId: parentId,
         );
         await _loadSheets();
+
+        // Update the All Sheets explorer immediately:
+        // - its folder children are cached, so refresh the parent folder
+        // - expand the full ancestor chain so nested destinations become visible
+        if (mounted && parentId != null) {
+          final byId = <int, Map<String, dynamic>>{};
+          for (final f in allFolders) {
+            final id = (f['id'] is int)
+                ? f['id'] as int
+                : int.tryParse(f['id']?.toString() ?? '');
+            if (id != null) byId[id] = f;
+          }
+
+          final ancestorIds = <int>[];
+          int? cur = parentId;
+          while (cur != null) {
+            ancestorIds.add(cur);
+            final folder = byId[cur];
+            final next = (folder?['parent_id'] is int)
+                ? folder!['parent_id'] as int
+                : int.tryParse(folder?['parent_id']?.toString() ?? '');
+            cur = next;
+          }
+
+          // Expand from root -> leaf so the tree opens smoothly.
+          final chain = ancestorIds.reversed.toList(growable: false);
+          setState(() => _explorerExpandedFolderIds.addAll(chain));
+
+          // Ensure each expanded folder has cached children;
+          // force refresh on the direct parent so the new folder appears.
+          for (final id in chain) {
+            await _ensureExplorerFolderLoaded(
+              id,
+              forceRefresh: id == parentId,
+            );
+          }
+        }
         success = true;
       } catch (_) {
         success = false;
@@ -1650,10 +1979,11 @@ class _SheetScreenState extends State<SheetScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
+          backgroundColor: _surfaceColor,
+          surfaceTintColor: Colors.transparent,
           title: Row(
             children: [
-              const Icon(Icons.drive_file_move_outlined,
-                  color: Color(0xFF1A237E)),
+              Icon(Icons.drive_file_move_outlined, color: _kBlue),
               const SizedBox(width: 10),
               Expanded(
                   child: Text('Move "${sheet.name}"',
@@ -1666,22 +1996,22 @@ class _SheetScreenState extends State<SheetScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Select destination:',
-                    style: TextStyle(fontSize: 13, color: Colors.grey)),
+                Text('Select destination:',
+                    style: TextStyle(fontSize: 13, color: _textSecondary)),
                 const SizedBox(height: 8),
                 // Root option
                 ListTile(
                   dense: true,
-                  leading: const Icon(Icons.home_outlined),
+                  leading: Icon(Icons.home_outlined, color: _textSecondary),
                   title: const Text('Root (No Folder)'),
                   onTap: () => Navigator.pop(ctx, -1), // -1 means root
                 ),
                 const Divider(height: 1),
                 if (allFolders.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Text('No folders available. Create one first.',
-                        style: TextStyle(color: Colors.grey, fontSize: 13)),
+                        style: TextStyle(color: _textSecondary, fontSize: 13)),
                   )
                 else
                   ...allFolders.map((folder) => ListTile(
@@ -1691,7 +2021,8 @@ class _SheetScreenState extends State<SheetScreen> {
                         title: Text(folder['name'] ?? ''),
                         subtitle: folder['sheet_count'] != null
                             ? Text('${folder['sheet_count']} sheets',
-                                style: const TextStyle(fontSize: 11))
+                                style: TextStyle(
+                                    fontSize: 11, color: _textSecondary))
                             : null,
                         onTap: () => Navigator.pop(ctx, folder['id'] as int),
                       )),
@@ -1701,7 +2032,7 @@ class _SheetScreenState extends State<SheetScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
+              child: Text('Cancel', style: TextStyle(color: _textSecondary)),
             ),
           ],
         );
@@ -2156,6 +2487,9 @@ class _SheetScreenState extends State<SheetScreen> {
           _editingRow = null;
           _editingCol = null;
         });
+        if (mounted) {
+          context.read<DataProvider>().clearCurrentSheet();
+        }
       }
 
       // Reload the sheets list
@@ -2599,6 +2933,10 @@ class _SheetScreenState extends State<SheetScreen> {
             newValue,
           );
         }
+      }
+      if (_isInventoryTrackerSheet() &&
+          _isInventoryTotalsInputColumn(colName)) {
+        _recalcInventoryTotalsForRow(savedRow);
       }
       if (changed) _markDirty();
     }
@@ -3237,13 +3575,22 @@ class _SheetScreenState extends State<SheetScreen> {
     super.dispose();
   }
 
-  // ─── Theme colors (Warm cream & Maroon palette) ───
-  static const Color _kSidebarBg = Color(0xFF6B1C1C); // deep maroon
-  static const Color _kContentBg = Color(0xFFFAF0E6); // warm cream / linen
-  static const Color _kNavy = Color(0xFF3E2723); // warm near-black
-  static const Color _kBlue = Color(0xFF6B1C1C); // maroon accent
-  static const Color _kWarmBorder = Color(0xFFDDD5CC); // warm border
-  static const Color _kHeaderMaroon = Color(0xFF283593); // dark blue header
+  // ─── Theme colors (Grey background palette) ───
+  static const Color _kContentBg = AppColors.bgLight; // light grey background
+  static const Color _kNavy = Color(0xFF1F2937); // neutral dark text
+  static const Color _kBlue = Color(0xFF4285F4); // blue accent
+  static const Color _kGreen = Color(0xFF22C55E); // action green
+  static const Color _kGray = Color(0xFF6B7280);
+  static const Color _kBorder = Color(0xFFE5E7EB);
+  static const Color _kBg = Color(0xFFF9FAFB);
+
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _pageBgColor => _isDark ? const Color(0xFF0B1220) : _kContentBg;
+  Color get _surfaceColor => _isDark ? const Color(0xFF111827) : Colors.white;
+  Color get _surfaceAltColor => _isDark ? const Color(0xFF0F172A) : _kBg;
+  Color get _borderColor => _isDark ? const Color(0xFF334155) : _kBorder;
+  Color get _textPrimary => _isDark ? const Color(0xFFE5E7EB) : _kNavy;
+  Color get _textSecondary => _isDark ? const Color(0xFF94A3B8) : _kGray;
 
   @override
   Widget build(BuildContext context) {
@@ -3255,7 +3602,7 @@ class _SheetScreenState extends State<SheetScreen> {
         // If a sheet is opened, show the spreadsheet editor
         if (_currentSheet != null) {
           return Scaffold(
-            backgroundColor: _kContentBg,
+            backgroundColor: _pageBgColor,
             body: Column(
               children: [
                 // ── Sheet name bar (back btn • name • search • presence) ──
@@ -3283,7 +3630,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
         // Otherwise show the Work Sheets landing page
         return Scaffold(
-          backgroundColor: _kContentBg,
+          backgroundColor: _pageBgColor,
           body: _isLoading && _sheets.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : _buildSheetListView(auth, isViewer),
@@ -3296,457 +3643,753 @@ class _SheetScreenState extends State<SheetScreen> {
   //  Work Sheets Landing View (matches screenshot)
   // ═══════════════════════════════════════════════════════
   Widget _buildSheetListView(AuthProvider auth, bool isViewer) {
-    // Sort sheets by updated date for "recent"
+    final isAtRoot = _currentSheetFolderId == null;
+
     final sortedSheets = List<SheetModel>.from(_sheets)
       ..sort((a, b) {
         final aDate = a.updatedAt ?? a.createdAt ?? DateTime(2000);
         final bDate = b.updatedAt ?? b.createdAt ?? DateTime(2000);
         return bDate.compareTo(aDate);
       });
-    final recentSheets = sortedSheets.take(5).toList();
-    final isAtRoot = _currentSheetFolderId == null;
+
+    final recentSheets = sortedSheets.take(6).toList();
+
+    const cardRadius = 16.0;
+    final cardShadow = BoxShadow(
+      color: Colors.black.withOpacity(0.04),
+      blurRadius: 14,
+      offset: const Offset(0, 4),
+    );
+    final hoverShadow = BoxShadow(
+      color: Colors.black.withOpacity(0.07),
+      blurRadius: 18,
+      offset: const Offset(0, 6),
+    );
+
+    Widget sectionCard({
+      required Widget child,
+      EdgeInsets padding = const EdgeInsets.all(18),
+    }) {
+      return Container(
+        width: double.infinity,
+        padding: padding,
+        decoration: BoxDecoration(
+          color: _surfaceColor,
+          borderRadius: BorderRadius.circular(cardRadius),
+          border: Border.all(color: _borderColor),
+          boxShadow: [cardShadow],
+        ),
+        child: child,
+      );
+    }
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Title + Breadcrumbs ──
-          Row(
-            children: [
-              if (!isAtRoot) ...[
-                InkWell(
-                  onTap: _navigateToSheetRoot,
-                  child: Row(
-                    children: const [
-                      Icon(Icons.home_outlined, size: 20, color: _kNavy),
-                      SizedBox(width: 4),
-                      Text('Home',
-                          style: TextStyle(
-                              fontSize: 16,
-                              color: _kNavy,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                ),
-                ..._sheetFolderBreadcrumbs.asMap().entries.skip(1).map((entry) {
-                  final idx = entry.key;
-                  final crumb = entry.value;
-                  return Row(
-                    children: [
-                      const Icon(Icons.chevron_right,
-                          size: 18, color: Colors.grey),
-                      InkWell(
-                        onTap: () => _navigateToSheetBreadcrumb(idx),
-                        child: Text(crumb['name'] ?? '',
-                            style:
-                                const TextStyle(fontSize: 15, color: _kNavy)),
-                      ),
-                    ],
-                  );
-                }),
-                const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
-                Text(
-                  _currentSheetFolderName ?? '',
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: _kSidebarBg),
-                ),
-              ] else
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'WORK SHEETS',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: _kHeaderMaroon,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Container(
-                      width: 50,
-                      height: 3,
-                      decoration: BoxDecoration(
-                        color: _kHeaderMaroon,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // ── Action buttons row ──
-          if (!isViewer)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildOutlinedBtn(
-                  icon: Icons.create_new_folder_outlined,
-                  label: 'New Folder',
-                  onPressed: _showCreateFolderDialog,
-                ),
-                const SizedBox(width: 10),
-                _buildOutlinedBtn(
-                  icon: Icons.upload_file,
-                  label: 'Import Excel',
-                  onPressed: _importSheet,
-                ),
-                const SizedBox(width: 10),
-                // ── Template button ──
-                OutlinedButton.icon(
-                  onPressed: _showTemplatePickerDialog,
-                  icon:
-                      const Icon(Icons.dashboard_customize_outlined, size: 18),
-                  label: const Text('Template'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF6A1B9A),
-                    side:
-                        const BorderSide(color: Color(0xFF6A1B9A), width: 1.5),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton.icon(
-                  onPressed: _createNewSheet,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New Sheet'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _kHeaderMaroon,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    elevation: 0,
-                  ),
-                ),
-              ],
-            ),
-
-          const SizedBox(height: 20),
-
-          // ── Folders section ──
-          if (_sheetFolders.isNotEmpty) ...[
-            const Text(
-              'Folders',
-              style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: _kHeaderMaroon),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: _sheetFolders.map((folder) {
-                final folderRole = auth.user?.role ?? '';
-                final canManageFolder = folderRole == 'admin' ||
-                    folderRole == 'editor' ||
-                    folderRole == 'manager';
-                final canDeleteFolder =
-                    folderRole == 'admin' || folderRole == 'manager';
-                final folderHasPassword = folder['has_password'] == true;
-                return Stack(
-                  children: [
-                    InkWell(
-                      onTap: () => _openFolderWithPasswordCheck(folder),
-                      borderRadius: BorderRadius.circular(10),
-                      child: Container(
-                        width: 160,
-                        padding: const EdgeInsets.fromLTRB(14, 14, 30, 14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFFDDD5CC)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.brown.withOpacity(0.06),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
+                // ── Header card (title/breadcrumbs + actions) ──
+                sectionCard(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            if (!isAtRoot) ...[
+                              InkWell(
+                                onTap: _navigateToSheetRoot,
+                                borderRadius: BorderRadius.circular(10),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.home_outlined,
+                                        size: 20, color: _textPrimary),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Home',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: _textPrimary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              ..._sheetFolderBreadcrumbs
+                                  .asMap()
+                                  .entries
+                                  .skip(1)
+                                  .map((entry) {
+                                final idx = entry.key;
+                                final crumb = entry.value;
+                                return Row(
+                                  children: [
+                                    Padding(
+                                      padding:
+                                          EdgeInsets.symmetric(horizontal: 6),
+                                      child: Icon(Icons.chevron_right,
+                                          size: 18, color: _textSecondary),
+                                    ),
+                                    InkWell(
+                                      onTap: () =>
+                                          _navigateToSheetBreadcrumb(idx),
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 4),
+                                        child: Text(
+                                          crumb['name'] ?? '',
+                                          style: TextStyle(
+                                              fontSize: 15,
+                                              color: _textPrimary),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }),
+                              Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 6),
+                                child: Icon(Icons.chevron_right,
+                                    size: 18, color: _textSecondary),
+                              ),
+                              Text(
+                                _currentSheetFolderName ?? '',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: _textPrimary,
+                                ),
+                              ),
+                            ] else
+                              const SizedBox.shrink(),
+                          ],
+                        ),
+                      ),
+                      if (!isViewer) ...[
+                        const SizedBox(width: 14),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            _buildOutlinedBtn(
+                              icon: Icons.create_new_folder_outlined,
+                              label: 'New Folder',
+                              onPressed: _showCreateFolderDialog,
+                            ),
+                            _buildOutlinedBtn(
+                              icon: Icons.upload_file,
+                              label: 'Import Excel',
+                              onPressed: _importSheet,
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _showTemplatePickerDialog,
+                              icon: const Icon(
+                                  Icons.dashboard_customize_outlined,
+                                  size: 18),
+                              label: const Text('Template'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _kGreen,
+                                side: const BorderSide(
+                                    color: _kGreen, width: 1.2),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 18, vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                backgroundColor: _surfaceColor,
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: _createNewSheet,
+                              icon: const Icon(Icons.add, size: 18),
+                              label: const Text('New Sheet'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _kGreen,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 18, vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
                             ),
                           ],
                         ),
-                        child: Row(
-                          children: [
-                            Stack(
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // ── Folders section ──
+                sectionCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Folders',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: _textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate:
+                            const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 260,
+                          mainAxisExtent: 80,
+                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 14,
+                        ),
+                        itemCount: _sheetFolders.length,
+                        itemBuilder: (context, i) {
+                          final folder = _sheetFolders[i];
+                          final folderId = (folder['id'] is num)
+                              ? (folder['id'] as num).toInt()
+                              : (int.tryParse('${folder['id'] ?? ''}') ?? i);
+                          final isHovered = _hoveredFolderId == folderId;
+                          final folderRole = auth.user?.role ?? '';
+                          final canManageFolder = folderRole == 'admin' ||
+                              folderRole == 'editor' ||
+                              folderRole == 'manager';
+                          final canDeleteFolder =
+                              folderRole == 'admin' || folderRole == 'manager';
+                          final folderHasPassword =
+                              folder['has_password'] == true;
+
+                          return MouseRegion(
+                            onEnter: (_) =>
+                                setState(() => _hoveredFolderId = folderId),
+                            onExit: (_) =>
+                                setState(() => _hoveredFolderId = null),
+                            child: Stack(
                               children: [
-                                Icon(Icons.folder,
-                                    color: Colors.amber[700], size: 32),
-                                if (folderHasPassword)
+                                InkWell(
+                                  onTap: () =>
+                                      _openFolderWithPasswordCheck(folder),
+                                  borderRadius:
+                                      BorderRadius.circular(cardRadius),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 140),
+                                    padding: const EdgeInsets.fromLTRB(
+                                        14, 12, 34, 12),
+                                    decoration: BoxDecoration(
+                                      color: isHovered
+                                          ? _surfaceAltColor
+                                          : _surfaceColor,
+                                      borderRadius:
+                                          BorderRadius.circular(cardRadius),
+                                      border: Border.all(
+                                        color: isHovered
+                                            ? _kBlue.withOpacity(0.35)
+                                            : _borderColor,
+                                      ),
+                                      boxShadow: isHovered
+                                          ? [hoverShadow]
+                                          : [cardShadow],
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Stack(
+                                          children: [
+                                            Icon(Icons.folder,
+                                                color: Colors.amber[700],
+                                                size: 30),
+                                            if (folderHasPassword)
+                                              Positioned(
+                                                right: 0,
+                                                bottom: 0,
+                                                child: Container(
+                                                  width: 14,
+                                                  height: 14,
+                                                  decoration: BoxDecoration(
+                                                      color: Colors.orange[700],
+                                                      shape: BoxShape.circle),
+                                                  child: const Icon(Icons.lock,
+                                                      size: 10,
+                                                      color: Colors.white),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                folder['name'] ?? '',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _textPrimary,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '${folder['sheet_count'] ?? 0} sheets',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: _textSecondary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                if (canManageFolder)
                                   Positioned(
-                                    right: 0,
-                                    bottom: 0,
-                                    child: Container(
-                                      width: 13,
-                                      height: 13,
-                                      decoration: BoxDecoration(
-                                          color: Colors.orange[700],
-                                          shape: BoxShape.circle),
-                                      child: const Icon(Icons.lock,
-                                          size: 9, color: Colors.white),
+                                    top: 8,
+                                    right: 8,
+                                    child: PopupMenuButton<String>(
+                                      icon: Icon(Icons.more_horiz,
+                                          size: 18, color: _textSecondary),
+                                      padding: EdgeInsets.zero,
+                                      iconSize: 18,
+                                      onSelected: (value) {
+                                        if (value == 'delete') {
+                                          _confirmDeleteFolder(folder);
+                                        }
+                                        if (value == 'set_password') {
+                                          _setFolderPassword(folder);
+                                        }
+                                      },
+                                      itemBuilder: (_) => [
+                                        PopupMenuItem(
+                                          value: 'set_password',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.lock_outline,
+                                                  size: 16,
+                                                  color: folderHasPassword
+                                                      ? Colors.orange
+                                                      : Colors.grey[600]),
+                                              const SizedBox(width: 8),
+                                              Text(folderHasPassword
+                                                  ? 'Change Password'
+                                                  : 'Set Password'),
+                                            ],
+                                          ),
+                                        ),
+                                        if (canDeleteFolder)
+                                          const PopupMenuItem(
+                                            value: 'delete',
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.delete_outline,
+                                                    size: 16,
+                                                    color: Colors.red),
+                                                SizedBox(width: 8),
+                                                Text('Delete Folder',
+                                                    style: TextStyle(
+                                                        color: Colors.red)),
+                                              ],
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ),
                               ],
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    folder['name'] ?? '',
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    '${folder['sheet_count'] ?? 0} sheets',
-                                    style: TextStyle(
-                                        fontSize: 11, color: Colors.grey[500]),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // ── Recent section ──
+                if (recentSheets.isNotEmpty) ...[
+                  sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Recent Sheets',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: _textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          height: 128,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: recentSheets.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(width: 14),
+                            itemBuilder: (context, index) {
+                              final sheet = recentSheets[index];
+                              return _buildRecentCard(sheet);
+                            },
+                          ),
+                        ),
+                      ],
                     ),
-                    if (canManageFolder)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert,
-                              size: 16, color: Colors.grey[500]),
-                          padding: EdgeInsets.zero,
-                          iconSize: 16,
-                          onSelected: (value) {
-                            if (value == 'delete') _confirmDeleteFolder(folder);
-                            if (value == 'set_password') {
-                              _setFolderPassword(folder);
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            PopupMenuItem(
-                              value: 'set_password',
-                              child: Row(
-                                children: [
-                                  Icon(Icons.lock_outline,
-                                      size: 16,
-                                      color: folderHasPassword
-                                          ? Colors.orange
-                                          : Colors.grey[600]),
-                                  const SizedBox(width: 8),
-                                  Text(folderHasPassword
-                                      ? 'Change Password'
-                                      : 'Set Password'),
-                                ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
+
+                // ── All sheets section ──
+                sectionCard(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            isAtRoot
+                                ? 'All Sheets'
+                                : 'Sheets in "$_currentSheetFolderName"',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: _textPrimary,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_selectedSheetIds.isNotEmpty) ...[
+                            Text(
+                              '${_selectedSheetIds.length} selected',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _textSecondary,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            if (canDeleteFolder)
-                              const PopupMenuItem(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.delete_outline,
-                                        size: 16, color: Colors.red),
-                                    SizedBox(width: 8),
-                                    Text('Delete Folder',
-                                        style: TextStyle(color: Colors.red)),
-                                  ],
-                                ),
+                            const SizedBox(width: 10),
+                            OutlinedButton.icon(
+                              onPressed: (auth.user?.role == 'admin' ||
+                                      auth.user?.role == 'manager' ||
+                                      auth.user?.role == 'editor')
+                                  ? _bulkMoveSheets
+                                  : null,
+                              icon: const Icon(Icons.drive_file_move_outlined,
+                                  size: 14),
+                              label: const Text('Move',
+                                  style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _textSecondary,
+                                side: BorderSide(color: _borderColor),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 8),
+                                visualDensity: VisualDensity.compact,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
                               ),
+                            ),
+                            const SizedBox(width: 6),
+                            OutlinedButton.icon(
+                              onPressed: auth.user?.role == 'admin'
+                                  ? _bulkDeleteSheets
+                                  : null,
+                              icon: const Icon(Icons.delete_outline, size: 14),
+                              label: const Text('Delete',
+                                  style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                side: const BorderSide(color: Colors.red),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 8),
+                                visualDensity: VisualDensity.compact,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            TextButton(
+                              onPressed: () =>
+                                  setState(() => _selectedSheetIds.clear()),
+                              style: TextButton.styleFrom(
+                                foregroundColor: _textSecondary,
+                              ),
+                              child: const Text('Clear',
+                                  style: TextStyle(fontSize: 12)),
+                            ),
                           ],
-                        ),
+                        ],
                       ),
-                  ],
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 24),
-          ],
-
-          // ── Recent Sheets (only at root) ──
-          if (isAtRoot && recentSheets.isNotEmpty) ...[
-            const Text(
-              'Recent Sheets',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: _kHeaderMaroon,
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 125,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: recentSheets.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 14),
-                itemBuilder: (context, index) {
-                  final sheet = recentSheets[index];
-                  return _buildRecentCard(sheet);
-                },
-              ),
-            ),
-            const SizedBox(height: 28),
-          ],
-
-          // ── All Sheets table ──
-          Row(
-            children: [
-              Text(
-                isAtRoot
-                    ? 'All Sheets'
-                    : 'Sheets in "$_currentSheetFolderName"',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: _kHeaderMaroon,
-                ),
-              ),
-              const Spacer(),
-              if (_selectedSheetIds.isNotEmpty) ...[
-                Text(
-                  '${_selectedSheetIds.length} selected',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: (auth.user?.role == 'admin' ||
-                          auth.user?.role == 'manager' ||
-                          auth.user?.role == 'editor')
-                      ? _bulkMoveSheets
-                      : null,
-                  icon: const Icon(Icons.drive_file_move_outlined, size: 14),
-                  label: const Text('Move', style: TextStyle(fontSize: 12)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.blueGrey,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    visualDensity: VisualDensity.compact,
+                      const SizedBox(height: 14),
+                      if (_sheets.isEmpty && _sheetFolders.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 44),
+                          decoration: BoxDecoration(
+                            color: _surfaceAltColor,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: _borderColor),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(Icons.description_outlined,
+                                  size: 46,
+                                  color: _isDark
+                                      ? const Color(0xFF334155)
+                                      : Colors.grey[300]),
+                              const SizedBox(height: 12),
+                              Text(
+                                isViewer
+                                    ? 'No sheets shared with you yet'
+                                    : 'No sheets yet — create one!',
+                                style: TextStyle(
+                                    color: _textSecondary, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        _buildAllSheetsTable(auth),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 6),
-                OutlinedButton.icon(
-                  onPressed:
-                      auth.user?.role == 'admin' ? _bulkDeleteSheets : null,
-                  icon: const Icon(Icons.delete_outline, size: 14),
-                  label: const Text('Delete', style: TextStyle(fontSize: 12)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red,
-                    side: const BorderSide(color: Colors.red),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                TextButton(
-                  onPressed: () => setState(() => _selectedSheetIds.clear()),
-                  child: const Text('Clear', style: TextStyle(fontSize: 12)),
                 ),
               ],
-            ],
+            ),
           ),
-          const SizedBox(height: 12),
-
-          if (_sheets.isEmpty && _sheetFolders.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 48),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFDDD5CC)),
-              ),
-              child: Column(
-                children: [
-                  Icon(Icons.description_outlined,
-                      size: 48, color: Colors.grey[300]),
-                  const SizedBox(height: 12),
-                  Text(
-                    isViewer
-                        ? 'No sheets shared with you yet'
-                        : 'No sheets yet — create one!',
-                    style: TextStyle(color: Colors.grey[500], fontSize: 14),
-                  ),
-                ],
-              ),
-            )
-          else if (_sheets.isNotEmpty)
-            _buildAllSheetsTable(auth),
-        ],
+        ),
       ),
     );
+  }
+
+  DateTime? _tryParseApiDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    return DateTime.tryParse(v.toString());
+  }
+
+  Future<void> _toggleExplorerFolder(Map<String, dynamic> folder) async {
+    final folderId = (folder['id'] is int)
+        ? folder['id'] as int
+        : int.tryParse(folder['id']?.toString() ?? '');
+    if (folderId == null) return;
+
+    final isExpanded = _explorerExpandedFolderIds.contains(folderId);
+    if (isExpanded) {
+      setState(() => _explorerExpandedFolderIds.remove(folderId));
+      return;
+    }
+
+    setState(() => _explorerExpandedFolderIds.add(folderId));
+
+    // Lazy-load children (folders + sheets) for this folder without changing
+    // the current navigation context.
+    if (_explorerFolderCache.containsKey(folderId) ||
+        _explorerLoadingFolderIds.contains(folderId)) {
+      return;
+    }
+
+    setState(() => _explorerLoadingFolderIds.add(folderId));
+    try {
+      final response = await ApiService.getSheets(folderId: folderId);
+      if (!mounted) return;
+
+      final childSheets = (response['sheets'] as List?)
+              ?.map((s) => SheetModel.fromJson(s))
+              .toList() ??
+          <SheetModel>[];
+      final childFolders = (response['folders'] as List?)
+              ?.cast<Map<String, dynamic>>()
+              .toList() ??
+          <Map<String, dynamic>>[];
+
+      // If the user collapsed quickly, don't bother updating the UI further.
+      if (!_explorerExpandedFolderIds.contains(folderId)) return;
+
+      setState(() {
+        _explorerFolderCache[folderId] = _ExplorerFolderContents(
+          folders: childFolders,
+          sheets: childSheets,
+        );
+      });
+    } catch (_) {
+      // Keep it silent; the folder just won't expand.
+    } finally {
+      if (mounted) {
+        setState(() => _explorerLoadingFolderIds.remove(folderId));
+      }
+    }
+  }
+
+  Future<void> _ensureExplorerFolderLoaded(
+    int folderId, {
+    bool forceRefresh = false,
+  }) async {
+    if (_explorerLoadingFolderIds.contains(folderId)) return;
+    if (!forceRefresh && _explorerFolderCache.containsKey(folderId)) return;
+
+    if (!mounted) return;
+    setState(() => _explorerLoadingFolderIds.add(folderId));
+    try {
+      final response = await ApiService.getSheets(folderId: folderId);
+      if (!mounted) return;
+
+      final childSheets = (response['sheets'] as List?)
+              ?.map((s) => SheetModel.fromJson(s))
+              .toList() ??
+          <SheetModel>[];
+      final childFolders = (response['folders'] as List?)
+              ?.cast<Map<String, dynamic>>()
+              .toList() ??
+          <Map<String, dynamic>>[];
+
+      setState(() {
+        _explorerFolderCache[folderId] = _ExplorerFolderContents(
+          folders: childFolders,
+          sheets: childSheets,
+        );
+      });
+    } catch (_) {
+      // Keep it silent; the folder just won't show children.
+    } finally {
+      if (mounted) {
+        setState(() => _explorerLoadingFolderIds.remove(folderId));
+      }
+    }
   }
 
   // ── Recent sheet card ──
   Widget _buildRecentCard(SheetModel sheet) {
     final timeAgo = _timeAgo(sheet.updatedAt ?? sheet.createdAt);
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: () => _openSheetWithPasswordCheck(sheet),
-      child: Container(
-        width: 160,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFDDD5CC)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.brown.withOpacity(0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
+    final isHovered = _hoveredRecentSheetId == sheet.id;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hoveredRecentSheetId = sheet.id),
+      onExit: (_) => setState(() => _hoveredRecentSheetId = null),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _openSheetWithPasswordCheck(sheet),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          width: 190,
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: isHovered ? _surfaceAltColor : _surfaceColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isHovered ? _kBlue.withOpacity(0.35) : _borderColor,
             ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: const Color(0xFF2E7D32),
-                borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(isHovered ? 0.07 : 0.04),
+                blurRadius: isHovered ? 18 : 14,
+                offset: const Offset(0, 5),
               ),
-              child:
-                  const Icon(Icons.description, color: Colors.white, size: 20),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              sheet.name,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
+            ],
+          ),
+          child: Stack(
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: _kGreen,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.description_outlined,
+                            color: Colors.white, size: 18),
+                      ),
+                      const Spacer(),
+                      PopupMenuButton<String>(
+                        tooltip: 'Actions',
+                        icon: Icon(Icons.more_horiz,
+                            size: 18, color: _textSecondary),
+                        padding: EdgeInsets.zero,
+                        onSelected: (value) {
+                          if (value == 'open') {
+                            _openSheetWithPasswordCheck(sheet);
+                          }
+                          if (value == 'rename') {
+                            _renameSheet(sheet);
+                          }
+                          if (value == 'move') {
+                            _showMoveSheetToFolderDialog(sheet);
+                          }
+                          if (value == 'set_password') {
+                            _setSheetPassword(sheet);
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'open',
+                            child: Text('Open'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'rename',
+                            child: Text('Rename'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'move',
+                            child: Text('Move to Folder'),
+                          ),
+                          PopupMenuItem(
+                            value: 'set_password',
+                            child: Row(
+                              children: [
+                                Icon(Icons.lock_outline,
+                                    size: 16,
+                                    color: sheet.hasPassword
+                                        ? Colors.orange
+                                        : Colors.grey[600]),
+                                const SizedBox(width: 8),
+                                Text(sheet.hasPassword
+                                    ? 'Change Password'
+                                    : 'Set Password'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    sheet.name,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Last modified · $timeAgo',
+                    style: TextStyle(fontSize: 11, color: _textSecondary),
+                  ),
+                ],
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              timeAgo,
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -3756,308 +4399,821 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildAllSheetsTable(AuthProvider auth) {
     final role = auth.user?.role ?? '';
     final canManage = role == 'admin' || role == 'editor' || role == 'manager';
-    final allSelected = _sheets.isNotEmpty &&
-        _sheets.every((s) => _selectedSheetIds.contains(s.id));
+    final canManageFolders = canManage;
+    final canDeleteFolder = role == 'admin';
 
-    Widget hCell(String label) => TableCell(
-          verticalAlignment: TableCellVerticalAlignment.middle,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Text(label,
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    color: Colors.grey[700])),
-          ),
-        );
+    List<Map<String, dynamic>> sortFolders(List<Map<String, dynamic>> folders) {
+      final copy = List<Map<String, dynamic>>.from(folders);
+      copy.sort((a, b) {
+        final an = (a['name']?.toString() ?? '').toLowerCase();
+        final bn = (b['name']?.toString() ?? '').toLowerCase();
+        return an.compareTo(bn);
+      });
+      return copy;
+    }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _kWarmBorder),
+    List<_ExplorerEntry> buildEntries({
+      required List<Map<String, dynamic>> folders,
+      required List<SheetModel> sheets,
+      required int depth,
+    }) {
+      final entries = <_ExplorerEntry>[];
+
+      for (final folder in sortFolders(folders)) {
+        final folderId = (folder['id'] is int)
+            ? folder['id'] as int
+            : int.tryParse(folder['id']?.toString() ?? '') ?? -1;
+        final expanded = _explorerExpandedFolderIds.contains(folderId);
+        final loading = _explorerLoadingFolderIds.contains(folderId);
+        entries.add(_ExplorerEntry.folder(
+          folder: folder,
+          depth: depth,
+          isExpanded: expanded,
+          isLoading: loading,
+        ));
+
+        if (expanded) {
+          final cached = _explorerFolderCache[folderId];
+          if (loading || cached == null) {
+            entries.add(_ExplorerEntry.loading(depth: depth + 1));
+          } else {
+            if (cached.folders.isEmpty && cached.sheets.isEmpty) {
+              entries.add(_ExplorerEntry.emptyFolder(depth: depth + 1));
+            }
+            entries.addAll(buildEntries(
+              folders: cached.folders,
+              sheets: cached.sheets,
+              depth: depth + 1,
+            ));
+          }
+        }
+      }
+
+      // Keep the sheet order as returned by the API (updated desc)
+      for (final sheet in sheets) {
+        entries.add(_ExplorerEntry.sheet(sheet: sheet, depth: depth));
+      }
+
+      return entries;
+    }
+
+    final entries = buildEntries(
+      folders: _sheetFolders,
+      sheets: _sheets,
+      depth: 0,
+    );
+
+    final visibleSheetIds = entries
+        .where((e) => e.kind == _ExplorerEntryKind.sheet)
+        .map((e) => e.sheet!.id)
+        .toList(growable: false);
+
+    final allSelected = visibleSheetIds.isNotEmpty &&
+        visibleSheetIds.every((id) => _selectedSheetIds.contains(id));
+    final anySelected =
+        visibleSheetIds.any((id) => _selectedSheetIds.contains(id));
+    final headerTristate = anySelected && !allSelected;
+
+    Widget hoverWrap(int idx, Widget child) {
+      return MouseRegion(
+        onEnter: (_) => setState(() => _hoveredAllSheetsRowIndex = idx),
+        onExit: (_) => setState(() => _hoveredAllSheetsRowIndex = null),
+        child: child,
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: _surfaceColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Table(
-              columnWidths: const {
-                0: FixedColumnWidth(48),
-                1: FlexColumnWidth(3),
-                2: FlexColumnWidth(1.5),
-                3: FlexColumnWidth(1.4),
-                4: FlexColumnWidth(1.4),
-                5: FixedColumnWidth(90),
-              },
-              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-              children: [
-                // Header
-                TableRow(
-                  decoration: const BoxDecoration(color: Color(0xFFF5EDE3)),
-                  children: [
-                    TableCell(
-                      verticalAlignment: TableCellVerticalAlignment.middle,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Checkbox(
-                          value: allSelected,
-                          tristate:
-                              _selectedSheetIds.isNotEmpty && !allSelected,
-                          onChanged: canManage
-                              ? (_) => setState(() {
-                                    if (allSelected) {
-                                      _selectedSheetIds.clear();
-                                    } else {
-                                      _selectedSheetIds
-                                          .addAll(_sheets.map((s) => s.id));
-                                    }
-                                  })
-                              : null,
-                        ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            const checkboxW = 48.0;
+            const actionsW = 90.0;
+            const totalFlex = 3.0 + 1.5 + 1.4 + 1.4;
+            final remaining = (constraints.maxWidth - checkboxW - actionsW)
+                .clamp(240.0, double.infinity);
+            final nameW = remaining * (3.0 / totalFlex);
+            final ownerW = remaining * (1.5 / totalFlex);
+            final createdW = remaining * (1.4 / totalFlex);
+            final modifiedW = remaining * (1.4 / totalFlex);
+
+            Widget headerCell(String label) {
+              return Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                    letterSpacing: 0.4,
+                    color: _textSecondary,
+                  ),
+                ),
+              );
+            }
+
+            Widget indentGuides(int depth) {
+              if (depth <= 0) return const SizedBox.shrink();
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(depth, (i) {
+                  return SizedBox(
+                    width: 16,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 1,
+                        height: 36,
+                        color: _borderColor.withOpacity(_isDark ? 0.55 : 0.85),
                       ),
                     ),
-                    hCell('Name'),
-                    hCell('Owner'),
-                    hCell('Created'),
-                    hCell('Last Modified'),
-                    hCell('Actions'),
-                  ],
-                ),
-                // Divider
-                TableRow(
-                  children: List.generate(
-                      6,
-                      (_) => const TableCell(
-                          child: Divider(height: 1, thickness: 1))),
-                ),
-                // Rows
-                ..._sheets.asMap().entries.map((entry) {
-                  final idx = entry.key;
-                  final sheet = entry.value;
-                  final isSelected = _selectedSheetIds.contains(sheet.id);
-                  final rowBg = isSelected
-                      ? const Color(0xFFF5EDE3)
-                      : idx.isEven
-                          ? Colors.white
-                          : const Color(0xFFFAF5EF);
-                  return TableRow(
-                    decoration: BoxDecoration(color: rowBg),
+                  );
+                }),
+              );
+            }
+
+            Widget nameCellFolder({
+              required Map<String, dynamic> folder,
+              required int depth,
+              required bool isExpanded,
+              required bool isLoading,
+            }) {
+              final folderName = folder['name']?.toString() ?? 'Folder';
+
+              return InkWell(
+                onTap: () => _toggleExplorerFolder(folder),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  child: Row(
                     children: [
-                      // Checkbox
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
+                      indentGuides(depth),
+                      Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: _kBlue.withOpacity(_isDark ? 0.35 : 0.18),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _borderColor),
+                        ),
+                        child: Icon(
+                            isExpanded
+                                ? Icons.folder_open_rounded
+                                : Icons.folder_rounded,
+                            color: _isDark ? const Color(0xFFBFDBFE) : _kBlue,
+                            size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                folderName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 13,
+                                  color: _textPrimary,
+                                ),
+                              ),
+                            ),
+                            if (isLoading) ...[
+                              const SizedBox(width: 10),
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      _textSecondary),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            Widget nameCellSheet({
+              required SheetModel sheet,
+              required int depth,
+            }) {
+              return InkWell(
+                onTap: () => _openSheetWithPasswordCheck(sheet),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  child: Row(
+                    children: [
+                      indentGuides(depth),
+                      Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: _kGreen,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.description_outlined,
+                          color: Colors.white,
+                          size: 17,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                sheet.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                  color: _textPrimary,
+                                ),
+                              ),
+                            ),
+                            if (sheet.hasPassword) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.lock,
+                                  size: 13, color: Colors.orange[700]),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            Widget cellText(String text, {VoidCallback? onTap}) {
+              final content = Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: _textSecondary),
+                ),
+              );
+              if (onTap == null) return content;
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(onTap: onTap, child: content),
+              );
+            }
+
+            final rowHeight = 52.0;
+            final bodyHeight = 520.0;
+
+            return Column(
+              children: [
+                // Header row
+                Container(
+                  color: _surfaceAltColor,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: checkboxW,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
                           child: Checkbox(
-                            value: isSelected,
+                            value: allSelected,
+                            tristate: headerTristate,
                             onChanged: canManage
-                                ? (v) => setState(() {
-                                      if (v == true) {
-                                        _selectedSheetIds.add(sheet.id);
+                                ? (_) => setState(() {
+                                      if (allSelected) {
+                                        _selectedSheetIds.removeWhere((id) =>
+                                            visibleSheetIds.contains(id));
                                       } else {
-                                        _selectedSheetIds.remove(sheet.id);
+                                        _selectedSheetIds
+                                            .addAll(visibleSheetIds);
                                       }
                                     })
                                 : null,
                           ),
                         ),
                       ),
-                      // Name + row count
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          child: InkWell(
-                            onTap: () => _openSheetWithPasswordCheck(sheet),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 28,
-                                  height: 28,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF2E7D32),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Icon(Icons.description,
-                                      color: Colors.white, size: 16),
-                                ),
-                                const SizedBox(width: 10),
-                                Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          sheet.name,
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 13),
-                                        ),
-                                        if (sheet.hasPassword) ...[
-                                          const SizedBox(width: 6),
-                                          Icon(Icons.lock,
-                                              size: 13,
-                                              color: Colors.orange[700]),
-                                        ],
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Owner
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
+                      SizedBox(width: nameW, child: headerCell('Name')),
+                      SizedBox(width: ownerW, child: headerCell('Owner')),
+                      SizedBox(width: createdW, child: headerCell('Created')),
+                      SizedBox(
+                          width: modifiedW, child: headerCell('Last Modified')),
+                      SizedBox(width: actionsW, child: headerCell('Actions')),
+                    ],
+                  ),
+                ),
+                Divider(height: 1, thickness: 1, color: _borderColor),
+                SizedBox(
+                  height: bodyHeight,
+                  child: ListView.builder(
+                    itemCount: entries.length,
+                    itemExtent: rowHeight,
+                    itemBuilder: (context, idx) {
+                      final entry = entries[idx];
+                      final isHovered = _hoveredAllSheetsRowIndex == idx;
+
+                      final baseAlt = idx.isEven
+                          ? _surfaceColor
+                          : _surfaceAltColor.withOpacity(0.7);
+
+                      Color rowBg = isHovered ? _surfaceAltColor : baseAlt;
+
+                      if (entry.kind == _ExplorerEntryKind.folder) {
+                        final folderId = (entry.folder?['id'] is int)
+                            ? entry.folder!['id'] as int
+                            : int.tryParse(
+                                entry.folder?['id']?.toString() ?? '');
+                        final isFolderSelected = folderId != null &&
+                            _explorerSelectedFolderIds.contains(folderId);
+                        if (isFolderSelected) {
+                          rowBg = _kBlue.withOpacity(0.10);
+                        }
+                        if (entry.isExpanded == true) {
+                          rowBg = _kBlue.withOpacity(0.06);
+                        }
+                      }
+
+                      if (entry.kind == _ExplorerEntryKind.sheet) {
+                        final sheet = entry.sheet!;
+                        final isSelected = _selectedSheetIds.contains(sheet.id);
+                        final isOpening = _openingSheetId == sheet.id;
+                        final isActiveSheet = _currentSheet?.id == sheet.id;
+                        rowBg = isSelected
+                            ? _kBlue.withOpacity(0.10)
+                            : isOpening
+                                ? _kBlue.withOpacity(0.08)
+                                : isActiveSheet
+                                    ? _kBlue.withOpacity(0.06)
+                                    : (isHovered ? _surfaceAltColor : baseAlt);
+                      }
+
+                      return hoverWrap(
+                        idx,
+                        Container(
+                          color: rowBg,
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              CircleAvatar(
-                                radius: 12,
-                                backgroundColor: Colors.grey[300],
-                                child: Icon(Icons.person,
-                                    size: 14, color: Colors.grey[600]),
+                              SizedBox(
+                                width: checkboxW,
+                                child: () {
+                                  if (entry.kind == _ExplorerEntryKind.sheet) {
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8),
+                                      child: Checkbox(
+                                        value: _selectedSheetIds
+                                            .contains(entry.sheet!.id),
+                                        onChanged: canManage
+                                            ? (v) => setState(() {
+                                                  if (v == true) {
+                                                    _selectedSheetIds
+                                                        .add(entry.sheet!.id);
+                                                  } else {
+                                                    _selectedSheetIds.remove(
+                                                        entry.sheet!.id);
+                                                  }
+                                                })
+                                            : null,
+                                      ),
+                                    );
+                                  }
+
+                                  if (entry.kind == _ExplorerEntryKind.folder) {
+                                    final folderId = (entry.folder?['id']
+                                            is int)
+                                        ? entry.folder!['id'] as int
+                                        : int.tryParse(
+                                            entry.folder?['id']?.toString() ??
+                                                '');
+                                    if (folderId == null)
+                                      return const SizedBox();
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8),
+                                      child: Checkbox(
+                                        value: _explorerSelectedFolderIds
+                                            .contains(folderId),
+                                        onChanged: canManageFolders
+                                            ? (v) => setState(() {
+                                                  if (v == true) {
+                                                    _explorerSelectedFolderIds
+                                                        .add(folderId);
+                                                  } else {
+                                                    _explorerSelectedFolderIds
+                                                        .remove(folderId);
+                                                  }
+                                                })
+                                            : null,
+                                      ),
+                                    );
+                                  }
+
+                                  return const SizedBox();
+                                }(),
                               ),
-                              const SizedBox(width: 6),
-                              Text('admin',
-                                  style: TextStyle(
-                                      fontSize: 12, color: Colors.grey[600])),
-                            ],
-                          ),
-                        ),
-                      ),
-                      // Created
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          child: Text(
-                            _formatDate(sheet.createdAt),
-                            style: TextStyle(
-                                fontSize: 12, color: Colors.grey[600]),
-                          ),
-                        ),
-                      ),
-                      // Last Modified
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          child: Text(
-                            _formatDate(sheet.updatedAt ?? sheet.createdAt),
-                            style: TextStyle(
-                                fontSize: 12, color: Colors.grey[600]),
-                          ),
-                        ),
-                      ),
-                      // Actions
-                      TableCell(
-                        verticalAlignment: TableCellVerticalAlignment.middle,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: canManage
-                              ? Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    PopupMenuButton<String>(
-                                      icon: Icon(Icons.more_vert,
-                                          size: 18, color: Colors.grey[500]),
-                                      padding: EdgeInsets.zero,
-                                      onSelected: (value) {
-                                        if (value == 'open') {
-                                          _openSheetWithPasswordCheck(sheet);
-                                        }
-                                        if (value == 'rename') {
-                                          _renameSheet(sheet);
-                                        }
-                                        if (value == 'move') {
-                                          _showMoveSheetToFolderDialog(sheet);
-                                        }
-                                        if (value == 'set_password') {
-                                          _setSheetPassword(sheet);
-                                        }
-                                      },
-                                      itemBuilder: (_) => [
-                                        const PopupMenuItem(
-                                            value: 'open', child: Text('Open')),
-                                        const PopupMenuItem(
-                                            value: 'rename',
-                                            child: Text('Rename')),
-                                        const PopupMenuItem(
-                                          value: 'move',
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                  Icons
-                                                      .drive_file_move_outlined,
-                                                  size: 16,
-                                                  color: Colors.blueGrey),
-                                              SizedBox(width: 8),
-                                              Text('Move to Folder'),
-                                            ],
-                                          ),
+                              SizedBox(
+                                width: nameW,
+                                child: () {
+                                  if (entry.kind == _ExplorerEntryKind.folder) {
+                                    return nameCellFolder(
+                                      folder: entry.folder!,
+                                      depth: entry.depth,
+                                      isExpanded: entry.isExpanded ?? false,
+                                      isLoading: entry.isLoading ?? false,
+                                    );
+                                  }
+                                  if (entry.kind == _ExplorerEntryKind.sheet) {
+                                    return nameCellSheet(
+                                      sheet: entry.sheet!,
+                                      depth: entry.depth,
+                                    );
+                                  }
+                                  // loading/empty row
+                                  final label = entry.kind ==
+                                          _ExplorerEntryKind.emptyFolder
+                                      ? 'Empty'
+                                      : 'Loading…';
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 12),
+                                    child: Row(
+                                      children: [
+                                        indentGuides(entry.depth),
+                                        Icon(
+                                          entry.kind ==
+                                                  _ExplorerEntryKind.emptyFolder
+                                              ? Icons.inbox_outlined
+                                              : Icons.hourglass_empty,
+                                          size: 16,
+                                          color: _textSecondary,
                                         ),
-                                        PopupMenuItem(
-                                          value: 'set_password',
-                                          child: Row(
-                                            children: [
-                                              Icon(Icons.lock_outline,
-                                                  size: 16,
-                                                  color: sheet.hasPassword
-                                                      ? Colors.orange
-                                                      : Colors.grey[600]),
-                                              const SizedBox(width: 8),
-                                              Text(sheet.hasPassword
-                                                  ? 'Change Password'
-                                                  : 'Set Password'),
-                                            ],
-                                          ),
-                                        ),
+                                        const SizedBox(width: 10),
+                                        Text(label,
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                color: _textSecondary)),
                                       ],
                                     ),
-                                    if (role == 'admin')
-                                      Tooltip(
-                                        message: 'Delete sheet',
-                                        child: InkWell(
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                          onTap: () =>
-                                              _confirmDeleteSheet(sheet),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(4),
-                                            child: Icon(Icons.delete_outline,
-                                                size: 18,
-                                                color: Colors.red[400]),
+                                  );
+                                }(),
+                              ),
+                              SizedBox(
+                                width: ownerW,
+                                child: () {
+                                  if (entry.kind == _ExplorerEntryKind.sheet) {
+                                    final sheet = entry.sheet!;
+                                    final isOpening =
+                                        _openingSheetId == sheet.id;
+                                    return Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: isOpening
+                                            ? null
+                                            : () => _openSheetWithPasswordCheck(
+                                                sheet),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 12),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              CircleAvatar(
+                                                radius: 12,
+                                                backgroundColor:
+                                                    _surfaceAltColor,
+                                                child: Icon(Icons.person,
+                                                    size: 14,
+                                                    color: _textSecondary),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Text('admin',
+                                                  style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: _textSecondary)),
+                                            ],
                                           ),
                                         ),
                                       ),
-                                  ],
-                                )
-                              : const SizedBox(),
+                                    );
+                                  }
+                                  if (entry.kind == _ExplorerEntryKind.folder) {
+                                    final owner = entry.folder?['created_by']
+                                            ?.toString() ??
+                                        '-';
+                                    return cellText(owner);
+                                  }
+                                  return cellText('-');
+                                }(),
+                              ),
+                              SizedBox(
+                                width: createdW,
+                                child: () {
+                                  if (entry.kind == _ExplorerEntryKind.sheet) {
+                                    final sheet = entry.sheet!;
+                                    final isOpening =
+                                        _openingSheetId == sheet.id;
+                                    return cellText(
+                                      _formatDate(sheet.createdAt),
+                                      onTap: isOpening
+                                          ? null
+                                          : () => _openSheetWithPasswordCheck(
+                                              sheet),
+                                    );
+                                  }
+                                  if (entry.kind == _ExplorerEntryKind.folder) {
+                                    final created = _tryParseApiDate(
+                                        entry.folder?['created_at']);
+                                    return cellText(_formatDate(created));
+                                  }
+                                  return cellText('-');
+                                }(),
+                              ),
+                              SizedBox(
+                                width: modifiedW,
+                                child: () {
+                                  if (entry.kind == _ExplorerEntryKind.sheet) {
+                                    final sheet = entry.sheet!;
+                                    final isOpening =
+                                        _openingSheetId == sheet.id;
+                                    return cellText(
+                                      _formatDate(
+                                          sheet.updatedAt ?? sheet.createdAt),
+                                      onTap: isOpening
+                                          ? null
+                                          : () => _openSheetWithPasswordCheck(
+                                              sheet),
+                                    );
+                                  }
+                                  if (entry.kind == _ExplorerEntryKind.folder) {
+                                    final updated = _tryParseApiDate(
+                                        entry.folder?['updated_at']);
+                                    return cellText(_formatDate(updated));
+                                  }
+                                  return cellText('-');
+                                }(),
+                              ),
+                              SizedBox(
+                                width: actionsW,
+                                child: () {
+                                  if (entry.kind != _ExplorerEntryKind.sheet) {
+                                    if (entry.kind !=
+                                        _ExplorerEntryKind.folder) {
+                                      return const SizedBox();
+                                    }
+
+                                    final folder = entry.folder!;
+                                    final folderHasPassword =
+                                        folder['has_password'] == true;
+
+                                    if (!canManageFolders && !canDeleteFolder) {
+                                      return const SizedBox();
+                                    }
+
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (canManageFolders)
+                                            PopupMenuButton<String>(
+                                              icon: Icon(Icons.more_horiz,
+                                                  size: 18,
+                                                  color: _textSecondary),
+                                              padding: EdgeInsets.zero,
+                                              onSelected: (value) {
+                                                if (value == 'set_password') {
+                                                  _setFolderPassword(folder);
+                                                }
+                                                if (value == 'delete') {
+                                                  _confirmDeleteFolder(folder);
+                                                }
+                                              },
+                                              itemBuilder: (_) => [
+                                                PopupMenuItem(
+                                                  value: 'set_password',
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(Icons.lock_outline,
+                                                          size: 16,
+                                                          color:
+                                                              folderHasPassword
+                                                                  ? Colors
+                                                                      .orange
+                                                                  : Colors.grey[
+                                                                      600]),
+                                                      const SizedBox(width: 8),
+                                                      Text(folderHasPassword
+                                                          ? 'Change Password'
+                                                          : 'Set Password'),
+                                                    ],
+                                                  ),
+                                                ),
+                                                if (canDeleteFolder)
+                                                  const PopupMenuItem(
+                                                    value: 'delete',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                            Icons
+                                                                .delete_outline,
+                                                            size: 16,
+                                                            color: Colors.red),
+                                                        SizedBox(width: 8),
+                                                        Text('Delete Folder',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .red)),
+                                                      ],
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          if (canDeleteFolder)
+                                            Tooltip(
+                                              message: 'Delete folder',
+                                              child: InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                onTap: () =>
+                                                    _confirmDeleteFolder(
+                                                        folder),
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.all(6),
+                                                  child: Icon(
+                                                      Icons.delete_outline,
+                                                      size: 18,
+                                                      color: Colors.red[400]),
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                  final sheet = entry.sheet!;
+                                  final isOpening = _openingSheetId == sheet.id;
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8),
+                                    child: canManage
+                                        ? Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              AnimatedSwitcher(
+                                                duration: const Duration(
+                                                    milliseconds: 160),
+                                                child: isOpening
+                                                    ? SizedBox(
+                                                        key: ValueKey(
+                                                            'opening_${sheet.id}'),
+                                                        width: 18,
+                                                        height: 18,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                          strokeWidth: 2,
+                                                          valueColor:
+                                                              AlwaysStoppedAnimation<
+                                                                      Color>(
+                                                                  _textSecondary),
+                                                        ),
+                                                      )
+                                                    : PopupMenuButton<String>(
+                                                        key: ValueKey(
+                                                            'menu_${sheet.id}'),
+                                                        icon: Icon(
+                                                            Icons.more_horiz,
+                                                            size: 18,
+                                                            color:
+                                                                _textSecondary),
+                                                        padding:
+                                                            EdgeInsets.zero,
+                                                        onSelected: (value) {
+                                                          if (value == 'open') {
+                                                            _openSheetWithPasswordCheck(
+                                                                sheet);
+                                                          }
+                                                          if (value ==
+                                                              'rename') {
+                                                            _renameSheet(sheet);
+                                                          }
+                                                          if (value == 'move') {
+                                                            _showMoveSheetToFolderDialog(
+                                                                sheet);
+                                                          }
+                                                          if (value ==
+                                                              'set_password') {
+                                                            _setSheetPassword(
+                                                                sheet);
+                                                          }
+                                                        },
+                                                        itemBuilder: (_) => [
+                                                          const PopupMenuItem(
+                                                              value: 'open',
+                                                              child:
+                                                                  Text('Open')),
+                                                          const PopupMenuItem(
+                                                              value: 'rename',
+                                                              child: Text(
+                                                                  'Rename')),
+                                                          const PopupMenuItem(
+                                                              value: 'move',
+                                                              child: Text(
+                                                                  'Move to Folder')),
+                                                          PopupMenuItem(
+                                                            value:
+                                                                'set_password',
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                    Icons
+                                                                        .lock_outline,
+                                                                    size: 16,
+                                                                    color: sheet.hasPassword
+                                                                        ? Colors
+                                                                            .orange
+                                                                        : Colors
+                                                                            .grey[600]),
+                                                                const SizedBox(
+                                                                    width: 8),
+                                                                Text(sheet
+                                                                        .hasPassword
+                                                                    ? 'Change Password'
+                                                                    : 'Set Password'),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                              ),
+                                              if (role == 'admin')
+                                                Tooltip(
+                                                  message: 'Delete sheet',
+                                                  child: InkWell(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            8),
+                                                    onTap: isOpening
+                                                        ? null
+                                                        : () =>
+                                                            _confirmDeleteSheet(
+                                                                sheet),
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                              6),
+                                                      child: Icon(
+                                                          Icons.delete_outline,
+                                                          size: 18,
+                                                          color:
+                                                              Colors.red[400]),
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          )
+                                        : const SizedBox(),
+                                  );
+                                }(),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                }),
+                      );
+                    },
+                  ),
+                ),
               ],
-            ),
-          ),
+            );
+          },
         ),
-      ],
+      ),
     );
   }
 
@@ -4068,14 +5224,13 @@ class _SheetScreenState extends State<SheetScreen> {
   }) {
     return OutlinedButton.icon(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18, color: _kHeaderMaroon),
-      label: Text(label,
-          style: const TextStyle(color: _kHeaderMaroon, fontSize: 13)),
+      icon: Icon(icon, size: 18, color: _textSecondary),
+      label: Text(label, style: TextStyle(color: _textPrimary, fontSize: 13)),
       style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: _kWarmBorder, width: 1.5),
+        side: BorderSide(color: _borderColor, width: 1.2),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        backgroundColor: Colors.white,
+        backgroundColor: _surfaceColor,
       ),
     );
   }
@@ -4426,10 +5581,10 @@ class _SheetScreenState extends State<SheetScreen> {
     return Container(
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: _surfaceColor,
         border: Border(
-          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
+          bottom: BorderSide(color: _borderColor, width: 1),
         ),
       ),
       child: Row(
@@ -4453,8 +5608,7 @@ class _SheetScreenState extends State<SheetScreen> {
               borderRadius: BorderRadius.circular(6),
               child: const Padding(
                 padding: EdgeInsets.all(5),
-                child: Icon(Icons.arrow_back_ios_new,
-                    size: 18, color: Color(0xFF5F6368)),
+                child: Icon(Icons.arrow_back_ios_new, size: 18, color: _kGray),
               ),
             ),
           ),
@@ -4474,7 +5628,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey[800],
+                    color: _textPrimary,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -4514,7 +5668,7 @@ class _SheetScreenState extends State<SheetScreen> {
               label: const Text('Save', style: TextStyle(fontSize: 13)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: (_canEditSheet() && _hasUnsavedChanges)
-                    ? _kBlue
+                    ? _kGreen
                     : Colors.grey[300],
                 foregroundColor: Colors.white,
                 padding:
@@ -4535,14 +5689,13 @@ class _SheetScreenState extends State<SheetScreen> {
                   controller: _inventorySearchController,
                   decoration: InputDecoration(
                     hintText: 'Product Name or QB Code…',
-                    hintStyle:
-                        const TextStyle(fontSize: 12, color: Color(0xFFAAAAAA)),
+                    hintStyle: TextStyle(fontSize: 12, color: _textSecondary),
                     prefixIcon: const Icon(Icons.search,
                         size: 16, color: AppColors.primaryBlue),
                     suffixIcon: _inventorySearchQuery.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(Icons.close,
-                                size: 14, color: Color(0xFF888888)),
+                            icon: Icon(Icons.close,
+                                size: 14, color: _textSecondary),
                             onPressed: () => setState(() {
                               _inventorySearchQuery = '';
                               _inventorySearchController.clear();
@@ -4552,16 +5705,14 @@ class _SheetScreenState extends State<SheetScreen> {
                     contentPadding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
                     filled: true,
-                    fillColor: const Color(0xFFF5F5F5),
+                    fillColor: _surfaceAltColor,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Color(0xFFCCCCCC), width: 1),
+                      borderSide: BorderSide(color: _borderColor, width: 1),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Color(0xFFCCCCCC), width: 1),
+                      borderSide: BorderSide(color: _borderColor, width: 1),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -4593,10 +5744,10 @@ class _SheetScreenState extends State<SheetScreen> {
         (Provider.of<AuthProvider>(context, listen: false).user?.role ?? '') ==
             'viewer';
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: _surfaceColor,
         border: Border(
-          bottom: BorderSide(color: Color(0xFFE8E8E8), width: 1),
+          bottom: BorderSide(color: _borderColor, width: 1),
         ),
       ),
       child: Column(
@@ -4604,7 +5755,7 @@ class _SheetScreenState extends State<SheetScreen> {
           // Tab headers
           Container(
             height: 32,
-            color: Colors.white,
+            color: _surfaceColor,
             child: Row(
               children: [
                 _buildRibbonTab('All'),
@@ -4621,7 +5772,7 @@ class _SheetScreenState extends State<SheetScreen> {
           Container(
             height: _selectedRibbonTab == 'All' ? 72 : 52,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            color: Colors.white,
+            color: _surfaceColor,
             child: _buildRibbonContent(isViewer),
           ),
         ],
@@ -4631,17 +5782,23 @@ class _SheetScreenState extends State<SheetScreen> {
 
   Widget _buildRibbonTab(String label) {
     final isSelected = _selectedRibbonTab == label;
+    final selectedTextColor =
+        _isDark ? const Color(0xFF93C5FD) : AppColors.primaryBlue;
+    final unselectedTextColor =
+        _isDark ? const Color(0xFFE2E8F0) : _textSecondary;
     return GestureDetector(
       onTap: () => setState(() => _selectedRibbonTab = label),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFF0F4FF) : Colors.transparent,
+          color: isSelected
+              ? (_isDark ? _kBlue.withOpacity(0.16) : const Color(0xFFF0F4FF))
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
           border: Border(
             bottom: BorderSide(
-              color: isSelected ? _kSidebarBg : Colors.transparent,
+              color: isSelected ? AppColors.primaryBlue : Colors.transparent,
               width: 2,
             ),
           ),
@@ -4650,8 +5807,8 @@ class _SheetScreenState extends State<SheetScreen> {
           label,
           style: TextStyle(
             fontSize: 12,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-            color: isSelected ? _kSidebarBg : const Color(0xFF5F6368),
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+            color: isSelected ? selectedTextColor : unselectedTextColor,
           ),
         ),
       ),
@@ -4691,7 +5848,7 @@ class _SheetScreenState extends State<SheetScreen> {
       return Container(
         margin: const EdgeInsets.only(right: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey[300]!),
+          border: Border.all(color: _borderColor),
           borderRadius: BorderRadius.circular(6),
         ),
         child: Column(
@@ -4712,9 +5869,9 @@ class _SheetScreenState extends State<SheetScreen> {
             ),
             Container(
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: _isDark ? const Color(0xFF0F172A) : Colors.grey[100],
                 border: Border(
-                  top: BorderSide(color: Colors.grey[300]!),
+                  top: BorderSide(color: _borderColor),
                 ),
                 borderRadius: const BorderRadius.only(
                   bottomLeft: Radius.circular(5),
@@ -4724,7 +5881,7 @@ class _SheetScreenState extends State<SheetScreen> {
               padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 10),
               child: Text(
                 label,
-                style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+                style: TextStyle(fontSize: 9, color: _textSecondary),
               ),
             ),
           ],
@@ -4949,8 +6106,12 @@ class _SheetScreenState extends State<SheetScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: _surfaceColor,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: AppColors.border),
+          ),
           title: Row(
             children: [
               Container(
@@ -4975,7 +6136,7 @@ class _SheetScreenState extends State<SheetScreen> {
               children: [
                 Text(
                   'Set when an item becomes critical based on used percentage.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 13, color: _textSecondary),
                 ),
                 const SizedBox(height: 20),
                 Center(
@@ -4984,7 +6145,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     style: const TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFFC0392B),
+                      color: AppColors.primaryOrange,
                     ),
                   ),
                 ),
@@ -4993,8 +6154,8 @@ class _SheetScreenState extends State<SheetScreen> {
                   min: 0.01,
                   max: 1.0,
                   divisions: 99,
-                  activeColor: const Color(0xFFC0392B),
-                  inactiveColor: Colors.grey[300],
+                  activeColor: AppColors.primaryOrange,
+                  inactiveColor: _borderColor,
                   label: '${(tempThreshold * 100).round()}%',
                   onChanged: (v) => setLocal(() => tempThreshold = v),
                 ),
@@ -5002,11 +6163,9 @@ class _SheetScreenState extends State<SheetScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text('1%',
-                        style:
-                            TextStyle(fontSize: 11, color: Colors.grey[500])),
+                        style: TextStyle(fontSize: 11, color: _textSecondary)),
                     Text('100%',
-                        style:
-                            TextStyle(fontSize: 11, color: Colors.grey[500])),
+                        style: TextStyle(fontSize: 11, color: _textSecondary)),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -5020,13 +6179,13 @@ class _SheetScreenState extends State<SheetScreen> {
                   child: Row(
                     children: [
                       const Icon(Icons.info_outline,
-                          size: 14, color: Color(0xFFC0392B)),
+                          size: 14, color: AppColors.primaryOrange),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           'Items at ${(tempThreshold * 100).round()}% used or higher will be marked critical.',
                           style: const TextStyle(
-                              fontSize: 11, color: Color(0xFFC0392B)),
+                              fontSize: 11, color: AppColors.primaryOrange),
                         ),
                       ),
                     ],
@@ -5038,7 +6197,7 @@ class _SheetScreenState extends State<SheetScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+              child: Text('Cancel', style: TextStyle(color: _textSecondary)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -5124,7 +6283,10 @@ class _SheetScreenState extends State<SheetScreen> {
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppColors.border),
+        ),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520, maxHeight: 600),
           child: Padding(
@@ -5143,7 +6305,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Icon(Icons.warning_amber_rounded,
-                          color: Color(0xFFC0392B), size: 24),
+                          color: AppColors.primaryOrange, size: 24),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -5244,7 +6406,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFFC0392B),
+                            color: AppColors.primaryOrange,
                           ),
                         ),
                       ),
@@ -5263,7 +6425,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         final severity = deficitPctDouble >= 50
                             ? const Color(0xFF7B0000)
                             : deficitPctDouble >= 25
-                                ? const Color(0xFFC0392B)
+                                ? AppColors.primaryOrange
                                 : const Color(0xFFE57373);
                         return Container(
                           padding: const EdgeInsets.symmetric(
@@ -5777,6 +6939,13 @@ class _SheetScreenState extends State<SheetScreen> {
 
   Widget _buildFormatToggle(
       IconData icon, String tooltip, bool active, VoidCallback onPressed) {
+    final iconColor = _isDark ? const Color(0xFFE2E8F0) : _kNavy;
+    final activeBg = _isDark
+        ? AppColors.primaryBlue.withOpacity(0.20)
+        : _kNavy.withOpacity(0.12);
+    final activeBorder = _isDark
+        ? AppColors.primaryBlue.withOpacity(0.45)
+        : _kNavy.withOpacity(0.3);
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -5787,11 +6956,11 @@ class _SheetScreenState extends State<SheetScreen> {
           height: 32,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: active ? _kNavy.withOpacity(0.12) : Colors.transparent,
+            color: active ? activeBg : Colors.transparent,
             borderRadius: BorderRadius.circular(4),
-            border: active ? Border.all(color: _kNavy.withOpacity(0.3)) : null,
+            border: active ? Border.all(color: activeBorder) : null,
           ),
-          child: Icon(icon, size: 18, color: _kNavy),
+          child: Icon(icon, size: 18, color: iconColor),
         ),
       ),
     );
@@ -5917,13 +7086,14 @@ class _SheetScreenState extends State<SheetScreen> {
         height: 32,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey[300]!),
+          border: Border.all(color: _borderColor),
           borderRadius: BorderRadius.circular(4),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: _kNavy),
+            Icon(icon,
+                size: 16, color: _isDark ? const Color(0xFFE2E8F0) : _kNavy),
             Container(
               height: 3,
               width: 20,
@@ -6645,12 +7815,16 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildRibbonButton(
       IconData icon, String label, VoidCallback? onPressed) {
     final enabled = onPressed != null;
+    final fg = enabled
+        ? (_isDark ? const Color(0xFFE2E8F0) : const Color(0xFF3C4043))
+        : (_isDark ? const Color(0xFF94A3B8) : const Color(0xFFBDC1C6));
+    final hover = _isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F3F4);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(4),
-        hoverColor: const Color(0xFFF1F3F4),
+        hoverColor: hover,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
@@ -6660,20 +7834,14 @@ class _SheetScreenState extends State<SheetScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  size: 15,
-                  color: enabled
-                      ? const Color(0xFF3C4043)
-                      : const Color(0xFFBDC1C6)),
+              Icon(icon, size: 15, color: fg),
               const SizedBox(width: 5),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w400,
-                  color: enabled
-                      ? const Color(0xFF3C4043)
-                      : const Color(0xFFBDC1C6),
+                  color: fg,
                 ),
               ),
             ],
@@ -6687,7 +7855,7 @@ class _SheetScreenState extends State<SheetScreen> {
     return Container(
       height: 24,
       width: 1,
-      color: Colors.grey[300],
+      color: _borderColor,
       margin: const EdgeInsets.symmetric(horizontal: 6),
     );
   }
@@ -6949,8 +8117,9 @@ class _SheetScreenState extends State<SheetScreen> {
           _data[rowIndex][colName] = value;
         });
         // Recalculate computed columns (e.g. Total Quantity) after remote edits
-        if (_isInventoryTrackerSheet()) {
-          _recalcInventoryTotals();
+        if (_isInventoryTrackerSheet() &&
+            _isInventoryTotalsInputColumn(colName)) {
+          _recalcInventoryTotalsForRow(rowIndex);
         }
       } catch (e) {
         debugPrint('[onCellUpdated] error – falling back to full reload: $e');
@@ -7154,6 +8323,8 @@ class _SheetScreenState extends State<SheetScreen> {
     final submitted = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: _surfaceColor,
+        surfaceTintColor: Colors.transparent,
         title: Row(children: [
           const Icon(Icons.lock_outline, color: Colors.orange),
           const SizedBox(width: 8),
@@ -7165,7 +8336,7 @@ class _SheetScreenState extends State<SheetScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Column: $colName',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    style: TextStyle(fontSize: 12, color: _textSecondary)),
                 Text(
                     'Current value: ${currentVal.isEmpty ? "(empty)" : currentVal}',
                     style: const TextStyle(fontSize: 12)),
@@ -7178,17 +8349,17 @@ class _SheetScreenState extends State<SheetScreen> {
                   autofocus: true,
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'This is a historical (past-date) record. An admin must approve '
                   'your request before you can edit it.',
-                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                  style: TextStyle(fontSize: 11, color: _textSecondary),
                 ),
               ]),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text('Cancel', style: TextStyle(color: _textSecondary))),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
             icon: const Icon(Icons.send, size: 16),
@@ -7635,6 +8806,48 @@ class _SheetScreenState extends State<SheetScreen> {
     });
   }
 
+  bool _isInventoryTotalsInputColumn(String colName) {
+    if (colName.startsWith('DATE:')) return true;
+    return colName == 'Product Name' ||
+        colName == 'QB Code' ||
+        colName == 'QC Code' ||
+        colName == 'Stock' ||
+        colName == 'Total Quantity';
+  }
+
+  void _recalcInventoryTotalsForRow(int rowIndex) {
+    if (rowIndex < 0 || rowIndex >= _data.length) return;
+    final row = _data[rowIndex];
+    final productName = (row['Product Name'] ?? '').trim();
+    final code = _inventoryRowCode(row).trim();
+    if (productName.isEmpty && code.isEmpty) {
+      setState(() {
+        if (row.containsKey('Stock')) row['Stock'] = '';
+        if (row.containsKey('Total Quantity')) row['Total Quantity'] = '';
+      });
+      return;
+    }
+
+    int totalIn = 0, totalOut = 0;
+    for (final col in _columns) {
+      if (col.startsWith('DATE:') && col.endsWith(':IN')) {
+        totalIn += int.tryParse(row[col] ?? '0') ?? 0;
+      } else if (col.startsWith('DATE:') && col.endsWith(':OUT')) {
+        totalOut += int.tryParse(row[col] ?? '0') ?? 0;
+      }
+    }
+    final currentStock = totalIn - totalOut;
+
+    setState(() {
+      if (row.containsKey('Stock')) {
+        row['Stock'] = currentStock.toString();
+      }
+      if (row.containsKey('Total Quantity')) {
+        row['Total Quantity'] = currentStock.toString();
+      }
+    });
+  }
+
   void _applyInvalidInventoryOutFallback({
     required int rowIndex,
     required String colName,
@@ -7951,7 +9164,6 @@ class _SheetScreenState extends State<SheetScreen> {
           onTap: () {
             if (_editingRow != null) {
               _saveEdit();
-              _recalcInventoryTotals();
               _saveSheet();
             }
             _spreadsheetFocusNode.requestFocus();
@@ -8092,7 +9304,6 @@ class _SheetScreenState extends State<SheetScreen> {
 
         if (_editingRow != null) {
           _saveEdit();
-          _recalcInventoryTotals();
         }
 
         _isDragging = true;
@@ -8135,7 +9346,7 @@ class _SheetScreenState extends State<SheetScreen> {
     const Color navy = AppColors.primaryBlue;
     const Color midBlue = Color(0xFF2A4F8F);
     const Color subBlue = Color(0xFF3661A6);
-    const Color todayCol = Color(0xFFC0392B);
+    const Color todayCol = AppColors.primaryOrange;
     const Color todaySub = Color(0xFFE74C3C);
     const Color borderCol = Color(0xFF4A6FA5);
     const Color textCol = Colors.white;
@@ -8282,7 +9493,7 @@ class _SheetScreenState extends State<SheetScreen> {
     Color? totalQtyColor() {
       final deficitPct = _criticalDeficitPctForRow(row);
       if (deficitPct == null) return AppColors.primaryBlue;
-      return const Color(0xFFC0392B);
+      return AppColors.primaryOrange;
     }
 
     Widget dataCell({
@@ -8302,8 +9513,8 @@ class _SheetScreenState extends State<SheetScreen> {
       final bool isTotalQty = colKey == 'Total Quantity';
       final Color? totalQtyFgColor = isTotalQty ? totalQtyColor() : null;
       final Color? totalQtyBgColor = (isTotalQty &&
-              totalQtyFgColor == const Color(0xFFC0392B))
-          ? const Color(0xFFFFEBEE) // light red background for critical rows
+              totalQtyFgColor == AppColors.primaryOrange)
+          ? const Color(0xFFFFF3E0) // light orange background for critical rows
           : null;
 
       Color bgColor() {
@@ -8355,7 +9566,6 @@ class _SheetScreenState extends State<SheetScreen> {
         onTap: () {
           if (_editingRow != null) {
             _saveEdit();
-            _recalcInventoryTotals();
           }
           if (colIdx >= 0) {
             final isShift = HardwareKeyboard.instance.isShiftPressed;
@@ -8401,7 +9611,6 @@ class _SheetScreenState extends State<SheetScreen> {
                       onChanged: isDateInOut ? (_) {} : null,
                       onSubmitted: (_) {
                         _saveEdit();
-                        _recalcInventoryTotals();
                       },
                     )
                   : Text(
@@ -8798,14 +10007,21 @@ class _SheetScreenState extends State<SheetScreen> {
   //  Sheet Tabs at Bottom
   // ═══════════════════════════════════════════════════════
   Widget _buildSheetTabs() {
+    final tabBarBg = _isDark ? const Color(0xFF0F172A) : Colors.grey[100]!;
+    final tabDivider = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final tabInnerDivider =
+        _isDark ? const Color(0xFF1F2937) : Colors.grey[200]!;
+    final activeTabBg = _isDark ? const Color(0xFF111827) : Colors.white;
+    final inactiveTabText =
+        _isDark ? const Color(0xFF94A3B8) : Colors.grey[600]!;
     // Build tab list from loaded sheets, highlighting current
     final visibleSheets = _sheets.take(10).toList();
     return Container(
       height: 34,
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: tabBarBg,
         border: Border(
-          top: BorderSide(color: Colors.grey[300]!, width: 1),
+          top: BorderSide(color: tabDivider, width: 1),
         ),
       ),
       child: Row(
@@ -8821,10 +10037,10 @@ class _SheetScreenState extends State<SheetScreen> {
                 width: 30,
                 height: 34,
                 alignment: Alignment.center,
-                child: Icon(Icons.add, size: 16, color: Colors.grey[600]),
+                child: Icon(Icons.add, size: 16, color: inactiveTabText),
               ),
             ),
-          Container(width: 1, height: 34, color: Colors.grey[300]),
+          Container(width: 1, height: 34, color: tabDivider),
           // Sheet tabs
           Expanded(
             child: ListView.builder(
@@ -8841,9 +10057,9 @@ class _SheetScreenState extends State<SheetScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: isActive ? Colors.white : Colors.transparent,
+                      color: isActive ? activeTabBg : Colors.transparent,
                       border: Border(
-                        right: BorderSide(color: Colors.grey[200]!, width: 1),
+                        right: BorderSide(color: tabInnerDivider, width: 1),
                         top: isActive
                             ? const BorderSide(
                                 color: AppColors.primaryBlue, width: 2)
@@ -8857,7 +10073,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         fontWeight:
                             isActive ? FontWeight.w600 : FontWeight.w400,
                         color:
-                            isActive ? AppColors.primaryBlue : Colors.grey[600],
+                            isActive ? AppColors.primaryBlue : inactiveTabText,
                       ),
                     ),
                   ),
@@ -8873,6 +10089,11 @@ class _SheetScreenState extends State<SheetScreen> {
   // =============== Formula Bar (Excel-like) ===============
 
   Widget _buildFormulaBar() {
+    final formulaBg = _isDark ? const Color(0xFF111827) : Colors.white;
+    final formulaSubBg = _isDark ? const Color(0xFF0F172A) : Colors.grey[50]!;
+    final formulaBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final formulaText = _isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+    final formulaMuted = _isDark ? const Color(0xFF94A3B8) : Colors.grey[600]!;
     final cellRef = (_selectedRow != null && _selectedCol != null)
         ? _getCellReference(_selectedRow!, _selectedCol!)
         : '';
@@ -8883,9 +10104,9 @@ class _SheetScreenState extends State<SheetScreen> {
     return Container(
       height: 32,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: formulaBg,
         border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+          bottom: BorderSide(color: formulaBorder, width: 1),
         ),
       ),
       child: Row(
@@ -8897,16 +10118,16 @@ class _SheetScreenState extends State<SheetScreen> {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               border: Border(
-                right: BorderSide(color: Colors.grey[300]!, width: 1),
+                right: BorderSide(color: formulaBorder, width: 1),
               ),
-              color: Colors.grey[50],
+              color: formulaSubBg,
             ),
             child: Text(
               cellRef,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Colors.grey[800],
+                color: formulaText,
                 fontFamily: 'monospace',
               ),
             ),
@@ -8918,7 +10139,7 @@ class _SheetScreenState extends State<SheetScreen> {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               border: Border(
-                right: BorderSide(color: Colors.grey[300]!, width: 1),
+                right: BorderSide(color: formulaBorder, width: 1),
               ),
             ),
             child: Text(
@@ -8927,7 +10148,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 fontSize: 13,
                 fontStyle: FontStyle.italic,
                 fontWeight: FontWeight.bold,
-                color: Colors.grey[600],
+                color: formulaMuted,
               ),
             ),
           ),
@@ -8937,12 +10158,13 @@ class _SheetScreenState extends State<SheetScreen> {
               controller: _formulaBarController,
               focusNode: _formulaBarFocusNode,
               readOnly: isReadOnly,
-              style: const TextStyle(fontSize: 13),
-              decoration: const InputDecoration(
+              style: TextStyle(fontSize: 13, color: formulaText),
+              decoration: InputDecoration(
                 contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 border: InputBorder.none,
                 isDense: true,
+                hintStyle: TextStyle(color: formulaMuted),
               ),
               onTap: () {
                 if (_selectedRow != null &&
@@ -9066,6 +10288,11 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Widget _buildCornerCellWidget() {
+    final headerBg =
+        _isDark ? const Color(0xFF0F172A) : const Color(0xFFF8F8F8);
+    final gridBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final mutedIcon =
+        _isDark ? const Color(0xFF94A3B8) : const Color(0xFF9AA0A6);
     return GestureDetector(
       onTap: () => setState(() {
         _selectedRow = 0;
@@ -9078,24 +10305,28 @@ class _SheetScreenState extends State<SheetScreen> {
         height: _headerHeight,
         decoration: BoxDecoration(
           border: Border(
-            right: BorderSide(color: Colors.grey[300]!, width: 1),
-            bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+            right: BorderSide(color: gridBorder, width: 1),
+            bottom: BorderSide(color: gridBorder, width: 1),
           ),
-          color: const Color(0xFFF8F8F8),
+          color: headerBg,
         ),
-        child: const Center(
-          child: Icon(Icons.select_all, size: 13, color: Color(0xFF9AA0A6)),
+        child: Center(
+          child: Icon(Icons.select_all, size: 13, color: mutedIcon),
         ),
       ),
     );
   }
 
   Widget _buildHeaderRow({bool includeCorner = true}) {
+    final headerBg =
+        _isDark ? const Color(0xFF0F172A) : const Color(0xFFF8F8F8);
+    final gridBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final headerText = _isDark ? const Color(0xFFE2E8F0) : Colors.grey[700]!;
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F8F8),
+        color: headerBg,
         border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+          bottom: BorderSide(color: gridBorder, width: 1),
         ),
       ),
       child: Row(
@@ -9135,11 +10366,9 @@ class _SheetScreenState extends State<SheetScreen> {
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         border: Border(
-                          right: BorderSide(color: Colors.grey[300]!, width: 1),
+                          right: BorderSide(color: gridBorder, width: 1),
                         ),
-                        color: isColSelected
-                            ? AppColors.lightBlue
-                            : const Color(0xFFF8F8F8),
+                        color: isColSelected ? AppColors.lightBlue : headerBg,
                       ),
                       child: Text(
                         entry.value,
@@ -9148,7 +10377,7 @@ class _SheetScreenState extends State<SheetScreen> {
                           fontSize: 12,
                           color: isColSelected
                               ? AppColors.primaryBlue
-                              : Colors.grey[700],
+                              : headerText,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -9202,6 +10431,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Standalone row-number cell widget (used by the frozen left strip).
   Widget _buildRowNumCellWidget(int rowIndex) {
+    final rowHeaderBg =
+        _isDark ? const Color(0xFF0F172A) : const Color(0xFFF8F8F8);
+    final gridBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final rowNumText =
+        _isDark ? const Color(0xFF94A3B8) : const Color(0xFF9AA0A6);
     final bounds = _getSelectionBounds();
     final isRowInSelection = _selectedRow != null &&
         rowIndex >= bounds['minRow']! &&
@@ -9224,11 +10458,10 @@ class _SheetScreenState extends State<SheetScreen> {
         height: rowHeight,
         decoration: BoxDecoration(
           border: Border(
-            right: BorderSide(color: Colors.grey[300]!, width: 1),
-            bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+            right: BorderSide(color: gridBorder, width: 1),
+            bottom: BorderSide(color: gridBorder, width: 1),
           ),
-          color:
-              isRowInSelection ? AppColors.lightBlue : const Color(0xFFF8F8F8),
+          color: isRowInSelection ? AppColors.lightBlue : rowHeaderBg,
         ),
         child: Center(
           child: Text(
@@ -9236,9 +10469,7 @@ class _SheetScreenState extends State<SheetScreen> {
             style: TextStyle(
               fontSize: 11,
               fontWeight: isRowInSelection ? FontWeight.w600 : FontWeight.w400,
-              color: isRowInSelection
-                  ? AppColors.primaryBlue
-                  : const Color(0xFF9AA0A6),
+              color: isRowInSelection ? AppColors.primaryBlue : rowNumText,
             ),
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
@@ -9249,6 +10480,13 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Widget _buildDataRow(int rowIndex, {bool includeRowNum = true}) {
+    final gridBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final rowEvenBg = _isDark ? const Color(0xFF111827) : Colors.white;
+    final rowOddBg =
+        _isDark ? const Color(0xFF0F172A) : const Color(0xFFFAFAFA);
+    final editingBg = _isDark ? const Color(0xFF1F2937) : Colors.white;
+    final cellTextColor = _isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+    final lockIconColor = _isDark ? const Color(0xFF94A3B8) : Colors.grey[500]!;
     final bounds = _getSelectionBounds();
     // ignore: unused_local_variable
     final isRowInSelection = _selectedRow != null &&
@@ -9341,24 +10579,24 @@ class _SheetScreenState extends State<SheetScreen> {
                       ? Border(
                           top: customBorders['top'] == true
                               ? const BorderSide(color: Colors.black, width: 2)
-                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                              : BorderSide(color: gridBorder, width: 1),
                           right: customBorders['right'] == true
                               ? const BorderSide(color: Colors.black, width: 2)
-                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                              : BorderSide(color: gridBorder, width: 1),
                           bottom: customBorders['bottom'] == true
                               ? const BorderSide(color: Colors.black, width: 2)
-                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                              : BorderSide(color: gridBorder, width: 1),
                           left: customBorders['left'] == true
                               ? const BorderSide(color: Colors.black, width: 2)
-                              : BorderSide(color: Colors.grey[300]!, width: 1),
+                              : BorderSide(color: gridBorder, width: 1),
                         )
                       : Border(
                           right: BorderSide(
-                            color: Colors.grey[300]!,
+                            color: gridBorder,
                             width: 1,
                           ),
                           bottom: BorderSide(
-                            color: Colors.grey[300]!,
+                            color: gridBorder,
                             width: 1,
                           ),
                         ),
@@ -9369,14 +10607,12 @@ class _SheetScreenState extends State<SheetScreen> {
                       return customBg;
                     }
                     return isEditing
-                        ? Colors.white
+                        ? editingBg
                         : isActiveCell
                             ? const Color(0xFFE8F0FE)
                             : isInSel
                                 ? const Color(0xFFD2E3FC)
-                                : (rowIndex % 2 == 0
-                                    ? Colors.white
-                                    : const Color(0xFFFAFAFA));
+                                : (rowIndex % 2 == 0 ? rowEvenBg : rowOddBg);
                   }(),
                 ),
                 child: Stack(
@@ -9387,15 +10623,17 @@ class _SheetScreenState extends State<SheetScreen> {
                         TextField(
                           controller: _editController,
                           focusNode: _focusNode,
-                          style: const TextStyle(
-                              fontSize: 13, fontFamily: 'Segoe UI'),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontFamily: 'Segoe UI',
+                              color: cellTextColor),
                           decoration: InputDecoration(
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 4, vertical: 6),
                             border: InputBorder.none,
                             isDense: true,
                             filled: true,
-                            fillColor: Colors.white,
+                            fillColor: editingBg,
                           ),
                           onSubmitted: (_) {
                             _saveEdit();
@@ -9434,7 +10672,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                     : value,
                                 style: TextStyle(
                                   fontSize: fontSize,
-                                  color: _cellTextColors[ck] ?? Colors.black87,
+                                  color: _cellTextColors[ck] ?? cellTextColor,
                                   fontFamily: 'Segoe UI',
                                   fontWeight: fmts.contains('bold')
                                       ? FontWeight.bold
@@ -9566,7 +10804,7 @@ class _SheetScreenState extends State<SheetScreen> {
                             message:
                                 'Historical record — request admin unlock to edit',
                             child: Icon(Icons.lock,
-                                size: 10, color: Colors.grey[500]),
+                                size: 10, color: lockIconColor),
                           ),
                         ),
                       ),
@@ -9605,6 +10843,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
   /// Bottom info bar showing selection info (like Excel status bar)
   Widget _buildSelectionInfoBar() {
+    final statusBg =
+        _isDark ? const Color(0xFF0F172A) : const Color(0xFFF3F3F3);
+    final statusBorder = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
+    final statusText = _isDark ? const Color(0xFFCBD5E1) : Colors.grey[700]!;
+    final statusMuted = _isDark ? const Color(0xFF94A3B8) : Colors.grey[500]!;
     String info = '';
     if (_hasMultiSelection) {
       final bounds = _getSelectionBounds();
@@ -9640,9 +10883,9 @@ class _SheetScreenState extends State<SheetScreen> {
       height: 24,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3F3F3),
+        color: statusBg,
         border: Border(
-          top: BorderSide(color: Colors.grey[300]!, width: 1),
+          top: BorderSide(color: statusBorder, width: 1),
         ),
       ),
       child: Row(
@@ -9652,7 +10895,7 @@ class _SheetScreenState extends State<SheetScreen> {
               info,
               style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey[700],
+                color: statusText,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -9662,7 +10905,7 @@ class _SheetScreenState extends State<SheetScreen> {
               '${_data.length} rows × ${_columns.length} cols',
               style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey[500],
+                color: statusMuted,
               ),
             ),
           const SizedBox(width: 12),
@@ -9687,7 +10930,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: Colors.grey[700],
+                  color: statusText,
                 ),
               ),
             ),
@@ -9727,7 +10970,12 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      backgroundColor: Colors.white,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: _SheetScreenState._kBorder, width: 1),
+      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 700, maxHeight: 640),
         child: Padding(
@@ -9741,11 +10989,16 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF6A1B9A).withOpacity(0.1),
+                      color: _SheetScreenState._kBg,
                       borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: _SheetScreenState._kBorder, width: 1),
                     ),
-                    child: const Icon(Icons.dashboard_customize_outlined,
-                        color: Color(0xFF6A1B9A), size: 26),
+                    child: const Icon(
+                      Icons.dashboard_customize_outlined,
+                      color: _SheetScreenState._kGreen,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -9755,28 +11008,33 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                         const Text(
                           'Choose a Template',
                           style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primaryBlue),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: _SheetScreenState._kNavy,
+                            letterSpacing: 0.2,
+                          ),
                         ),
                         Text(
                           'Start your sheet with a pre-defined structure. You can customise it afterwards.',
-                          style:
-                              TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            height: 1.3,
+                            color: _SheetScreenState._kGray,
+                          ),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                    color: Colors.grey,
+                    icon: const Icon(Icons.close, size: 20),
+                    color: _SheetScreenState._kGray,
                   ),
                 ],
               ),
 
               const SizedBox(height: 20),
-              const Divider(height: 1),
+              const Divider(height: 1, color: _SheetScreenState._kBorder),
               const SizedBox(height: 16),
 
               // ── Template cards grid ──
@@ -9808,19 +11066,22 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                           duration: const Duration(milliseconds: 150),
                           decoration: BoxDecoration(
                             color: isHovered
-                                ? color.withOpacity(0.07)
+                                ? _SheetScreenState._kBg
                                 : Colors.white,
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: isHovered ? color : Colors.grey[300]!,
-                              width: isHovered ? 2 : 1,
+                              color: isHovered
+                                  ? color.withOpacity(0.55)
+                                  : _SheetScreenState._kBorder,
+                              width: 1.2,
                             ),
                             boxShadow: isHovered
                                 ? [
                                     BoxShadow(
-                                        color: color.withOpacity(0.15),
-                                        blurRadius: 10,
-                                        offset: const Offset(0, 4))
+                                      color: Colors.black.withOpacity(0.05),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 3),
+                                    )
                                   ]
                                 : [],
                           ),
@@ -9834,8 +11095,11 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: color.withOpacity(0.12),
+                                      color: _SheetScreenState._kBg,
                                       borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: _SheetScreenState._kBorder,
+                                      ),
                                     ),
                                     child: Icon(icon, color: color, size: 20),
                                   ),
@@ -9846,8 +11110,7 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 13,
-                                        color:
-                                            isHovered ? color : Colors.black87,
+                                        color: _SheetScreenState._kNavy,
                                       ),
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
@@ -9861,8 +11124,11 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                               // Description
                               Text(
                                 t['description'] as String,
-                                style: TextStyle(
-                                    fontSize: 11, color: Colors.grey[600]),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  height: 1.25,
+                                  color: _SheetScreenState._kGray,
+                                ),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -9878,10 +11144,11 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: color.withOpacity(0.08),
+                                      color: _SheetScreenState._kBg,
                                       borderRadius: BorderRadius.circular(6),
                                       border: Border.all(
-                                          color: color.withOpacity(0.25)),
+                                        color: _SheetScreenState._kBorder,
+                                      ),
                                     ),
                                     child: Text(
                                       c,
@@ -9898,15 +11165,20 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 6, vertical: 2),
                                             decoration: BoxDecoration(
-                                              color: Colors.grey[100],
+                                              color: _SheetScreenState._kBg,
                                               borderRadius:
                                                   BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color:
+                                                    _SheetScreenState._kBorder,
+                                              ),
                                             ),
                                             child: Text(
                                               '+${cols.length - 4} more',
                                               style: const TextStyle(
-                                                  fontSize: 9,
-                                                  color: Colors.grey),
+                                                fontSize: 9,
+                                                color: _SheetScreenState._kGray,
+                                              ),
                                             ),
                                           )
                                         ]
@@ -9922,22 +11194,29 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
               ),
 
               const SizedBox(height: 16),
-              const Divider(height: 1),
+              const Divider(height: 1, color: _SheetScreenState._kBorder),
               const SizedBox(height: 12),
 
               // ── Footer ──
               Row(
                 children: [
-                  const Icon(Icons.info_outline, size: 14, color: Colors.grey),
+                  const Icon(Icons.info_outline,
+                      size: 14, color: _SheetScreenState._kGray),
                   const SizedBox(width: 6),
                   Text(
                     'Templates pre-fill column headers and a sample row. All content is editable.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: _SheetScreenState._kGray,
+                    ),
                   ),
                   const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text('Cancel'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _SheetScreenState._kGray,
+                    ),
                   ),
                 ],
               ),

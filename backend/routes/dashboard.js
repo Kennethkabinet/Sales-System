@@ -187,7 +187,11 @@ router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, re
   try {
     const result = await pool.query(`
       SELECT id, name, created_at FROM sheets
-      WHERE is_active = TRUE AND name ILIKE '%inventory%'
+      WHERE is_active = TRUE
+        AND columns ? 'Product Name'
+        AND columns ? 'Total Quantity'
+        AND columns ? 'Maintaining'
+        AND (columns ? 'QC Code' OR columns ? 'QB Code')
       ORDER BY created_at ASC
     `);
     res.json({ success: true, sheets: result.rows });
@@ -245,7 +249,11 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
     if (!sheetIds) {
       const sheetsRes = await pool.query(`
         SELECT id FROM sheets
-        WHERE is_active = TRUE AND name ILIKE '%inventory%'
+        WHERE is_active = TRUE
+          AND columns ? 'Product Name'
+          AND columns ? 'Total Quantity'
+          AND columns ? 'Maintaining'
+          AND (columns ? 'QC Code' OR columns ? 'QB Code')
         ORDER BY id ASC
       `);
       sheetIds = sheetsRes.rows.map(r => r.id);
@@ -369,6 +377,15 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         return { month_label: label, stock_in: Math.round(v.stock_in), stock_out: Math.round(v.stock_out) };
       });
 
+    // ── 5b. Daily trend (for day-by-day charts + month/year filtering) ──────
+    const dailyTrend = Array.from(allDates)
+      .sort((a, b) => a.localeCompare(b))
+      .map((date) => ({
+        date,
+        stock_in: Math.round(dateInMap[date] || 0),
+        stock_out: Math.round(dateOutMap[date] || 0),
+      }));
+
     // ── 6. Category breakdown ───────────────────────────────────────────────
     const categoryMap = {};
     for (const p of products) {
@@ -389,7 +406,9 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         product_name: p.name,
         qc_code: p.qc_code,
         qb_code: p.qc_code,
+        maintaining_qty: Math.round(p.maintaining_qty),
         current_stock: Math.round(p.current_stock),
+        total_used: Math.round(productOutMap[`${(p.name || '').toLowerCase()}|${(p.qc_code || '').toLowerCase()}`] || 0),
       }))
       .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
@@ -433,6 +452,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       success: true,
       summary,
       monthly_trend: monthlyTrend,
+      daily_trend: dailyTrend,
       category_breakdown: categoryBreakdown,
       ink_breakdown: inkBreakdown,
       low_stock_items: lowStockItems,

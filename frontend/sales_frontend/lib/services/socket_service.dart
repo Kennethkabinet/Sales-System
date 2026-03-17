@@ -5,6 +5,7 @@ import '../config/constants.dart';
 class SocketService {
   static SocketService? _instance;
   io.Socket? _socket;
+  String? _connectedToken;
 
   // ── Legacy file-room callbacks ──
   Function(Map<String, dynamic>)? onUserJoined;
@@ -64,11 +65,31 @@ class SocketService {
 
   /// Connect to WebSocket server with auth token
   void connect(String authToken) {
+    final token = authToken.trim();
+    if (token.isEmpty) return;
+
+    // Idempotent connect: avoid creating duplicate socket sessions
+    // when multiple providers call connect with the same token.
+    if (_socket != null && _connectedToken == token) {
+      if (!(_socket?.connected ?? false)) {
+        _socket?.connect();
+      }
+      return;
+    }
+
+    // Token changed or stale socket exists, dispose it first.
+    if (_socket != null) {
+      _socket?.disconnect();
+      _socket?.dispose();
+      _socket = null;
+    }
+
+    _connectedToken = token;
     _socket = io.io(
       AppConfig.wsBaseUrl,
       io.OptionBuilder()
           .setTransports(['websocket'])
-          .setAuth({'token': 'Bearer $authToken'})
+          .setAuth({'token': 'Bearer $token'})
           .enableAutoConnect()
           .enableReconnection()
           .setReconnectionDelay(AppConfig.wsReconnectDelay.inMilliseconds)
@@ -235,6 +256,7 @@ class SocketService {
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
+    _connectedToken = null;
   }
 
   /// Clear all callbacks
