@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'providers/auth_provider.dart';
 import 'providers/data_provider.dart';
 import 'providers/theme_provider.dart';
@@ -129,7 +130,17 @@ class MyApp extends StatelessWidget {
   }
 
   ThemeData _buildLightTheme() {
-    return ThemeData(
+    final base = ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: AppColors.primaryBlue,
+        primary: AppColors.primaryBlue,
+        secondary: AppColors.primaryRed,
+        brightness: Brightness.light,
+      ),
+    );
+
+    return base.copyWith(
       colorScheme: ColorScheme.fromSeed(
         seedColor: AppColors.primaryBlue,
         primary: AppColors.primaryBlue,
@@ -137,7 +148,8 @@ class MyApp extends StatelessWidget {
         brightness: Brightness.light,
       ),
       primaryColor: AppColors.primaryBlue,
-      useMaterial3: true,
+      scaffoldBackgroundColor: AppColors.bgLight,
+      textTheme: GoogleFonts.interTextTheme(base.textTheme),
       dialogTheme: DialogThemeData(
         backgroundColor: AppColors.white,
         surfaceTintColor: Colors.transparent,
@@ -170,12 +182,12 @@ class MyApp extends StatelessWidget {
       cardTheme: CardThemeData(
         elevation: 2,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(12),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
@@ -191,7 +203,7 @@ class MyApp extends StatelessWidget {
             vertical: 12,
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(12),
           ),
         ),
       ),
@@ -206,11 +218,19 @@ class MyApp extends StatelessWidget {
       brightness: Brightness.dark,
     );
 
-    return ThemeData(
+    final base = ThemeData(
+      useMaterial3: true,
+      colorScheme: darkScheme,
+    );
+
+    return base.copyWith(
       colorScheme: darkScheme,
       primaryColor: AppColors.primaryBlue,
       scaffoldBackgroundColor: const Color(0xFF111827),
-      useMaterial3: true,
+      textTheme: GoogleFonts.interTextTheme(base.textTheme).apply(
+        bodyColor: const Color(0xFFE5E7EB),
+        displayColor: const Color(0xFFE5E7EB),
+      ),
       dialogTheme: DialogThemeData(
         backgroundColor: const Color(0xFF1F2937),
         surfaceTintColor: Colors.transparent,
@@ -244,12 +264,12 @@ class MyApp extends StatelessWidget {
         elevation: 2,
         color: const Color(0xFF1F2937),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(12),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,

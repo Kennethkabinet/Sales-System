@@ -10,6 +10,7 @@ const {
 } = require('../middleware/rbac');
 const auditService = require('../services/auditService');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const bcrypt = require('bcrypt');
 
 // Multer memory storage for sheet file imports
@@ -290,15 +291,238 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
       return res.status(400).json({ success: false, error: { code: 'EMPTY_FILE', message: 'The file appears to be empty' } });
     }
 
-    // First row = column headers
-    const columns = (rawData[0] || []).map((c, i) => c ? String(c) : `Column${i + 1}`);
-    const dataRows = rawData.slice(1).map(row => {
-      const rowObj = {};
-      columns.forEach((col, idx) => {
-        rowObj[col] = row[idx] !== undefined ? String(row[idx]) : '';
+    const toCellStr = (v) => (v == null ? '' : String(v)).trim();
+
+    const parseMaintainingLegacy = (raw) => {
+      const t = toCellStr(raw);
+      if (!t) return { qty: '', unit: '' };
+      const lower = t.toLowerCase();
+      if (lower === 'pr' || lower === 'per request' || lower === 'per-request') {
+        return { qty: '-', unit: 'PR' };
+      }
+      const cleaned = t.replace(/,/g, '');
+      const m = cleaned.match(/^(-?\d+(?:\.\d+)?)(?:\s+(.+))?$/);
+      if (!m) return { qty: '', unit: '' };
+      return { qty: toCellStr(m[1]), unit: toCellStr(m[2] || '') };
+    };
+
+
+    const header1 = (rawData[0] || []).map(toCellStr);
+    const header2 = (rawData[1] || []).map(toCellStr);
+
+    const looksLikeInventoryExport = (() => {
+      if (rawData.length < 2) return false;
+      const hasProduct = header1.includes('Product Name');
+      const hasCode = header1.includes('QC Code') || header1.includes('QB Code');
+      const hasMaintaining =
+        header1.includes('Maintaining') ||
+        header1.includes('Maintaining Qty') ||
+        header1.includes('Maintaining Unit') ||
+        header1.includes('Maintaining Status');
+      const hasTotal = header1.includes('Total Quantity');
+      if (!hasProduct || !hasCode || !hasMaintaining || !hasTotal) return false;
+
+      const maintainingEndIdx = Math.max(
+        header1.indexOf('Maintaining Unit'),
+        header1.indexOf('Maintaining Qty'),
+        header1.indexOf('Maintaining')
+      );
+      const criticalIdx = header1.indexOf('Critical');
+      const totalIdx = header1.indexOf('Total Quantity');
+      const leftEndIdx = criticalIdx >= 0 ? criticalIdx : maintainingEndIdx;
+      if (leftEndIdx < 0 || totalIdx < 0 || totalIdx <= leftEndIdx + 1) return false;
+
+      for (let i = leftEndIdx + 1; i + 1 < totalIdx; i += 2) {
+        const inVal = (header2[i] || '').toUpperCase();
+        const outVal = (header2[i + 1] || '').toUpperCase();
+        const label = header1[i];
+        if (label && inVal === 'IN' && outVal === 'OUT') return true;
+      }
+      return false;
+    })();
+
+    const monthMap = {
+      jan: 1,
+      feb: 2,
+      mar: 3,
+      apr: 4,
+      may: 5,
+      jun: 6,
+      jul: 7,
+      aug: 8,
+      sep: 9,
+      oct: 10,
+      nov: 11,
+      dec: 12,
+    };
+
+    const tryParseInventoryHeaderDateToIso = (label) => {
+      const raw = toCellStr(label).replace(/\s+TODAY\s*/i, ' ').trim();
+      if (!raw) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+      const parts = raw
+        .replace(/[,]/g, ' ')
+        .split(/\s+|\-|\//)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length < 2) return null;
+
+      const monKey = parts[0].slice(0, 3).toLowerCase();
+      const month = monthMap[monKey];
+      const day = parseInt(parts[1], 10);
+      if (!month || !Number.isFinite(day)) return null;
+
+      const now = new Date();
+      let year = now.getFullYear();
+      if (parts.length >= 3) {
+        const maybeYear = parseInt(parts[2], 10);
+        if (Number.isFinite(maybeYear) && maybeYear >= 1970 && maybeYear <= 2100) {
+          year = maybeYear;
+        }
+      }
+
+      // If year was not explicitly present, apply a simple year-boundary heuristic.
+      if (parts.length < 3) {
+        const candidate = new Date(year, month - 1, day);
+        const diffDays = (candidate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+        if (diffDays > 90) year -= 1; // e.g. importing "Dec 31" in early Jan
+        if (diffDays < -275) year += 1; // e.g. importing "Jan 2" in late Dec
+      }
+
+      const dt = new Date(year, month - 1, day);
+      const yyyy = String(dt.getFullYear()).padStart(4, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    let columns;
+    let dataRows;
+
+    if (looksLikeInventoryExport) {
+      const codeCol = header1.includes('QC Code') ? 'QC Code' : 'QB Code';
+      const productIdx = header1.indexOf('Product Name');
+      const codeIdx = header1.indexOf(codeCol);
+      const stockIdx = header1.indexOf('Stock');
+      const maintainingLegacyIdx = header1.indexOf('Maintaining');
+      const maintainingQtyIdx = header1.indexOf('Maintaining Qty');
+      const maintainingUnitIdx = header1.indexOf('Maintaining Unit');
+      const maintainingStatusIdx = header1.indexOf('Maintaining Status');
+      const criticalIdx = header1.indexOf('Critical');
+      const totalIdx = header1.indexOf('Total Quantity');
+      const maintainingEndIdx = Math.max(
+        maintainingUnitIdx,
+        maintainingQtyIdx,
+        maintainingLegacyIdx,
+      );
+      const leftEndIdx = criticalIdx >= 0 ? criticalIdx : maintainingEndIdx;
+
+      // Collect date pairs from header row 1 + IN/OUT from header row 2.
+      const datePairs = [];
+      for (let i = leftEndIdx + 1; i + 1 < totalIdx; i += 2) {
+        const label = header1[i];
+        const inVal = (header2[i] || '').toUpperCase();
+        const outVal = (header2[i + 1] || '').toUpperCase();
+        if (!label || inVal !== 'IN' || outVal !== 'OUT') continue;
+
+        const iso = tryParseInventoryHeaderDateToIso(label);
+        if (!iso) continue;
+        datePairs.push({
+          iso,
+          inIdx: i,
+          outIdx: i + 1,
+        });
+      }
+
+      // Build internal Inventory Tracker column schema.
+      columns = ['Product Name', codeCol, 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Critical'];
+      for (const p of datePairs) {
+        columns.push(`DATE:${p.iso}:IN`, `DATE:${p.iso}:OUT`);
+      }
+      columns.push('Total Quantity');
+
+      // Skip the 2nd header row from data.
+      const startRowIdx = 2;
+      dataRows = rawData.slice(startRowIdx).map((rowArr) => {
+        const row = Array.isArray(rowArr) ? rowArr : [];
+        const rowObj = {};
+        const totalVal = row[totalIdx] !== undefined ? String(row[totalIdx]) : '';
+
+        let mQty = '';
+        let mUnit = '';
+
+        const hasSplitMaintaining = maintainingQtyIdx >= 0 || maintainingUnitIdx >= 0 || maintainingStatusIdx >= 0;
+        if (hasSplitMaintaining) {
+          if (maintainingQtyIdx >= 0 && row[maintainingQtyIdx] !== undefined) mQty = String(row[maintainingQtyIdx]);
+          if (maintainingUnitIdx >= 0 && row[maintainingUnitIdx] !== undefined) mUnit = String(row[maintainingUnitIdx]);
+
+          const statusNorm = toCellStr(maintainingStatusIdx >= 0 && row[maintainingStatusIdx] !== undefined ? String(row[maintainingStatusIdx]) : '').toLowerCase();
+          mQty = toCellStr(mQty);
+          mUnit = toCellStr(mUnit);
+
+          const isPr =
+            statusNorm === 'pr' || statusNorm === 'per request' || statusNorm === 'per-request' ||
+            toCellStr(mUnit).toLowerCase() === 'pr' ||
+            toCellStr(mQty) === '-';
+          if (isPr) {
+            mQty = '-';
+            mUnit = 'PR';
+          }
+        } else {
+          const legacyVal = maintainingLegacyIdx >= 0 && row[maintainingLegacyIdx] !== undefined ? String(row[maintainingLegacyIdx]) : '';
+          const parsed = parseMaintainingLegacy(legacyVal);
+          mQty = parsed.qty;
+          mUnit = parsed.unit;
+        }
+
+        rowObj['Product Name'] = (productIdx >= 0 && row[productIdx] !== undefined)
+            ? String(row[productIdx])
+            : '';
+        rowObj[codeCol] = (codeIdx >= 0 && row[codeIdx] !== undefined)
+            ? String(row[codeIdx])
+            : '';
+        rowObj['Maintaining Qty'] = mQty;
+        rowObj['Maintaining Unit'] = mUnit;
+
+        // Stock/Critical may be missing in older exports; derive defaults.
+        if (stockIdx >= 0 && row[stockIdx] !== undefined) {
+          rowObj['Stock'] = String(row[stockIdx]);
+        } else {
+          const t = String(totalVal ?? '').trim();
+          rowObj['Stock'] = t.length ? t : '0';
+        }
+        if (criticalIdx >= 0 && row[criticalIdx] !== undefined) {
+          rowObj['Critical'] = String(row[criticalIdx]);
+        } else {
+          const unitUp = toCellStr(mUnit).toUpperCase();
+          const qtyNum = parseFloat(String(mQty || '').replace(/,/g, ''));
+          if (unitUp === 'PR' || toCellStr(mQty) === '-' || !Number.isFinite(qtyNum) || qtyNum <= 0) {
+            rowObj['Critical'] = '0';
+          } else {
+            rowObj['Critical'] = String(Math.round(qtyNum));
+          }
+        }
+
+        for (const p of datePairs) {
+          rowObj[`DATE:${p.iso}:IN`] = row[p.inIdx] !== undefined ? String(row[p.inIdx]) : '';
+          rowObj[`DATE:${p.iso}:OUT`] = row[p.outIdx] !== undefined ? String(row[p.outIdx]) : '';
+        }
+        rowObj['Total Quantity'] = totalVal;
+        return rowObj;
       });
-      return rowObj;
-    });
+    } else {
+      // First row = column headers
+      columns = (rawData[0] || []).map((c, i) => (c ? String(c) : `Column${i + 1}`));
+      dataRows = rawData.slice(1).map((rowArr) => {
+        const row = Array.isArray(rowArr) ? rowArr : [];
+        const rowObj = {};
+        columns.forEach((col, idx) => {
+          rowObj[col] = row[idx] !== undefined ? String(row[idx]) : '';
+        });
+        return rowObj;
+      });
+    }
 
     // Create the sheet record
     const sheetResult = await pool.query(`
@@ -1157,14 +1381,11 @@ router.get('/:id/export', authenticate, async (req, res) => {
       ORDER BY row_number
     `, [id]);
 
-    // Prepare data for SheetJS
     const columns = sheet.columns;
     let rows = dataResult.rows.map(r => r.data);
 
-    // Filter out any row that exactly matches the column headers (A, B, C, D, etc.)
     rows = rows.filter(row => {
       const values = columns.map(col => row[col] || '');
-      // Check if this row contains values that exactly match column names
       const isHeaderRow = values.filter(v => v).length > 0 && 
                           values.every((val, idx) => {
                             return val === columns[idx] || val === '';
@@ -1173,16 +1394,110 @@ router.get('/:id/export', authenticate, async (req, res) => {
       return !isHeaderRow;
     });
 
-    // Create workbook
-    const wb = XLSX.utils.book_new();
+    const normalizeFormat = String(format || 'xlsx').toLowerCase();
+
+    // CSV export stays simple.
+    if (normalizeFormat === 'csv') {
+      const wb = XLSX.utils.book_new();
+
+      // ── Detect Inventory Tracker (has DATE:YYYY-MM-DD:IN columns) ──
+      const invDateRegex = /^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/;
+      const isInventoryTracker = columns.some(col => invDateRegex.test(col));
+
+      if (isInventoryTracker) {
+        const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
+        const frozenRight = columns.filter(col => col === 'Total Quantity');
+        const dates = [...new Set(
+          columns
+            .filter(col => /^DATE:\d{4}-\d{2}-\d{2}:IN$/.test(col))
+            .map(col => col.split(':')[1])
+        )].sort();
+
+        const fmtDate = (d) => {
+          const dt = new Date(d + 'T00:00:00');
+          return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        };
+
+        const headerRow1 = [
+          ...frozenLeft,
+          ...dates.flatMap(d => [fmtDate(d), '']),
+          ...frozenRight,
+        ];
+        const headerRow2 = [
+          ...frozenLeft.map(() => ''),
+          ...dates.flatMap(() => ['IN', 'OUT']),
+          ...frozenRight.map(() => ''),
+        ];
+
+        const wsData = [headerRow1, headerRow2];
+        rows.forEach(row => {
+          const rowArr = [
+            ...frozenLeft.map(col => row[col] || ''),
+            ...dates.flatMap(d => [row[`DATE:${d}:IN`] || '', row[`DATE:${d}:OUT`] || '']),
+            ...frozenRight.map(col => row[col] || ''),
+          ];
+          wsData.push(rowArr);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
+      } else {
+        const wsData = [];
+        wsData.push(columns);
+        rows.forEach(row => {
+          const rowArray = columns.map(col => row[col] || '');
+          wsData.push(rowArray);
+        });
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
+      }
+
+      const fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'csv' });
+      const fileName = `${sheet.name.replace(/[^a-zA-Z0-9]/g, '_')}.csv`;
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(fileBuffer);
+
+      await auditService.log({
+        userId: req.user.id,
+        action: 'EXPORT',
+        entityType: 'sheets',
+        entityId: parseInt(id),
+        metadata: { format: 'csv', name: sheet.name }
+      });
+      return;
+    }
+
+    // Styled XLSX export (ExcelJS)
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Sales System';
+    wb.created = new Date();
+    const ws = wb.addWorksheet(sheet.name.substring(0, 31));
+
+    const headerFill1 = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } }; // dark
+    const headerFill2 = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }; // light
+    const headerFont1 = { bold: true, color: { argb: 'FFFFFFFF' } };
+    const headerFont2 = { bold: true, color: { argb: 'FF111827' } };
+    const thinBorder = {
+      top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+      right: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+    };
 
     // ── Detect Inventory Tracker (has DATE:YYYY-MM-DD:IN columns) ──
     const invDateRegex = /^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/;
     const isInventoryTracker = columns.some(col => invDateRegex.test(col));
 
+    const applyBorders = (rowNumber, colCount) => {
+      for (let c = 1; c <= colCount; c++) {
+        const cell = ws.getRow(rowNumber).getCell(c);
+        cell.border = thinBorder;
+      }
+    };
+
     if (isInventoryTracker) {
-      // Categorise columns
-      const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'Maintaining'].includes(col));
+      const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
       const frozenRight = columns.filter(col => col === 'Total Quantity');
       const dates = [...new Set(
         columns
@@ -1190,27 +1505,24 @@ router.get('/:id/export', authenticate, async (req, res) => {
           .map(col => col.split(':')[1])
       )].sort();
 
-      // Helper: format date as "Feb-17"
       const fmtDate = (d) => {
         const dt = new Date(d + 'T00:00:00');
         return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       };
 
-      // Row 1: Product Name | QC Code | Maintaining | Feb-17 | (blank) | Feb-18 | (blank) | ... | Total Quantity
       const headerRow1 = [
         ...frozenLeft,
         ...dates.flatMap(d => [fmtDate(d), '']),
         ...frozenRight,
       ];
-
-      // Row 2: (blank per frozen left) | IN | OUT | IN | OUT | ... | (blank per frozen right)
       const headerRow2 = [
         ...frozenLeft.map(() => ''),
         ...dates.flatMap(() => ['IN', 'OUT']),
         ...frozenRight.map(() => ''),
       ];
 
-      const wsData = [headerRow1, headerRow2];
+      ws.addRow(headerRow1);
+      ws.addRow(headerRow2);
 
       // Data rows
       rows.forEach(row => {
@@ -1219,49 +1531,75 @@ router.get('/:id/export', authenticate, async (req, res) => {
           ...dates.flatMap(d => [row[`DATE:${d}:IN`] || '', row[`DATE:${d}:OUT`] || '']),
           ...frozenRight.map(col => row[col] || ''),
         ];
-        wsData.push(rowArr);
+        ws.addRow(rowArr);
       });
 
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const totalCols = headerRow1.length;
 
-      // Merge date group cells across IN/OUT pairs in row 1 (r=0)
-      ws['!merges'] = [];
-      let colIdx = frozenLeft.length;
+      // Merges across date headers (row 1)
+      let colIdx = frozenLeft.length + 1; // 1-based
       for (let i = 0; i < dates.length; i++) {
-        ws['!merges'].push({ s: { r: 0, c: colIdx }, e: { r: 0, c: colIdx + 1 } });
+        ws.mergeCells(1, colIdx, 1, colIdx + 1);
         colIdx += 2;
       }
 
-      // Column widths
-      ws['!cols'] = [
-        ...frozenLeft.map(() => ({ wch: 18 })),
-        ...dates.flatMap(() => [{ wch: 10 }, { wch: 10 }]),
-        ...frozenRight.map(() => ({ wch: 16 })),
-      ];
-
-      XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
-    } else {
-      // ── Standard export with column header row 1 ──
-      const wsData = [];
-      // Header row
-      wsData.push(columns);
-      // Data rows
-      rows.forEach(row => {
-        const rowArray = columns.map(col => row[col] || '');
-        wsData.push(rowArray);
+      // Styling header rows
+      const r1 = ws.getRow(1);
+      r1.height = 22;
+      r1.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = headerFill1;
+        cell.font = headerFont1;
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
       });
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
-      XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
+      applyBorders(1, totalCols);
+
+      const r2 = ws.getRow(2);
+      r2.height = 18;
+      r2.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = headerFill2;
+        cell.font = headerFont2;
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      });
+      applyBorders(2, totalCols);
+
+      // Column widths
+      const widths = [
+        ...frozenLeft.map(() => 18),
+        ...dates.flatMap(() => [10, 10]),
+        ...frozenRight.map(() => 16),
+      ];
+      ws.columns = widths.map((w) => ({ width: w }));
+
+      // Freeze top 2 rows + frozen left columns
+      ws.views = [{ state: 'frozen', xSplit: frozenLeft.length, ySplit: 2 }];
+    } else {
+      // Standard sheet: header row + data
+      ws.addRow(columns);
+      rows.forEach(row => {
+        ws.addRow(columns.map(col => row[col] || ''));
+      });
+
+      const totalCols = columns.length;
+      const r1 = ws.getRow(1);
+      r1.height = 22;
+      r1.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = headerFill1;
+        cell.font = headerFont1;
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      });
+      applyBorders(1, totalCols);
+
+      // Basic widths
+      ws.columns = columns.map(() => ({ width: 18 }));
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
     }
 
     // Generate buffer
-    const fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: format === 'csv' ? 'csv' : 'xlsx' });
+    const fileBuffer = await wb.xlsx.writeBuffer();
 
     // Set headers
-    const fileName = `${sheet.name.replace(/[^a-zA-Z0-9]/g, '_')}.${format === 'csv' ? 'csv' : 'xlsx'}`;
-    const mimeType = format === 'csv' 
-      ? 'text/csv' 
-      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const fileName = `${sheet.name.replace(/[^a-zA-Z0-9]/g, '_')}.xlsx`;
+    const mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

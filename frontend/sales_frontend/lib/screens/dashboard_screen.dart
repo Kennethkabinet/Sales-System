@@ -1,4 +1,5 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 import '../providers/auth_provider.dart';
@@ -26,6 +27,10 @@ const Color _kContentBg = Color(0xFFF9FAFB); // light grey background
 const Color _kHeaderOrange = Color(0xFFE44408); // orange for accents
 const Color _kBorder = Color(0xFFE5E7EB); // neutral border
 
+// Card radii (kept local to this screen for safety)
+const double _kCardRadius = 18;
+const double _kCardRadiusSm = 16;
+
 const List<String> _kMonthNamesShort = [
   'Jan',
   'Feb',
@@ -40,6 +45,10 @@ const List<String> _kMonthNamesShort = [
   'Nov',
   'Dec',
 ];
+
+class _FocusHeaderSearchIntent extends Intent {
+  const _FocusHeaderSearchIntent();
+}
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -59,6 +68,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final List<String> _recentSearchLabels = [];
   List<Map<String, dynamic>> _sheetFoldersForSearch = [];
   static const int _maxRecentSearches = 6;
+
+  void _focusHeaderSearch() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FocusScope.of(context).requestFocus(_headerSearchFocus);
+
+      final text = _headerSearchCtrl.text;
+      _headerSearchCtrl.selection = TextSelection.fromPosition(
+        TextPosition(offset: text.length),
+      );
+
+      if (text.isEmpty) {
+        _headerSearchCtrl.value = const TextEditingValue(
+          text: ' ',
+          selection: TextSelection.collapsed(offset: 1),
+        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _headerSearchCtrl.value = const TextEditingValue(
+            text: '',
+            selection: TextSelection.collapsed(offset: 0),
+          );
+        });
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -426,199 +461,245 @@ class _DashboardScreenState extends State<DashboardScreen> {
       data: data,
     );
 
-    return Scaffold(
-      backgroundColor: pageBg,
-      body: Row(
-        children: [
-          // ── Sidebar ──
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: _sidebarExpanded ? 220 : 68,
-            clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(
-              color: sidebarBg,
-              border: Border(
-                right: BorderSide(color: borderColor, width: 1),
-              ),
-            ),
-            child: Column(
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyK, control: true):
+            _FocusHeaderSearchIntent(),
+        SingleActivator(LogicalKeyboardKey.keyK, meta: true):
+            _FocusHeaderSearchIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _FocusHeaderSearchIntent:
+              CallbackAction<_FocusHeaderSearchIntent>(onInvoke: (_) {
+            _focusHeaderSearch();
+            return null;
+          }),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            backgroundColor: pageBg,
+            body: Row(
               children: [
-                // Header: logo + brand name + hamburger
-                Container(
-                  height: 64,
-                  padding: EdgeInsets.only(
-                    left: _sidebarExpanded ? 8 : 0,
-                    right: _sidebarExpanded ? 8 : 0,
-                    top: 4,
-                    bottom: 4,
+                // ── Sidebar ──
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: _sidebarExpanded ? 220 : 68,
+                  clipBehavior: Clip.hardEdge,
+                  decoration: BoxDecoration(
+                    color: sidebarBg,
+                    border: Border(
+                      right: BorderSide(color: borderColor, width: 1),
+                    ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: _sidebarExpanded
-                        ? MainAxisAlignment.start
-                        : MainAxisAlignment.center,
+                  child: Column(
                     children: [
-                      if (_sidebarExpanded) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(left: 12),
-                          child: IconButton(
-                            icon: Icon(Icons.menu, color: mutedText, size: 22),
-                            onPressed: () =>
-                                setState(() => _sidebarExpanded = false),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                                minWidth: 32, minHeight: 32),
-                          ),
+                      // Header: logo + brand name + hamburger
+                      Container(
+                        height: 64,
+                        padding: EdgeInsets.only(
+                          left: _sidebarExpanded ? 8 : 0,
+                          right: _sidebarExpanded ? 8 : 0,
+                          top: 4,
+                          bottom: 4,
                         ),
-                        Expanded(
-                          child: Center(
-                            child: SizedBox(
-                              width: 182,
-                              height: 46,
-                              child: Image.asset(
-                                isDark
-                                    ? 'assets/images/logo_combined_dark.png'
-                                    : 'assets/images/logo_combined.png',
-                                fit: BoxFit.contain,
-                                alignment: Alignment.center,
-                                errorBuilder: (_, __, ___) => const Icon(
-                                  Icons.diamond,
-                                  size: 18,
-                                  color: AppColors.primaryOrange,
+                        child: Row(
+                          mainAxisAlignment: _sidebarExpanded
+                              ? MainAxisAlignment.start
+                              : MainAxisAlignment.center,
+                          children: [
+                            if (_sidebarExpanded) ...[
+                              Padding(
+                                padding: const EdgeInsets.only(left: 12),
+                                child: IconButton(
+                                  icon: Icon(Icons.menu,
+                                      color: mutedText, size: 22),
+                                  onPressed: () =>
+                                      setState(() => _sidebarExpanded = false),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                      minWidth: 32, minHeight: 32),
                                 ),
                               ),
-                            ),
-                          ),
+                              Expanded(
+                                child: Center(
+                                  child: SizedBox(
+                                    width: 182,
+                                    height: 46,
+                                    child: Image.asset(
+                                      isDark
+                                          ? 'assets/images/logo_combined_dark.png'
+                                          : 'assets/images/logo_combined.png',
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.center,
+                                      errorBuilder: (_, __, ___) => const Icon(
+                                        Icons.diamond,
+                                        size: 18,
+                                        color: AppColors.primaryOrange,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 44),
+                            ] else
+                              IconButton(
+                                icon: Icon(Icons.menu,
+                                    color: mutedText, size: 22),
+                                onPressed: () => setState(
+                                    () => _sidebarExpanded = !_sidebarExpanded),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(
+                                    minWidth: 32, minHeight: 32),
+                              ),
+                          ],
                         ),
-                        const SizedBox(width: 44),
-                      ] else
-                        IconButton(
-                          icon: Icon(Icons.menu, color: mutedText, size: 22),
-                          onPressed: () => setState(
-                              () => _sidebarExpanded = !_sidebarExpanded),
+                      ),
+
+                      // User profile
+                      _buildProfile(auth),
+
+                      const SizedBox(height: 12),
+
+                      // Nav items
+                      Expanded(
+                        child: ListView(
+                          primary: false,
                           padding: EdgeInsets.zero,
-                          constraints:
-                              const BoxConstraints(minWidth: 32, minHeight: 32),
+                          children: [
+                            if (_sidebarExpanded)
+                              _buildNavSectionHeader('MAIN'),
+                            ...mainNavItems.map((item) {
+                              final selected = _selectedIndex == item.index;
+                              return _buildNavTile(item, selected);
+                            }),
+                            if (_sidebarExpanded)
+                              _buildNavSectionHeader('MANAGEMENT'),
+                            ...managementNavItems.map((item) {
+                              final selected = _selectedIndex == item.index;
+                              return _buildNavTile(item, selected);
+                            }),
+                            if (_sidebarExpanded && systemNavItems.isNotEmpty)
+                              _buildNavSectionHeader('SYSTEM'),
+                            ...systemNavItems.map((item) {
+                              final selected = _selectedIndex == item.index;
+                              return _buildNavTile(item, selected);
+                            }),
+                          ],
                         ),
+                      ),
+
+                      // Logout
+                      _buildLogoutButton(auth),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
 
-                // User profile
-                _buildProfile(auth),
-
-                const SizedBox(height: 12),
-
-                // Nav items
+                // ── Main content ──
                 Expanded(
-                  child: ListView(
-                    primary: false,
-                    padding: EdgeInsets.zero,
+                  child: Column(
                     children: [
-                      if (_sidebarExpanded) _buildNavSectionHeader('MAIN'),
-                      ...mainNavItems.map((item) {
-                        final selected = _selectedIndex == item.index;
-                        return _buildNavTile(item, selected);
-                      }),
-                      if (_sidebarExpanded)
-                        _buildNavSectionHeader('MANAGEMENT'),
-                      ...managementNavItems.map((item) {
-                        final selected = _selectedIndex == item.index;
-                        return _buildNavTile(item, selected);
-                      }),
-                      if (_sidebarExpanded && systemNavItems.isNotEmpty)
-                        _buildNavSectionHeader('SYSTEM'),
-                      ...systemNavItems.map((item) {
-                        final selected = _selectedIndex == item.index;
-                        return _buildNavTile(item, selected);
-                      }),
-                    ],
-                  ),
-                ),
-
-                // Logout
-                _buildLogoutButton(auth),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-
-          // ── Main content ──
-          Expanded(
-            child: Column(
-              children: [
-                // Top bar (floating card)
-                Container(
-                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
-                  color: pageBg,
-                  child: Container(
-                    height: 56,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF1F2937) : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: borderColor),
-                    ),
-                    child: Row(
-                      children: [
-                        Text(
-                          _currentTitle,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: isDark
-                                ? const Color(0xFFF3F4F6)
-                                : const Color(0xFF1F2937),
-                          ),
-                        ),
-                        const Spacer(),
-                        Container(
-                          width: 320,
-                          height: 40,
+                      // Top bar (floating card)
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
+                        color: pageBg,
+                        child: Container(
+                          height: 56,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
                             color:
-                                isDark ? const Color(0xFF111827) : _kContentBg,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: borderColor),
+                                isDark ? const Color(0xFF1F2937) : Colors.white,
+                            borderRadius: BorderRadius.circular(_kCardRadiusSm),
+                            border: Border.all(
+                              color: borderColor.withValues(
+                                alpha: isDark ? 0.9 : 0.75,
+                              ),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(
+                                  alpha: isDark ? 0.28 : 0.05,
+                                ),
+                                blurRadius: 18,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
                           ),
-                          child: _buildHeaderSearch(
-                            targets: searchTargets,
-                            isDark: isDark,
-                            borderColor: borderColor,
-                            mutedText: mutedText,
+                          child: Row(
+                            children: [
+                              Text(
+                                _currentTitle,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark
+                                      ? const Color(0xFFF3F4F6)
+                                      : const Color(0xFF1F2937),
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                width: 320,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? const Color(0xFF111827)
+                                      : _kContentBg,
+                                  borderRadius:
+                                      BorderRadius.circular(_kCardRadiusSm),
+                                  border: Border.all(
+                                    color: borderColor.withValues(
+                                      alpha: isDark ? 0.85 : 0.7,
+                                    ),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: isDark ? 0.20 : 0.03,
+                                      ),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                                ),
+                                child: _buildHeaderSearch(
+                                  targets: searchTargets,
+                                  isDark: isDark,
+                                  borderColor: borderColor,
+                                  mutedText: mutedText,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              _HeaderIconButton(
+                                icon: isDark
+                                    ? Icons.dark_mode_outlined
+                                    : Icons.light_mode_outlined,
+                                badge: 0,
+                                onTap: () =>
+                                    context.read<ThemeProvider>().toggleTheme(),
+                              ),
+                              const SizedBox(width: 14),
+                              _buildHeaderProfile(auth),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        _HeaderIconButton(
-                          icon: isDark
-                              ? Icons.dark_mode_outlined
-                              : Icons.light_mode_outlined,
-                          badge: 0,
-                          onTap: () =>
-                              context.read<ThemeProvider>().toggleTheme(),
+                      ),
+                      // Page body
+                      Expanded(
+                        child: IndexedStack(
+                          index: _selectedIndex.clamp(0, pages.length - 1),
+                          children: pages,
                         ),
-                        const SizedBox(width: 8),
-                        _HeaderIconButton(
-                          icon: Icons.notifications_none_outlined,
-                          badge: 0,
-                          onTap: () {},
-                        ),
-                        const SizedBox(width: 14),
-                        _buildHeaderProfile(auth),
-                      ],
-                    ),
-                  ),
-                ),
-                // Page body
-                Expanded(
-                  child: IndexedStack(
-                    index: _selectedIndex.clamp(0, pages.length - 1),
-                    children: pages,
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -629,7 +710,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required Color borderColor,
     required Color mutedText,
   }) {
-    return Autocomplete<_GlobalSearchTarget>(
+    return RawAutocomplete<_GlobalSearchTarget>(
+      textEditingController: _headerSearchCtrl,
+      focusNode: _headerSearchFocus,
       optionsBuilder: (value) => _searchMatches(value.text, targets),
       displayStringForOption: (option) => option.label,
       onSelected: _goToSearchTarget,
@@ -750,9 +833,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         );
       },
       fieldViewBuilder: (context, textCtrl, focusNode, onSubmitted) {
-        if (_headerSearchCtrl.text != textCtrl.text) {
-          _headerSearchCtrl.value = textCtrl.value;
-        }
         return TextField(
           controller: textCtrl,
           focusNode: focusNode,
@@ -799,6 +879,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           onChanged: (value) {
+            // Keep controller in sync for the options header label.
             _headerSearchCtrl.value = textCtrl.value;
           },
           onTap: () {
@@ -972,7 +1053,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         border: Border.all(color: borderColor),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.20 : 0.03),
+            color: Colors.black.withValues(alpha: isDark ? 0.20 : 0.03),
             blurRadius: 10,
             offset: const Offset(0, 3),
           )
@@ -1024,8 +1105,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final inactiveColor =
         isDark ? const Color(0xFFD1D5DB) : _kSidebarInactiveGrey;
     final selectedBg = isDark ? const Color(0x332563EB) : _kSidebarBgActive;
-    final selectedBorder =
-        isDark ? const Color(0x665B8CFF) : Colors.transparent;
+    final selectedBorder = isDark
+        ? const Color(0x665B8CFF)
+        : _kSidebarActiveBlue.withValues(alpha: 0.10);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Material(
@@ -1038,11 +1120,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
             borderRadius: BorderRadius.circular(14),
             border:
                 selected ? Border.all(color: selectedBorder, width: 1) : null,
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: _kSidebarActiveBlue.withValues(
+                        alpha: isDark ? 0.22 : 0.10,
+                      ),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : null,
           ),
           child: InkWell(
             borderRadius: BorderRadius.circular(14),
             hoverColor:
-                isDark ? const Color(0xFF374151) : const Color(0xFFF3F4F6),
+                isDark ? const Color(0xFF374151) : const Color(0xFFF4F7FB),
             splashColor:
                 isDark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
             onTap: () {
@@ -1069,7 +1162,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Container(
                           width: 3,
                           decoration: BoxDecoration(
-                            color: _kSidebarActiveBlue,
+                            color: _kSidebarActiveBlue.withValues(
+                              alpha: isDark ? 0.9 : 1.0,
+                            ),
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),
@@ -1100,8 +1195,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   color: selected
                                       ? _kSidebarActiveBlue
                                       : inactiveColor,
-                                  fontWeight: FontWeight.w700,
+                                  fontWeight: selected
+                                      ? FontWeight.w800
+                                      : FontWeight.w700,
                                   fontSize: 13,
+                                  letterSpacing: 0.1,
                                 ),
                               ),
                             ),
@@ -1150,7 +1248,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           hoverColor:
-              isDark ? const Color(0xFF374151) : const Color(0xFFF3F4F6),
+              isDark ? const Color(0xFF374151) : const Color(0xFFF4F7FB),
           splashColor:
               isDark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
           onTap: () async {
@@ -1267,14 +1365,21 @@ class _HeaderIconButton extends StatelessWidget {
         isDark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(10),
       child: Container(
         width: 36,
         height: 36,
         decoration: BoxDecoration(
           color: background,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: borderColor),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor.withValues(alpha: 0.85)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 5),
+            ),
+          ],
         ),
         child: Stack(
           alignment: Alignment.center,
@@ -1331,7 +1436,7 @@ class _DashboardContentState extends State<_DashboardContent> {
   int _statPageIndex = 0;
   int? _selectedStatCardIndex;
 
-  _TrendGroupBy _trendGroupBy = _TrendGroupBy.month;
+  _TrendGroupBy _trendGroupBy = _TrendGroupBy.day;
 
   // Sheet filter state
   Set<int> _selectedSheetIds = {}; // empty = all sheets
@@ -1662,19 +1767,24 @@ class _DashboardContentState extends State<_DashboardContent> {
     }).toList();
   }
 
-  Widget _buildTrendGroupByControl() {
+  Widget _buildTrendGroupByControl({required bool supportsDay}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = isDark ? const Color(0xFF334155) : const Color(0xFFDCE3EC);
     final hint = isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280);
     final inputBg = isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
 
-    final effective = _trendGroupBy;
+    final effective = supportsDay ? _trendGroupBy : _TrendGroupBy.month;
 
-    const options = <_TrendGroupBy>[
-      _TrendGroupBy.day,
-      _TrendGroupBy.month,
-      _TrendGroupBy.year,
-    ];
+    final options = supportsDay
+        ? const <_TrendGroupBy>[
+            _TrendGroupBy.day,
+            _TrendGroupBy.month,
+            _TrendGroupBy.year,
+          ]
+        : const <_TrendGroupBy>[
+            _TrendGroupBy.month,
+            _TrendGroupBy.year,
+          ];
 
     String label(_TrendGroupBy g) {
       switch (g) {
@@ -1690,7 +1800,7 @@ class _DashboardContentState extends State<_DashboardContent> {
     return SizedBox(
       width: 128,
       child: DropdownButtonFormField<_TrendGroupBy>(
-        value: effective,
+        initialValue: effective,
         isDense: true,
         decoration: InputDecoration(
           isDense: true,
@@ -1832,7 +1942,8 @@ class _DashboardContentState extends State<_DashboardContent> {
       {required List<Map<String, dynamic>> sheets, bool decorate = true}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final surface = isDark ? const Color(0xFF111827) : Colors.white;
-    final border = isDark ? const Color(0xFF334155) : _kBorder.withOpacity(0.6);
+    final border =
+        isDark ? const Color(0xFF334155) : _kBorder.withValues(alpha: 0.6);
     final text = isDark ? const Color(0xFFD1D5DB) : const Color(0xFF5F6368);
     final clearBg = isDark ? const Color(0xFF0F172A) : Colors.grey.shade100;
     final clearBorder = isDark ? const Color(0xFF334155) : Colors.grey.shade300;
@@ -1954,7 +2065,8 @@ class _DashboardContentState extends State<_DashboardContent> {
         final filteredAlertsBase =
             allAlerts.where((item) => _matchesDashboardFilters(item)).toList();
         final supportsDay = dailyTrendRaw.isNotEmpty;
-        final effectiveGroupBy = _trendGroupBy;
+        final effectiveGroupBy =
+            supportsDay ? _trendGroupBy : _TrendGroupBy.month;
 
         final yearsFromData = supportsDay
             ? _trendYears(List<Map<String, dynamic>>.from(dailyTrendRaw))
@@ -2146,6 +2258,15 @@ class _DashboardContentState extends State<_DashboardContent> {
                           title: 'Stock Level Status',
                           icon: Icons.pie_chart_outline_rounded,
                           iconColor: const Color(0xFF2563EB),
+                          showExpandButton: true,
+                          expandedBuilder: (ctx) => SizedBox(
+                            height: 520,
+                            child: _StockStatusDonutChart(
+                              totalProducts: totalProducts,
+                              lowStockCount: lowCount,
+                              criticalCount: criticalCount,
+                            ),
+                          ),
                           child: SizedBox(
                             height: 240,
                             child: _StockStatusDonutChart(
@@ -2163,6 +2284,13 @@ class _DashboardContentState extends State<_DashboardContent> {
                           title: 'Stock In vs Stock Out',
                           icon: Icons.compare_arrows_rounded,
                           iconColor: const Color(0xFF2E7D32),
+                          showExpandButton: true,
+                          expandedBuilder: (ctx) => SizedBox(
+                            height: 520,
+                            child: _StockInOutChart(
+                              data: trendData,
+                            ),
+                          ),
                           child: SizedBox(
                             height: 240,
                             child: _StockInOutChart(
@@ -2182,7 +2310,16 @@ class _DashboardContentState extends State<_DashboardContent> {
                   title: 'Inventory Movement Trend',
                   icon: Icons.trending_up_rounded,
                   iconColor: AppColors.primaryBlue,
-                  headerTrailing: _buildTrendGroupByControl(),
+                  headerTrailing: _buildTrendGroupByControl(
+                    supportsDay: supportsDay,
+                  ),
+                  showExpandButton: true,
+                  expandedBuilder: (ctx) => SizedBox(
+                    height: 560,
+                    child: _MonthlyUsageChart(
+                      data: trendData,
+                    ),
+                  ),
                   child: SizedBox(
                     height: 300,
                     child: _MonthlyUsageChart(
@@ -2203,6 +2340,13 @@ class _DashboardContentState extends State<_DashboardContent> {
                           title: 'Top Used Products',
                           icon: Icons.bar_chart_rounded,
                           iconColor: const Color(0xFFF59E0B),
+                          showExpandButton: true,
+                          expandedBuilder: (ctx) => SizedBox(
+                            height: 560,
+                            child: _TopUsedProductsChart(
+                              data: filteredProductStocks,
+                            ),
+                          ),
                           child: SizedBox(
                             height: 260,
                             child: _TopUsedProductsChart(
@@ -2217,6 +2361,13 @@ class _DashboardContentState extends State<_DashboardContent> {
                           title: 'Stock vs Maintaining Level',
                           icon: Icons.balance_outlined,
                           iconColor: const Color(0xFF0EA5E9),
+                          showExpandButton: true,
+                          expandedBuilder: (ctx) => SizedBox(
+                            height: 560,
+                            child: _StockVsMaintainingChart(
+                              data: filteredProductStocks,
+                            ),
+                          ),
                           child: SizedBox(
                             height: 260,
                             child: _StockVsMaintainingChart(
@@ -2609,7 +2760,8 @@ class _StatCardState extends State<_StatCard> {
     final cardTop = isDark ? const Color(0xFF0F172A) : Colors.white;
     final cardBottom =
         isDark ? const Color(0xFF0B1220) : d.bgColor.withValues(alpha: 0.25);
-    final border = isDark ? const Color(0xFF334155) : _kBorder.withOpacity(0.6);
+    final border =
+        isDark ? const Color(0xFF334155) : _kBorder.withValues(alpha: 0.6);
     final titleColor =
         isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280);
     final valueColor =
@@ -2642,7 +2794,7 @@ class _StatCardState extends State<_StatCard> {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(_kCardRadiusSm),
             border: Border.all(color: border, width: 0.8),
             boxShadow: [
               BoxShadow(
@@ -2972,6 +3124,8 @@ class _DashCard extends StatelessWidget {
   final Color? iconColor;
   final bool showHeader;
   final Widget? headerTrailing;
+  final bool showExpandButton;
+  final Widget Function(BuildContext context)? expandedBuilder;
 
   const _DashCard({
     required this.title,
@@ -2980,6 +3134,8 @@ class _DashCard extends StatelessWidget {
     this.iconColor,
     this.showHeader = true,
     this.headerTrailing,
+    this.showExpandButton = false,
+    this.expandedBuilder,
   });
 
   @override
@@ -2989,9 +3145,135 @@ class _DashCard extends StatelessWidget {
     final cardBottom =
         isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFF);
     final border =
-        isDark ? const Color(0xFF334155) : _kBorder.withOpacity(0.55);
+        isDark ? const Color(0xFF334155) : _kBorder.withValues(alpha: 0.55);
     final titleColor =
         isDark ? const Color(0xFFE5E7EB) : const Color(0xFF202124);
+
+    final actionBg = isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
+    final actionBorder = isDark ? const Color(0xFF374151) : _kBorder;
+    final actionIcon =
+        isDark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
+
+    void openExpanded() {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) {
+          final isDark = Theme.of(ctx).brightness == Brightness.dark;
+          final cardTop =
+              isDark ? const Color(0xFF111827) : const Color(0xFFFFFFFF);
+          final cardBottom =
+              isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFF);
+          final border = isDark
+              ? const Color(0xFF334155)
+              : _kBorder.withValues(alpha: 0.55);
+          final titleColor =
+              isDark ? const Color(0xFFE5E7EB) : const Color(0xFF202124);
+          final actionBg =
+              isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
+          final actionBorder = isDark ? const Color(0xFF374151) : _kBorder;
+          final actionIcon =
+              isDark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280);
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 1100,
+                maxHeight: 760,
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [cardTop, cardBottom],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(_kCardRadius),
+                  border: Border.all(color: border, width: 0.9),
+                  boxShadow: [
+                    BoxShadow(
+                      color:
+                          Colors.black.withValues(alpha: isDark ? 0.32 : 0.08),
+                      blurRadius: 18,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (icon != null) ...[
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: (iconColor ?? _kHeaderOrange)
+                                  .withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Icon(icon,
+                                size: 16, color: iconColor ?? _kHeaderOrange),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: titleColor,
+                              letterSpacing: 0.1,
+                            ),
+                          ),
+                        ),
+                        if (headerTrailing != null) ...[
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: headerTrailing!,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 10),
+                        InkWell(
+                          onTap: () => Navigator.of(ctx).pop(),
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: actionBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: actionBorder.withValues(alpha: 0.85)),
+                            ),
+                            child: Icon(Icons.close_rounded,
+                                size: 18, color: actionIcon),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: expandedBuilder?.call(ctx) ?? child,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -2999,7 +3281,7 @@ class _DashCard extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_kCardRadius),
         border: Border.all(color: border, width: 0.9),
         boxShadow: [
           BoxShadow(
@@ -3044,17 +3326,37 @@ class _DashCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (headerTrailing != null) ...[
+                if (headerTrailing != null || showExpandButton) ...[
                   const SizedBox(width: 12),
-                  Flexible(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: headerTrailing!,
+                  if (headerTrailing != null)
+                    Flexible(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: headerTrailing!,
+                        ),
                       ),
                     ),
-                  ),
+                  if (showExpandButton) ...[
+                    if (headerTrailing != null) const SizedBox(width: 10),
+                    InkWell(
+                      onTap: openExpanded,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: actionBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: actionBorder.withValues(alpha: 0.85)),
+                        ),
+                        child: Icon(Icons.open_in_full_rounded,
+                            size: 18, color: actionIcon),
+                      ),
+                    ),
+                  ],
                 ],
               ],
             ),
@@ -3231,6 +3533,14 @@ class _StockStatusDonutChartState extends State<_StockStatusDonutChart> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final legendText = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+    );
+
     final normal = (widget.totalProducts - widget.lowStockCount)
         .clamp(0, widget.totalProducts);
     final chartData = [
@@ -3257,8 +3567,39 @@ class _StockStatusDonutChartState extends State<_StockStatusDonutChart> {
         isVisible: true,
         position: LegendPosition.right,
         overflowMode: LegendItemOverflowMode.wrap,
+        textStyle: legendText,
       ),
       tooltipBehavior: _tooltipBehavior,
+      annotations: <CircularChartAnnotation>[
+        CircularChartAnnotation(
+          widget: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${widget.totalProducts}',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: isDark
+                      ? const Color(0xFFF1F5F9)
+                      : const Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Products',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
       series: <DoughnutSeries<Map<String, dynamic>, String>>[
         DoughnutSeries<Map<String, dynamic>, String>(
           dataSource: chartData,
@@ -3266,11 +3607,12 @@ class _StockStatusDonutChartState extends State<_StockStatusDonutChart> {
           xValueMapper: (d, _) => d['label'] as String,
           yValueMapper: (d, _) => d['value'] as double,
           pointColorMapper: (d, _) => d['color'] as Color,
-          innerRadius: '62%',
-          dataLabelSettings: const DataLabelSettings(
-            isVisible: true,
-            labelPosition: ChartDataLabelPosition.outside,
-          ),
+          radius: '92%',
+          innerRadius: '70%',
+          cornerStyle: CornerStyle.bothCurve,
+          strokeColor: surface,
+          strokeWidth: 3,
+          dataLabelSettings: const DataLabelSettings(isVisible: false),
         ),
       ],
     );
@@ -3288,11 +3630,37 @@ class _MonthlyUsageChart extends StatefulWidget {
 
 class _MonthlyUsageChartState extends State<_MonthlyUsageChart> {
   late final TooltipBehavior _tooltipBehavior;
+  late final ZoomPanBehavior _zoomPanBehavior;
+  late final TrackballBehavior _trackballBehavior;
 
   @override
   void initState() {
     super.initState();
-    _tooltipBehavior = TooltipBehavior(enable: true);
+    _tooltipBehavior = TooltipBehavior(
+      enable: true,
+      canShowMarker: true,
+      header: '',
+    );
+    _zoomPanBehavior = ZoomPanBehavior(
+      enableMouseWheelZooming: true,
+      enablePinching: true,
+      enablePanning: true,
+      enableDoubleTapZooming: true,
+      zoomMode: ZoomMode.x,
+    );
+    _trackballBehavior = TrackballBehavior(
+      enable: true,
+      activationMode: ActivationMode.singleTap,
+      tooltipSettings: const InteractiveTooltip(
+        enable: true,
+        color: Colors.black,
+        borderWidth: 0,
+      ),
+      lineType: TrackballLineType.vertical,
+      markerSettings: const TrackballMarkerSettings(
+        markerVisibility: TrackballVisibilityMode.visible,
+      ),
+    );
   }
 
   @override
@@ -3302,12 +3670,20 @@ class _MonthlyUsageChartState extends State<_MonthlyUsageChart> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final axis = isDark ? const Color(0xFF9CA3AF) : const Color(0xFF64748B);
     final grid = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final surface = Theme.of(context).colorScheme.surface;
+    final markerFill = isDark
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.06), surface)
+        : surface;
+    const inColor = Color(0xFF16A34A);
+    const outColor = Color(0xFF2563EB);
 
     return SfCartesianChart(
       margin: EdgeInsets.zero,
       plotAreaBorderWidth: 0,
       legend: const Legend(isVisible: true, position: LegendPosition.top),
       tooltipBehavior: _tooltipBehavior,
+      zoomPanBehavior: _zoomPanBehavior,
+      trackballBehavior: _trackballBehavior,
       primaryXAxis: CategoryAxis(
         labelStyle: TextStyle(fontSize: 10, color: axis),
         majorGridLines: const MajorGridLines(width: 0),
@@ -3317,13 +3693,29 @@ class _MonthlyUsageChartState extends State<_MonthlyUsageChart> {
         majorGridLines: MajorGridLines(color: grid, width: 1),
       ),
       series: <CartesianSeries<Map<String, dynamic>, String>>[
-        LineSeries<Map<String, dynamic>, String>(
+        SplineAreaSeries<Map<String, dynamic>, String>(
           name: 'Stock In',
           animationDuration: 0,
-          color: const Color(0xFF16A34A),
-          width: 2.8,
-          markerSettings:
-              const MarkerSettings(isVisible: true, width: 6, height: 6),
+          color: inColor.withValues(alpha: isDark ? 0.10 : 0.14),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              inColor.withValues(alpha: isDark ? 0.22 : 0.26),
+              inColor.withValues(alpha: 0.0),
+            ],
+          ),
+          borderColor: inColor,
+          borderWidth: 2.6,
+          markerSettings: MarkerSettings(
+            isVisible: true,
+            width: 7,
+            height: 7,
+            shape: DataMarkerType.circle,
+            color: markerFill,
+            borderColor: inColor,
+            borderWidth: 2,
+          ),
           dataSource: data,
           xValueMapper: (d, _) =>
               d['x_label']?.toString() ??
@@ -3332,13 +3724,29 @@ class _MonthlyUsageChartState extends State<_MonthlyUsageChart> {
               '-',
           yValueMapper: (d, _) => ((d['stock_in'] as num?)?.toDouble() ?? 0),
         ),
-        LineSeries<Map<String, dynamic>, String>(
+        SplineAreaSeries<Map<String, dynamic>, String>(
           name: 'Stock Out',
           animationDuration: 0,
-          color: const Color(0xFF2563EB),
-          width: 2.8,
-          markerSettings:
-              const MarkerSettings(isVisible: true, width: 6, height: 6),
+          color: outColor.withValues(alpha: isDark ? 0.10 : 0.14),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              outColor.withValues(alpha: isDark ? 0.22 : 0.26),
+              outColor.withValues(alpha: 0.0),
+            ],
+          ),
+          borderColor: outColor,
+          borderWidth: 2.6,
+          markerSettings: MarkerSettings(
+            isVisible: true,
+            width: 7,
+            height: 7,
+            shape: DataMarkerType.circle,
+            color: markerFill,
+            borderColor: outColor,
+            borderWidth: 2,
+          ),
           dataSource: data,
           xValueMapper: (d, _) =>
               d['x_label']?.toString() ??
@@ -3397,6 +3805,8 @@ class _TopUsedProductsChartState extends State<_TopUsedProductsChart> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final axis = isDark ? const Color(0xFF9CA3AF) : const Color(0xFF64748B);
     final grid = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final labelColor =
+        isDark ? const Color(0xFFE5E7EB) : const Color(0xFF0F172A);
 
     final chartData = top.map((item) {
       final name = (item['product_name'] ?? item['name'] ?? '-').toString();
@@ -3427,8 +3837,17 @@ class _TopUsedProductsChartState extends State<_TopUsedProductsChart> {
           xValueMapper: (d, _) => d['name'] as String,
           yValueMapper: (d, _) => d['used'] as double,
           color: const Color(0xFFF59E0B),
-          borderRadius: const BorderRadius.all(Radius.circular(4)),
-          dataLabelSettings: const DataLabelSettings(isVisible: true),
+          width: 0.7,
+          spacing: 0.22,
+          borderRadius: const BorderRadius.all(Radius.circular(6)),
+          dataLabelSettings: DataLabelSettings(
+            isVisible: true,
+            textStyle: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: labelColor,
+            ),
+          ),
         ),
       ],
     );
@@ -3487,6 +3906,9 @@ class _StockVsMaintainingChartState extends State<_StockVsMaintainingChart> {
           name: 'Current Stock',
           animationDuration: 0,
           color: const Color(0xFF0EA5E9),
+          width: 0.62,
+          spacing: 0.26,
+          borderRadius: const BorderRadius.all(Radius.circular(6)),
           dataSource: view,
           xValueMapper: (d, _) =>
               (d['qb_code'] ?? d['qc_code'] ?? '-').toString(),
@@ -3497,6 +3919,9 @@ class _StockVsMaintainingChartState extends State<_StockVsMaintainingChart> {
           name: 'Maintaining',
           animationDuration: 0,
           color: const Color(0xFFF59E0B),
+          width: 0.62,
+          spacing: 0.26,
+          borderRadius: const BorderRadius.all(Radius.circular(6)),
           dataSource: view,
           xValueMapper: (d, _) =>
               (d['qb_code'] ?? d['qc_code'] ?? '-').toString(),
@@ -3552,6 +3977,9 @@ class _StockInOutChartState extends State<_StockInOutChart> {
           name: 'Stock In',
           animationDuration: 0,
           color: const Color(0xFF16A34A),
+          width: 0.62,
+          spacing: 0.26,
+          borderRadius: const BorderRadius.all(Radius.circular(6)),
           dataSource: data,
           xValueMapper: (d, _) =>
               d['x_label']?.toString() ??
@@ -3564,6 +3992,9 @@ class _StockInOutChartState extends State<_StockInOutChart> {
           name: 'Stock Out',
           animationDuration: 0,
           color: const Color(0xFFEF4444),
+          width: 0.62,
+          spacing: 0.26,
+          borderRadius: const BorderRadius.all(Radius.circular(6)),
           dataSource: data,
           xValueMapper: (d, _) =>
               d['x_label']?.toString() ??
@@ -4074,7 +4505,7 @@ class _LowStockTable extends StatelessWidget {
         isDark ? const Color(0xFFE2E8F0) : const Color(0xFF202124);
     final tableSurface = isDark ? const Color(0xFF111827) : Colors.white;
     final tableBorder =
-        isDark ? const Color(0xFF334155) : _kBorder.withOpacity(0.7);
+        isDark ? const Color(0xFF334155) : _kBorder.withValues(alpha: 0.7);
     final tableHeader =
         isDark ? const Color(0xFF0F172A) : const Color(0xFFF4F7FB);
     final divider = isDark ? const Color(0xFF1F2937) : Colors.grey.shade100;

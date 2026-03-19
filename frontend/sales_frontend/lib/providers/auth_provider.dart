@@ -20,6 +20,31 @@ class AuthProvider extends ChangeNotifier {
   bool get isViewer => _user?.isViewer ?? false;
   bool get canEdit => _user?.canEdit ?? false;
 
+  static String _toFriendlyError(Object error) {
+    var msg = error.toString();
+    if (msg.startsWith('Exception: ')) {
+      msg = msg.substring('Exception: '.length);
+    }
+
+    final lower = msg.toLowerCase();
+    final isNetwork = lower.contains('socketexception') ||
+        lower.contains('connection refused') ||
+        lower.contains('failed host lookup') ||
+        lower.contains('no route to host') ||
+        lower.contains('errno = 1225');
+    if (isNetwork) {
+      return 'Can\'t connect to the server. Please make sure the backend is running and the API base URL is correct.'
+          ' If you\'re using an Android emulator, use 10.0.2.2 instead of localhost.';
+    }
+
+    final isTimeout = lower.contains('timed out') || lower.contains('timeout');
+    if (isTimeout) {
+      return 'The server took too long to respond. Please try again.';
+    }
+
+    return msg;
+  }
+
   /// Initialize auth state from stored token
   Future<void> initialize() async {
     _isLoading = true;
@@ -77,7 +102,7 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _error = e.toString();
+      _error = _toFriendlyError(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -162,7 +187,7 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _error = e.toString();
+      _error = _toFriendlyError(e);
       _isLoading = false;
       notifyListeners();
       return false;

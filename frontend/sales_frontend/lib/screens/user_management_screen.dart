@@ -31,7 +31,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   String _searchQuery = '';
   String _roleFilter = 'All Users';
   String _statusFilter = 'All Status';
-  String _sortMode = 'Sort by Name';
+  final String _sortMode = 'Sort by Name';
   final TextEditingController _searchController = TextEditingController();
 
   // Pagination state
@@ -1522,7 +1522,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                             border: Border.all(color: _borderColor),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.03),
+                                color: Colors.black.withValues(alpha: 0.03),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               ),
@@ -1562,7 +1562,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: _kRed.withOpacity(0.1),
+              color: _kRed.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
             child: Icon(Icons.error_outline_rounded, size: 48, color: _kRed),
@@ -1633,7 +1633,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           border: Border.all(color: _borderColor),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.03),
+              color: Colors.black.withValues(alpha: 0.03),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -1644,7 +1644,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(icon, color: color, size: 24),
@@ -1708,7 +1708,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 border: Border.all(color: _borderColor),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
+                    color: Colors.black.withValues(alpha: 0.03),
                     blurRadius: 4,
                     offset: const Offset(0, 1),
                   ),
@@ -1844,10 +1844,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: value != null ? _kBlue.withOpacity(0.08) : _surfaceColor,
+          color: value != null ? _kBlue.withValues(alpha: 0.08) : _surfaceColor,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: value != null ? _kBlue.withOpacity(0.3) : _borderColor),
+              color:
+                  value != null ? _kBlue.withValues(alpha: 0.3) : _borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1973,9 +1974,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
-        color: rowNum.isOdd ? _surfaceColor : _surfaceAltColor.withOpacity(0.8),
-        border:
-            Border(bottom: BorderSide(color: _borderColor.withOpacity(0.5))),
+        color: rowNum.isOdd
+            ? _surfaceColor
+            : _surfaceAltColor.withValues(alpha: 0.8),
+        border: Border(
+            bottom: BorderSide(color: _borderColor.withValues(alpha: 0.5))),
       ),
       child: Row(
         children: [
@@ -1996,7 +1999,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: _kBlue.withOpacity(0.1),
+                    color: _kBlue.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
@@ -2054,7 +2057,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: _getRoleColor(user.role).withOpacity(0.1),
+                    color: _getRoleColor(user.role).withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -2079,8 +2082,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: user.isActive
-                        ? _kGreen.withOpacity(0.1)
-                        : _kRed.withOpacity(0.1),
+                        ? _kGreen.withValues(alpha: 0.1)
+                        : _kRed.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Row(
@@ -2199,7 +2202,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final totalPages =
         totalItems == 0 ? 1 : (totalItems / _itemsPerPage).ceil();
 
-    if (totalItems == 0) return const SizedBox.shrink();
+    if (totalItems == 0) {
+      return const SizedBox.shrink();
+    }
 
     final validPage = _currentPage.clamp(1, totalPages);
     final startIdx = ((validPage - 1) * _itemsPerPage).clamp(0, totalItems);
@@ -2242,11 +2247,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                             DropdownMenuItem(value: v, child: Text('$v')))
                         .toList(),
                     onChanged: (v) {
-                      if (v != null)
+                      if (v != null) {
                         setState(() {
                           _itemsPerPage = v;
                           _currentPage = 1;
                         });
+                      }
                     },
                   ),
                 ),
@@ -2304,7 +2310,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     List<Widget> pageButtons = [];
     int startPage = (_currentPage - 2).clamp(1, totalPages);
     int endPage = (startPage + 4).clamp(1, totalPages);
-    if (endPage - startPage < 4) startPage = (endPage - 4).clamp(1, totalPages);
+    if (endPage - startPage < 4) {
+      startPage = (endPage - 4).clamp(1, totalPages);
+    }
 
     if (startPage > 1) {
       pageButtons.add(_buildPageButton(1));

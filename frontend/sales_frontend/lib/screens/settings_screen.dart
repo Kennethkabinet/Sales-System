@@ -77,7 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
+                          color: Colors.black.withValues(alpha: 0.04),
                           blurRadius: 10,
                           offset: const Offset(0, 2),
                         ),
@@ -209,7 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 border: Border.all(color: Colors.white, width: 4),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -312,7 +312,7 @@ class _BannerPatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.1)
+      ..color = Colors.white.withValues(alpha: 0.1)
       ..style = PaintingStyle.fill;
 
     final path1 = Path()
@@ -327,7 +327,7 @@ class _BannerPatternPainter extends CustomPainter {
       ..lineTo(size.width * 0.8, size.height)
       ..lineTo(size.width * 0.65, size.height * 0.4)
       ..close();
-    canvas.drawPath(path2, paint..color = Colors.white.withOpacity(0.05));
+    canvas.drawPath(path2, paint..color = Colors.white.withValues(alpha: 0.05));
   }
 
   @override
@@ -480,6 +480,7 @@ class _AccountTabState extends State<_AccountTab> {
                     widget.auth.user!.username,
                     passwordCtrl.text,
                   );
+                  if (!ctx.mounted) return;
                   Navigator.pop(ctx, true);
                 } catch (e) {
                   setDialogState(() => errorText = 'Incorrect password');
@@ -746,7 +747,7 @@ class _SecurityTabState extends State<_SecurityTab> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final infoBg = isDark
-        ? const Color(0xFF1E3A8A).withOpacity(0.20)
+        ? const Color(0xFF1E3A8A).withValues(alpha: 0.20)
         : const Color(0xFFE8F0FE);
     final infoText = isDark ? const Color(0xFFBFDBFE) : _kPrimaryBlue;
     return SingleChildScrollView(
@@ -805,8 +806,9 @@ class _SecurityTabState extends State<_SecurityTab> {
                     onToggle: () =>
                         setState(() => _obscureConfirm = !_obscureConfirm),
                     validator: (v) {
-                      if (v != _newPassCtrl.text)
+                      if (v != _newPassCtrl.text) {
                         return 'Passwords do not match';
+                      }
                       return null;
                     },
                   ),
@@ -1162,24 +1164,34 @@ class _MessageBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = success ? const Color(0xFF34A853) : const Color(0xFFEA4335);
-    final bg = success ? const Color(0xFFE6F4EA) : const Color(0xFFFCE8E6);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = success ? const Color(0xFF34A853) : const Color(0xFFEA4335);
+    final lightBg = success ? const Color(0xFFE6F4EA) : const Color(0xFFFCE8E6);
+
+    final surface = Theme.of(context).colorScheme.surface;
+    final bg = isDark
+        ? Color.alphaBlend(base.withValues(alpha: 0.18), surface)
+        : lightBg;
+    final fg = isDark ? base.withValues(alpha: 0.95) : base;
+    final borderColor =
+        isDark ? base.withValues(alpha: 0.35) : Colors.transparent;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
       ),
       child: Row(
         children: [
           Icon(success ? Icons.check_circle_outline : Icons.error_outline,
-              size: 16, color: color),
+              size: 16, color: fg),
           const SizedBox(width: 8),
           Expanded(
             child: Text(message,
                 style: TextStyle(
-                    fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+                    fontSize: 12, color: fg, fontWeight: FontWeight.w500)),
           ),
         ],
       ),

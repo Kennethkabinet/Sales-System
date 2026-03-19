@@ -169,6 +169,11 @@ class _SheetSnapshot {
   final int? selectedCol;
   final int? selectionEndRow;
   final int? selectionEndCol;
+  final Map<int, double> columnWidths;
+  final Map<int, double> rowHeights;
+  final Set<int> hiddenColumns;
+  final Set<int> hiddenRows;
+  final Set<int> collapsedRows;
 
   const _SheetSnapshot({
     required this.columns,
@@ -178,18 +183,40 @@ class _SheetSnapshot {
     this.selectedCol,
     this.selectionEndRow,
     this.selectionEndCol,
+    required this.columnWidths,
+    required this.rowHeights,
+    required this.hiddenColumns,
+    required this.hiddenRows,
+    required this.collapsedRows,
   });
 }
 
 class SheetScreen extends StatefulWidget {
   final bool readOnly;
   final VoidCallback? onNavigateToEditRequests;
+  final List<int>? initialFolderPath;
+  final int? initialSheetId;
+  final String? initialSheetName;
+  final bool? initialSheetHasPassword;
 
-  const SheetScreen(
-      {super.key, this.readOnly = false, this.onNavigateToEditRequests});
+  const SheetScreen({
+    super.key,
+    this.readOnly = false,
+    this.onNavigateToEditRequests,
+    this.initialFolderPath,
+    this.initialSheetId,
+    this.initialSheetName,
+    this.initialSheetHasPassword,
+  });
 
   @override
   State<SheetScreen> createState() => _SheetScreenState();
+}
+
+enum _InventorySortMode {
+  nameAsc,
+  codeAsc,
+  lowStockFirst,
 }
 
 class _SheetScreenState extends State<SheetScreen> {
@@ -201,6 +228,17 @@ class _SheetScreenState extends State<SheetScreen> {
   SheetModel? _currentSheet;
   bool _isLoading = true;
   int? _openingSheetId;
+
+  // Pending deep-link navigation (folder-path then optional sheet)
+  List<int> _pendingInitialFolderPathIds = [];
+  int? _pendingInitialSheetId;
+  String? _pendingInitialSheetName;
+  bool? _pendingInitialSheetHasPassword;
+  bool _deepLinkBusy = false;
+  bool _deepLinkRerun = false;
+
+  bool get _hasPendingDeepLink =>
+      _pendingInitialFolderPathIds.isNotEmpty || _pendingInitialSheetId != null;
 
   // Explorer state (used only inside the "All Sheets" container)
   final Set<int> _explorerExpandedFolderIds = {};
@@ -267,6 +305,18 @@ class _SheetScreenState extends State<SheetScreen> {
   final Set<int> _collapsedRows = {};
   static const double _collapsedRowHeight = 8.0;
 
+  // Hide state for completely hidden columns/rows
+  final Set<int> _hiddenColumns = {};
+  final Set<int> _hiddenRows = {};
+
+  // Row resize state (similar to column resize)
+  bool _isResizingRow = false;
+  int? _resizingRowIndex;
+  double _resizingStartY = 0;
+  double _resizingStartHeight = 0;
+  static const double _minRowHeight = 20.0;
+  static const double _maxRowHeight = 400.0;
+
   // Scroll controllers for synchronized scrolling
   final _horizontalScrollController = ScrollController();
   final _verticalScrollController = ScrollController();
@@ -283,9 +333,21 @@ class _SheetScreenState extends State<SheetScreen> {
   String _inventorySearchQuery = '';
   final TextEditingController _inventorySearchController =
       TextEditingController();
+  _InventorySortMode _inventorySortMode = _InventorySortMode.nameAsc;
   double _criticalThreshold =
       0.80; // fraction used before red alert (default 80%)
   bool _invalidInventoryDialogOpen = false;
+
+  String _inventorySortLabel(_InventorySortMode mode) {
+    switch (mode) {
+      case _InventorySortMode.nameAsc:
+        return 'A–Z';
+      case _InventorySortMode.codeAsc:
+        return 'Code A–Z';
+      case _InventorySortMode.lowStockFirst:
+        return 'Low Stock';
+    }
+  }
 
   // Zoom level for the spreadsheet grid
   double _zoomLevel = 1.0;
@@ -481,6 +543,19 @@ class _SheetScreenState extends State<SheetScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Configure any incoming deep-link before initial load.
+    _pendingInitialFolderPathIds =
+        List<int>.from(widget.initialFolderPath ?? <int>[]);
+    _pendingInitialSheetId = widget.initialSheetId;
+    _pendingInitialSheetName = widget.initialSheetName;
+    _pendingInitialSheetHasPassword = widget.initialSheetHasPassword;
+    if (_hasPendingDeepLink) {
+      _sheetFolderBreadcrumbs = [];
+      _currentSheetFolderId = null;
+      _currentSheetFolderName = null;
+    }
+
     _initializeSheet();
     _loadSheets();
     _setupSheetPresenceCallbacks();
@@ -519,6 +594,101 @@ class _SheetScreenState extends State<SheetScreen> {
             .clamp(0, _rowNumVScrollController.position.maxScrollExtent));
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant SheetScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final oldPath = oldWidget.initialFolderPath ?? <int>[];
+    final newPath = widget.initialFolderPath ?? <int>[];
+    final pathChanged = !listEquals(oldPath, newPath);
+    final sheetChanged = widget.initialSheetId != oldWidget.initialSheetId ||
+        widget.initialSheetName != oldWidget.initialSheetName ||
+        widget.initialSheetHasPassword != oldWidget.initialSheetHasPassword;
+
+    if (!pathChanged && !sheetChanged) return;
+
+    _pendingInitialFolderPathIds = List<int>.from(newPath);
+    _pendingInitialSheetId = widget.initialSheetId;
+    _pendingInitialSheetName = widget.initialSheetName;
+    _pendingInitialSheetHasPassword = widget.initialSheetHasPassword;
+
+    if (_hasPendingDeepLink) {
+      setState(() {
+        _sheetFolderBreadcrumbs.clear();
+        _currentSheetFolderId = null;
+        _currentSheetFolderName = null;
+      });
+      _loadSheets();
+    }
+  }
+
+  void _scheduleDeepLinkProcessing() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _processPendingDeepLink();
+    });
+  }
+
+  Future<void> _processPendingDeepLink() async {
+    if (!mounted) return;
+    if (_isLoading) return;
+    if (!_hasPendingDeepLink) return;
+
+    if (_deepLinkBusy) {
+      _deepLinkRerun = true;
+      return;
+    }
+
+    _deepLinkBusy = true;
+    try {
+      // Step 1: walk the folder path from root, one level at a time.
+      if (_pendingInitialFolderPathIds.isNotEmpty) {
+        final nextFolderId = _pendingInitialFolderPathIds.first;
+        final folder = _sheetFolders
+            .cast<Map<String, dynamic>>()
+            .where((f) => f['id'] == nextFolderId)
+            .cast<Map<String, dynamic>>()
+            .toList(growable: false);
+
+        if (folder.isEmpty) {
+          // Folder not visible at this level (or no longer exists).
+          _pendingInitialFolderPathIds.clear();
+          _pendingInitialSheetId = null;
+          return;
+        }
+
+        _pendingInitialFolderPathIds = _pendingInitialFolderPathIds.sublist(1);
+        final beforeFolderId = _currentSheetFolderId;
+        await _openFolderWithPasswordCheck(folder.first);
+        if (!mounted) return;
+
+        // If navigation did not happen (cancel/incorrect password), abort.
+        if (_currentSheetFolderId == beforeFolderId) {
+          _pendingInitialFolderPathIds.clear();
+          _pendingInitialSheetId = null;
+        }
+        return;
+      }
+
+      // Step 2: open the sheet (if provided) after folder navigation completes.
+      if (_pendingInitialSheetId != null) {
+        final stub = SheetModel(
+          id: _pendingInitialSheetId!,
+          name: _pendingInitialSheetName ?? 'Sheet',
+          hasPassword: _pendingInitialSheetHasPassword ?? false,
+        );
+        _pendingInitialSheetId = null;
+        await _openSheetWithPasswordCheck(stub);
+      }
+    } finally {
+      _deepLinkBusy = false;
+      if (_deepLinkRerun) {
+        _deepLinkRerun = false;
+        _scheduleDeepLinkProcessing();
+      }
+    }
   }
 
   // =============== Collaborative Editing Features ===============
@@ -1045,6 +1215,10 @@ class _SheetScreenState extends State<SheetScreen> {
             [];
         _isLoading = false;
       });
+
+      if (_hasPendingDeepLink) {
+        _scheduleDeepLinkProcessing();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1070,6 +1244,8 @@ class _SheetScreenState extends State<SheetScreen> {
     }
 
     setState(() => _isLoading = true);
+
+    bool migratedInventoryMaintaining = false;
 
     try {
       final response = await ApiService.getSheetData(sheetId);
@@ -1134,15 +1310,118 @@ class _SheetScreenState extends State<SheetScreen> {
             }
           }
 
+          // Migrate legacy "Maintaining" into split columns:
+          // - Maintaining Qty (number) OR "-" when per-request
+          // - Maintaining Unit (text)  OR "PR" when per-request
+          ({bool migrated}) migrateMaintaining() {
+            String norm(String v) => v.trim();
+
+            ({String qty, String unit}) parseLegacy(String raw) {
+              final t = norm(raw);
+              if (t.isEmpty) return (qty: '', unit: '');
+              final lower = t.toLowerCase();
+              if (lower == 'pr' ||
+                  lower == 'per request' ||
+                  lower == 'per-request') {
+                return (qty: '-', unit: 'PR');
+              }
+
+              // Try parse leading number, rest = unit.
+              final cleaned = t.replaceAll(',', '');
+              final m = RegExp(r'^(-?\d+(?:\.\d+)?)(?:\s+(.+))?$')
+                  .firstMatch(cleaned);
+              if (m == null) return (qty: '', unit: '');
+              final qty = (m.group(1) ?? '').trim();
+              final unit = (m.group(2) ?? '').trim();
+              return (qty: qty, unit: unit);
+            }
+
+            bool did = false;
+            const qtyCol = 'Maintaining Qty';
+            const unitCol = 'Maintaining Unit';
+
+            // Add split columns if missing.
+            if (!_columns.contains(qtyCol) || !_columns.contains(unitCol)) {
+              // Insert after Stock if possible, else after code column.
+              final stockIdx = _columns.indexOf('Stock');
+              final insertAt = stockIdx >= 0 ? stockIdx + 1 : 2;
+              if (!_columns.contains(qtyCol)) {
+                _columns.insert(insertAt, qtyCol);
+                did = true;
+              }
+              final unitIdx = _columns.indexOf(qtyCol);
+              if (!_columns.contains(unitCol)) {
+                _columns.insert(
+                    unitIdx >= 0 ? unitIdx + 1 : insertAt + 1, unitCol);
+                did = true;
+              }
+              for (final row in _data) {
+                row.putIfAbsent(qtyCol, () => '');
+                row.putIfAbsent(unitCol, () => '');
+              }
+            }
+
+            // Populate split columns from legacy Maintaining when available.
+            for (final row in _data) {
+              final legacy = (row['Maintaining'] ?? '').toString();
+              if (legacy.trim().isEmpty) continue;
+              final alreadyHas = (row[qtyCol] ?? '').trim().isNotEmpty ||
+                  (row[unitCol] ?? '').trim().isNotEmpty;
+              if (alreadyHas) continue;
+
+              final parsed = parseLegacy(legacy);
+              row[qtyCol] = parsed.qty;
+              row[unitCol] = parsed.unit;
+              did = true;
+            }
+
+            // Back-compat: if there is a Maintaining Status column, fold PR into unit/qty.
+            if (_columns.contains('Maintaining Status')) {
+              for (final row in _data) {
+                final status =
+                    (row['Maintaining Status'] ?? '').trim().toUpperCase();
+                if (status == 'PR') {
+                  row[qtyCol] = '-';
+                  row[unitCol] = 'PR';
+                  did = true;
+                }
+                row.remove('Maintaining Status');
+              }
+              _columns.remove('Maintaining Status');
+              did = true;
+            }
+
+            // Remove legacy Maintaining column to avoid mixed values.
+            if (_columns.contains('Maintaining')) {
+              _columns.remove('Maintaining');
+              for (final row in _data) {
+                row.remove('Maintaining');
+              }
+              did = true;
+            }
+
+            return (migrated: did);
+          }
+
+          final mig = migrateMaintaining();
+          if (mig.migrated) migratedInventoryMaintaining = true;
+
           // Ensure Inventory Tracker has a dedicated Critical threshold column.
           if (!_columns.contains('Critical')) {
-            final maintainingIdx = _columns.indexOf('Maintaining');
-            final insertAt = maintainingIdx >= 0 ? maintainingIdx + 1 : 4;
-            _columns.insert(insertAt, 'Critical');
+            final unitIdx = _columns.indexOf('Maintaining Unit');
+            final qtyIdx = _columns.indexOf('Maintaining Qty');
+            final anchor = unitIdx >= 0 ? unitIdx : (qtyIdx >= 0 ? qtyIdx : 3);
+            _columns.insert(anchor + 1, 'Critical');
             for (final row in _data) {
-              final maintaining = (row['Maintaining'] ?? '').trim();
-              row['Critical'] = maintaining.isEmpty ? '0' : maintaining;
+              final qtyRaw =
+                  (row['Maintaining Qty'] ?? '').replaceAll(',', '').trim();
+              final qty = double.tryParse(qtyRaw) ?? 0;
+              final unit = (row['Maintaining Unit'] ?? '').trim().toUpperCase();
+              final isPr = unit == 'PR' || qtyRaw == '-';
+              row['Critical'] =
+                  (isPr || qty <= 0) ? '0' : qty.toStringAsFixed(0);
             }
+            migratedInventoryMaintaining = true;
           }
         }
 
@@ -1160,6 +1439,11 @@ class _SheetScreenState extends State<SheetScreen> {
         _saveStatus = 'saved';
         _hasUnsavedChanges = false;
       });
+
+      // Persist the migration so exports/imports stay consistent.
+      if (migratedInventoryMaintaining && mounted && _canEditSheet()) {
+        _markDirty();
+      }
       if (mounted) {
         context.read<DataProvider>().setCurrentSheet(
               sheetId: sheet.id,
@@ -1279,7 +1563,7 @@ class _SheetScreenState extends State<SheetScreen> {
   // ════════════════════════════════════════════
 
   /// All built-in templates available for sheet creation
-  static const List<Map<String, dynamic>> _kTemplates = [
+  static final List<Map<String, dynamic>> _kTemplates = [
     {
       'id': 'inventory_tracker',
       'name': 'Inventory Tracker',
@@ -1291,7 +1575,8 @@ class _SheetScreenState extends State<SheetScreen> {
         'Product Name',
         'QC Code',
         'Stock',
-        'Maintaining',
+        'Maintaining Qty',
+        'Maintaining Unit',
         'Critical',
         'Total Quantity',
       ],
@@ -1411,6 +1696,157 @@ class _SheetScreenState extends State<SheetScreen> {
     try {
       final cols = List<String>.from(template['columns'] as List);
 
+      bool isInventoryTrackerColumns(List<String> columns) {
+        return columns.contains('Product Name') &&
+            (columns.contains('QB Code') || columns.contains('QC Code')) &&
+            columns.contains('Total Quantity');
+      }
+
+      Future<SheetModel?> pickInventorySeedSheet(
+          List<SheetModel> candidates) async {
+        if (candidates.isEmpty) return null;
+
+        final sorted = List<SheetModel>.from(candidates)
+          ..sort((a, b) {
+            final aDate = a.updatedAt ?? a.createdAt ?? DateTime(2000);
+            final bDate = b.updatedAt ?? b.createdAt ?? DateTime(2000);
+            return bDate.compareTo(aDate);
+          });
+
+        int? selectedId;
+
+        final result = await showDialog<int?>(
+          context: context,
+          builder: (ctx) => StatefulBuilder(
+            builder: (ctx2, setLocal) => AlertDialog(
+              backgroundColor: _surfaceColor,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              title: Text(
+                'Base stock on previous tracker',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: _textPrimary,
+                ),
+              ),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Choose which Inventory Tracker to copy ending stock from.',
+                      style: TextStyle(fontSize: 13, color: _textSecondary),
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<int?>(
+                      initialValue: selectedId,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'Previous sheet',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                        fillColor: _surfaceAltColor,
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('Start blank'),
+                        ),
+                        ...sorted.map(
+                          (s) => DropdownMenuItem<int?>(
+                            value: s.id,
+                            child: Text(
+                              s.name,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
+                        ),
+                      ],
+                      onChanged: (v) => setLocal(() => selectedId = v),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx2, null),
+                  child:
+                      Text('Cancel', style: TextStyle(color: _textSecondary)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryBlue,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => Navigator.pop(ctx2, selectedId),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+          ),
+        );
+
+        if (result == null) return null;
+        return sorted.where((s) => s.id == result).firstOrNull;
+      }
+
+      Future<List<SheetModel>> fetchAllAccessibleSheetsForSeeding() async {
+        const limit = 200;
+        var page = 1;
+        final all = <SheetModel>[];
+
+        while (true) {
+          final resp = await ApiService.getSheets(page: page, limit: limit);
+          final batch = (resp['sheets'] as List?)
+                  ?.map((s) => SheetModel.fromJson(s))
+                  .toList() ??
+              <SheetModel>[];
+          all.addAll(batch);
+
+          final pages = (resp['pagination'] is Map)
+              ? (resp['pagination']['pages'] as int? ?? 1)
+              : 1;
+          if (page >= pages) break;
+          page += 1;
+        }
+
+        return all;
+      }
+
+      String num0(String raw) {
+        final cleaned = raw.replaceAll(',', '').trim();
+        final n = double.tryParse(cleaned);
+        if (n == null || !n.isFinite) return '0';
+        return n.toStringAsFixed(0);
+      }
+
+      ({String qty, String unit}) parseMaintainingLegacy(String raw) {
+        final t = raw.trim();
+        if (t.isEmpty) return (qty: '', unit: '');
+        final lower = t.toLowerCase();
+        if (lower == 'pr' || lower == 'per request' || lower == 'per-request') {
+          return (qty: '-', unit: 'PR');
+        }
+        final cleaned = t.replaceAll(',', '');
+        final m =
+            RegExp(r'^(-?\d+(?:\.\d+)?)(?:\s+(.+))?$').firstMatch(cleaned);
+        if (m == null) return (qty: '', unit: '');
+        return (
+          qty: (m.group(1) ?? '').trim(),
+          unit: (m.group(2) ?? '').trim(),
+        );
+      }
+
+      List<Map<String, dynamic>>? seededRows;
+
       // ── Inventory Tracker: inject today's date column automatically ──
       if (template['id'] == 'inventory_tracker') {
         final todayStr = _inventoryDateStr(DateTime.now());
@@ -1418,6 +1854,109 @@ class _SheetScreenState extends State<SheetScreen> {
         final insertAt = totalIdx < 0 ? cols.length - 1 : totalIdx;
         cols.insert(insertAt, 'DATE:$todayStr:IN');
         cols.insert(insertAt + 1, 'DATE:$todayStr:OUT');
+
+        // Optional: seed starting Stock from a chosen previous Inventory Tracker.
+        // IMPORTANT: pull from all accessible sheets (including those in folders),
+        // not just the currently-open folder's list.
+        List<SheetModel> candidates = [];
+        try {
+          final allSheets = await fetchAllAccessibleSheetsForSeeding();
+          candidates = allSheets
+              .where((s) => isInventoryTrackerColumns(s.columns))
+              .where((s) => s.id != _currentSheet?.id)
+              .toList();
+        } catch (_) {
+          candidates = _sheets
+              .where((s) => isInventoryTrackerColumns(s.columns))
+              .where((s) => s.id != _currentSheet?.id)
+              .toList();
+        }
+
+        final prev = (mounted && candidates.isNotEmpty)
+            ? await pickInventorySeedSheet(candidates)
+            : null;
+
+        if (prev != null && mounted) {
+          try {
+            final resp = await ApiService.getSheetData(prev.id);
+            final prevFull = SheetModel.fromJson(resp['sheet']);
+            final prevRows = prevFull.rows;
+
+            final newHasQB = cols.contains('QB Code');
+            final newHasQC = cols.contains('QC Code');
+            final newCodeCol =
+                newHasQB ? 'QB Code' : (newHasQC ? 'QC Code' : null);
+
+            seededRows = [];
+            for (final r in prevRows) {
+              final product = (r['Product Name'] ?? '').toString().trim();
+              final code =
+                  (r['QB Code'] ?? r['QC Code'] ?? '').toString().trim();
+              if (product.isEmpty && code.isEmpty) continue;
+
+              String readStr(String key) => (r[key] ?? '').toString();
+
+              // Maintain fields (supports split or legacy).
+              var qty = readStr('Maintaining Qty').trim();
+              var unit = readStr('Maintaining Unit').trim();
+              if (qty.isEmpty && unit.isEmpty) {
+                final legacy = readStr('Maintaining');
+                final parsed = parseMaintainingLegacy(legacy);
+                qty = parsed.qty;
+                unit = parsed.unit;
+              }
+              final isPr =
+                  unit.trim().toUpperCase() == 'PR' || qty.trim() == '-';
+              if (isPr) {
+                qty = '-';
+                unit = 'PR';
+              }
+
+              // Carry over ending Total Quantity as new Stock.
+              final endingTotal = readStr('Total Quantity');
+              final endingStock = readStr('Stock');
+              final stock0 =
+                  num0(endingTotal.isNotEmpty ? endingTotal : endingStock);
+
+              final row = <String, dynamic>{};
+              row['Product Name'] = product;
+              if (newCodeCol != null) {
+                row[newCodeCol] = code;
+              }
+              if (cols.contains('Stock')) {
+                row['Stock'] = stock0;
+              }
+              if (cols.contains('Maintaining Qty')) {
+                row['Maintaining Qty'] = qty;
+              }
+              if (cols.contains('Maintaining Unit')) {
+                row['Maintaining Unit'] = unit;
+              }
+              if (cols.contains('Critical')) {
+                row['Critical'] = readStr('Critical').trim();
+              }
+              if (cols.contains('Total Quantity')) {
+                row['Total Quantity'] = stock0;
+              }
+
+              // Ensure date columns are empty for the new month.
+              for (final c in cols) {
+                if (c.startsWith('DATE:')) {
+                  row[c] = '';
+                }
+              }
+
+              seededRows.add(row);
+            }
+
+            // If the previous sheet had no usable rows, fall back to template rows.
+            if (seededRows.isEmpty) {
+              seededRows = null;
+            }
+          } catch (_) {
+            seededRows = null;
+          }
+        }
       }
 
       final response = await ApiService.createSheet(name, cols);
@@ -1433,27 +1972,30 @@ class _SheetScreenState extends State<SheetScreen> {
       // Build row data from template sample rows, padded to 100 rows
       final templateRows =
           List<Map<String, dynamic>>.from(template['rows'] as List);
-      final initialRowCount = templateRows.length.clamp(1, 10000);
+      final sourceRows = seededRows ?? templateRows;
+      final initialRowCount = template['id'] == 'inventory_tracker'
+          ? (sourceRows.length < 100 ? 100 : sourceRows.length)
+          : sourceRows.length.clamp(1, 10000);
       final data = List<Map<String, String>>.generate(initialRowCount, (i) {
         final row = <String, String>{};
         for (final col in cols) {
           // For DATE:* columns not in the template, default to empty string
-          row[col] = i < templateRows.length
-              ? (templateRows[i][col]?.toString() ?? '')
+          row[col] = i < sourceRows.length
+              ? (sourceRows[i][col]?.toString() ?? '')
               : '';
         }
         return row;
       });
 
       // Pre-save the sample rows so they appear immediately
-      if (templateRows.isNotEmpty) {
+      if (sourceRows.isNotEmpty) {
         try {
           await ApiService.updateSheet(
             sheet.id,
             name,
             cols,
             data
-                .take(templateRows.length)
+                .take(sourceRows.length)
                 .map((r) => Map<String, dynamic>.from(r))
                 .toList(),
           );
@@ -1516,6 +2058,7 @@ class _SheetScreenState extends State<SheetScreen> {
   //  Folder Management
   // ════════════════════════════════════════════
 
+  // ignore: unused_element
   Future<String?> _showFolderNameDialog(
       {String title = 'New Folder', String? initialValue}) async {
     final controller = TextEditingController(text: initialValue ?? '');
@@ -1532,7 +2075,7 @@ class _SheetScreenState extends State<SheetScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.1),
+                color: Colors.amber.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Icon(
@@ -1652,7 +2195,7 @@ class _SheetScreenState extends State<SheetScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(_isDark ? 0.18 : 0.12),
+                  color: Colors.amber.withValues(alpha: _isDark ? 0.18 : 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(
@@ -1684,7 +2227,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<int?>(
-                  value: selectedParentId,
+                  initialValue: selectedParentId,
                   decoration: InputDecoration(
                     labelText: 'Location',
                     prefixIcon: const Icon(Icons.folder_open_outlined),
@@ -2058,7 +2601,8 @@ class _SheetScreenState extends State<SheetScreen> {
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
-        _loadSheets();
+        await _loadSheets();
+        await _refreshAllSheetsExplorerCache();
       }
     } catch (e) {
       if (mounted) {
@@ -2152,28 +2696,72 @@ class _SheetScreenState extends State<SheetScreen> {
     final controller = TextEditingController(text: initialValue);
     return showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(
-            labelText: hint,
-            border: const OutlineInputBorder(),
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final dialogBg = isDark ? const Color(0xFF0F172A) : Colors.white;
+        final fieldBg =
+            isDark ? const Color(0xFF111827) : const Color(0xFFF9FAFB);
+        final border =
+            isDark ? const Color(0xFF334155) : _SheetScreenState._kBorder;
+        final titleColor =
+            isDark ? const Color(0xFFF1F5F9) : _SheetScreenState._kNavy;
+        final bodyColor =
+            isDark ? const Color(0xFF94A3B8) : _SheetScreenState._kGray;
+
+        OutlineInputBorder outline(Color color) => OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: color, width: 1),
+            );
+
+        return AlertDialog(
+          backgroundColor: dialogBg,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: border, width: 1),
           ),
-          autofocus: true,
-          onSubmitted: (value) => Navigator.pop(context, value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: titleColor,
+              letterSpacing: 0.2,
+            ),
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('OK'),
+          content: TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              labelText: hint,
+              labelStyle: TextStyle(color: bodyColor),
+              filled: true,
+              fillColor: fieldBg,
+              enabledBorder: outline(border),
+              focusedBorder:
+                  outline(_SheetScreenState._kBlue.withValues(alpha: 0.85)),
+              border: outline(border),
+            ),
+            style: TextStyle(color: titleColor),
+            autofocus: true,
+            onSubmitted: (value) => Navigator.pop(context, value),
           ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              style: TextButton.styleFrom(foregroundColor: bodyColor),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, controller.text),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _SheetScreenState._kBlue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -2184,6 +2772,8 @@ class _SheetScreenState extends State<SheetScreen> {
       'Enter new column name',
       initialValue: currentName,
     );
+
+    if (!mounted) return;
 
     if (newName == null || newName.isEmpty || newName == currentName) return;
 
@@ -2227,6 +2817,8 @@ class _SheetScreenState extends State<SheetScreen> {
       'Enter new row label',
       initialValue: currentLabel,
     );
+
+    if (!mounted) return;
 
     if (newLabel == null || newLabel.isEmpty || newLabel == currentLabel) {
       return;
@@ -2373,18 +2965,18 @@ class _SheetScreenState extends State<SheetScreen> {
     final count = _selectedSheetIds.length;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Delete Selected Sheets'),
         content: Text(
             'Permanently delete $count sheet${count > 1 ? 's' : ''}? This cannot be undone.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(_, false),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(_, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Delete'),
           ),
         ],
@@ -2415,7 +3007,7 @@ class _SheetScreenState extends State<SheetScreen> {
     if (!mounted) return;
     final selectedFolderId = await showDialog<int?>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Move to Folder'),
         content: SizedBox(
           width: 320,
@@ -2425,20 +3017,21 @@ class _SheetScreenState extends State<SheetScreen> {
               ListTile(
                 leading: const Icon(Icons.folder_off_outlined),
                 title: const Text('Root (no folder)'),
-                onTap: () => Navigator.pop(_, -1),
+                onTap: () => Navigator.pop(dialogContext, -1),
               ),
               const Divider(height: 1),
               ...allFolders.map((f) => ListTile(
                     leading: const Icon(Icons.folder, color: Colors.amber),
                     title: Text(f['name'] ?? ''),
-                    onTap: () => Navigator.pop(_, f['id'] as int),
+                    onTap: () => Navigator.pop(dialogContext, f['id'] as int),
                   )),
             ],
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(_), child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel')),
         ],
       ),
     );
@@ -2453,6 +3046,7 @@ class _SheetScreenState extends State<SheetScreen> {
     if (!mounted) return;
     setState(() => _selectedSheetIds.clear());
     await _loadSheets();
+    await _refreshAllSheetsExplorerCache();
   }
 
   Future<void> _deleteSheet(int sheetId) async {
@@ -2900,22 +3494,94 @@ class _SheetScreenState extends State<SheetScreen> {
       final savedCol = _editingCol!;
       final cellRef = _getCellReference(savedRow, savedCol);
       final colName = _columns[savedCol];
-      final newValue = _editController.text;
+      const maintainingQtyCol = 'Maintaining Qty';
+      const maintainingUnitCol = 'Maintaining Unit';
+
+      bool isPerRequestUnit(String v) {
+        final lower = v.trim().toLowerCase();
+        return lower == 'pr' ||
+            lower == 'per request' ||
+            lower == 'per-request';
+      }
+
+      String normalizeMaintainingUnit(String v) {
+        if (isPerRequestUnit(v)) return 'PR';
+        return v.trim();
+      }
+
+      String normalizeMaintainingQty(String v) {
+        final t = v.trim();
+        return t == '-' ? '-' : t;
+      }
+
+      final rawNewValue = _editController.text;
       if (_handleInvalidInventoryOutSubmission(
         rowIndex: savedRow,
         colName: colName,
-        proposedValueRaw: newValue,
+        proposedValueRaw: rawNewValue,
         previousValue: _originalCellValue,
         cellRef: cellRef,
       )) {
         return;
       }
-      final changed = newValue != _originalCellValue;
-      if (changed) {
+
+      final updates = <String, String>{};
+      updates[colName] = rawNewValue;
+
+      // Inventory Tracker: enforce PR rule.
+      // If unit is PR (per request) → qty must be '-'.
+      // If qty is '-' → unit must be 'PR'.
+      if (_isInventoryTrackerSheet() &&
+          _columns.contains(maintainingQtyCol) &&
+          _columns.contains(maintainingUnitCol)) {
+        if (colName == maintainingUnitCol) {
+          final unit = normalizeMaintainingUnit(rawNewValue);
+          updates[maintainingUnitCol] = unit;
+          if (unit == 'PR') {
+            updates[maintainingQtyCol] = '-';
+          }
+        } else if (colName == maintainingQtyCol) {
+          final qty = normalizeMaintainingQty(rawNewValue);
+          updates[maintainingQtyCol] = qty;
+          if (qty == '-') {
+            updates[maintainingUnitCol] = 'PR';
+          }
+        }
+      }
+
+      // Apply normalization even when only one column exists (back-compat).
+      if (_isInventoryTrackerSheet()) {
+        if (colName == maintainingUnitCol) {
+          updates[colName] = normalizeMaintainingUnit(rawNewValue);
+        } else if (colName == maintainingQtyCol) {
+          updates[colName] = normalizeMaintainingQty(rawNewValue);
+        }
+      }
+
+      bool changedAny = false;
+      for (final entry in updates.entries) {
+        final k = entry.key;
+        final v = entry.value;
+        final prev =
+            (k == colName) ? _originalCellValue : (_data[savedRow][k] ?? '');
+        if (v != prev) {
+          changedAny = true;
+          break;
+        }
+      }
+
+      final prevValues = <String, String>{
+        for (final k in updates.keys)
+          k: (k == colName) ? _originalCellValue : (_data[savedRow][k] ?? ''),
+      };
+
+      if (changedAny) {
         _pushUndoSnapshot();
       }
       setState(() {
-        _data[savedRow][colName] = newValue;
+        for (final entry in updates.entries) {
+          _data[savedRow][entry.key] = entry.value;
+        }
         _editingRow = null;
         _editingCol = null;
         _updateFormulaBar();
@@ -2925,20 +3591,27 @@ class _SheetScreenState extends State<SheetScreen> {
       if (_currentSheet != null) {
         SocketService.instance.cellBlur(_currentSheet!.id, cellRef);
         // ── Real-time broadcast: push the new value to all other users immediately ──
-        if (changed) {
-          SocketService.instance.cellUpdate(
-            _currentSheet!.id,
-            savedRow,
-            colName,
-            newValue,
-          );
+        if (changedAny) {
+          for (final entry in updates.entries) {
+            final k = entry.key;
+            final v = entry.value;
+            final prev = prevValues[k] ?? '';
+            if (v != prev) {
+              SocketService.instance.cellUpdate(
+                _currentSheet!.id,
+                savedRow,
+                k,
+                v,
+              );
+            }
+          }
         }
       }
       if (_isInventoryTrackerSheet() &&
           _isInventoryTotalsInputColumn(colName)) {
         _recalcInventoryTotalsForRow(savedRow);
       }
-      if (changed) _markDirty();
+      if (changedAny) _markDirty();
     }
   }
 
@@ -2970,6 +3643,11 @@ class _SheetScreenState extends State<SheetScreen> {
       selectedCol: _selectedCol,
       selectionEndRow: _selectionEndRow,
       selectionEndCol: _selectionEndCol,
+      columnWidths: Map<int, double>.from(_columnWidths),
+      rowHeights: Map<int, double>.from(_rowHeights),
+      hiddenColumns: Set<int>.from(_hiddenColumns),
+      hiddenRows: Set<int>.from(_hiddenRows),
+      collapsedRows: Set<int>.from(_collapsedRows),
     );
   }
 
@@ -2999,6 +3677,16 @@ class _SheetScreenState extends State<SheetScreen> {
       _selectedCol = snapshot.selectedCol;
       _selectionEndRow = snapshot.selectionEndRow;
       _selectionEndCol = snapshot.selectionEndCol;
+      _columnWidths.clear();
+      _columnWidths.addAll(snapshot.columnWidths);
+      _rowHeights.clear();
+      _rowHeights.addAll(snapshot.rowHeights);
+      _hiddenColumns.clear();
+      _hiddenColumns.addAll(snapshot.hiddenColumns);
+      _hiddenRows.clear();
+      _hiddenRows.addAll(snapshot.hiddenRows);
+      _collapsedRows.clear();
+      _collapsedRows.addAll(snapshot.collapsedRows);
       _editingRow = null;
       _editingCol = null;
       _updateFormulaBar();
@@ -3077,6 +3765,157 @@ class _SheetScreenState extends State<SheetScreen> {
       _selectionEndRow = null;
       _selectionEndCol = null;
     });
+  }
+
+  // =============== Hide/Unhide Helper Methods ===============
+
+  /// Check if a column is hidden
+  bool _isColumnHidden(int colIndex) {
+    return _hiddenColumns.contains(colIndex);
+  }
+
+  /// Check if a row is hidden
+  bool _isRowHidden(int rowIndex) {
+    return _hiddenRows.contains(rowIndex);
+  }
+
+  /// Get the actual (visible) column width - 0 if hidden
+  double _getVisibleColumnWidth(int colIndex) {
+    if (_isColumnHidden(colIndex)) return 0.0;
+    return _getColumnWidth(colIndex);
+  }
+
+  /// Get the actual (visible) row height - 0 if hidden
+  double _getVisibleRowHeight(int rowIndex) {
+    if (_isRowHidden(rowIndex)) return 0.0;
+    return _getRowHeight(rowIndex);
+  }
+
+  /// Hide selected columns
+  // ignore: unused_element
+  void _hideSelectedColumns() {
+    final bounds = _getSelectionBounds();
+    _pushUndoSnapshot();
+    setState(() {
+      for (int c = bounds['minCol']!; c <= bounds['maxCol']!; c++) {
+        _hiddenColumns.add(c);
+      }
+      _clearSelection();
+    });
+    _markDirty();
+  }
+
+  /// Hide selected rows
+  // ignore: unused_element
+  void _hideSelectedRows() {
+    final bounds = _getSelectionBounds();
+    _pushUndoSnapshot();
+    setState(() {
+      for (int r = bounds['minRow']!; r <= bounds['maxRow']!; r++) {
+        _hiddenRows.add(r);
+      }
+      _clearSelection();
+    });
+    _markDirty();
+  }
+
+  /// Unhide column at index
+  // ignore: unused_element
+  void _unhideColumn(int colIndex) {
+    _pushUndoSnapshot();
+    setState(() {
+      _hiddenColumns.remove(colIndex);
+    });
+    _markDirty();
+  }
+
+  /// Unhide row at index
+  // ignore: unused_element
+  void _unhideRow(int rowIndex) {
+    _pushUndoSnapshot();
+    setState(() {
+      _hiddenRows.remove(rowIndex);
+    });
+    _markDirty();
+  }
+
+  /// Unhide all columns
+  void _unhideAllColumns() {
+    if (_hiddenColumns.isEmpty) return;
+    _pushUndoSnapshot();
+    setState(() {
+      _hiddenColumns.clear();
+    });
+    _markDirty();
+  }
+
+  /// Unhide all rows
+  void _unhideAllRows() {
+    if (_hiddenRows.isEmpty) return;
+    _pushUndoSnapshot();
+    setState(() {
+      _hiddenRows.clear();
+    });
+    _markDirty();
+  }
+
+  /// Find hidden columns adjacent to colIndex
+  List<int> _findHiddenColumnsNear(int colIndex) {
+    final List<int> result = [];
+
+    // Check left
+    for (int c = colIndex - 1; c >= 0; c--) {
+      if (_isColumnHidden(c)) {
+        result.add(c);
+      } else {
+        break;
+      }
+    }
+
+    // Check right
+    for (int c = colIndex + 1; c < _columns.length; c++) {
+      if (_isColumnHidden(c)) {
+        result.add(c);
+      } else {
+        break;
+      }
+    }
+
+    return result;
+  }
+
+  /// Find hidden rows adjacent to rowIndex
+  List<int> _findHiddenRowsNear(int rowIndex) {
+    final List<int> result = [];
+
+    // Check above
+    for (int r = rowIndex - 1; r >= 0; r--) {
+      if (_isRowHidden(r)) {
+        result.add(r);
+      } else {
+        break;
+      }
+    }
+
+    // Check below
+    for (int r = rowIndex + 1; r < _data.length; r++) {
+      if (_isRowHidden(r)) {
+        result.add(r);
+      } else {
+        break;
+      }
+    }
+
+    return result;
+  }
+
+  /// Clear current selection
+  void _clearSelection() {
+    _selectedRow = null;
+    _selectedCol = null;
+    _selectionEndRow = null;
+    _selectionEndCol = null;
+    _updateFormulaBar();
   }
 
   /// Get cell reference string (e.g., "A1", "B3")
@@ -3161,6 +4000,327 @@ class _SheetScreenState extends State<SheetScreen> {
       _formulaBarController.text = value; // shows raw formula or plain value
     } else {
       _formulaBarController.text = '';
+    }
+  }
+
+  // =============== Context Menu Methods ===============
+
+  /// Show context menu for data cells
+  Future<void> _showCellContextMenu(
+      BuildContext context, Offset position, int row, int col) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final menuBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final menuItemColor = isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+
+    final RenderBox? overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      color: menuBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        PopupMenuItem(
+          value: 'hide_row',
+          child: Row(
+            children: [
+              Icon(Icons.visibility_off, size: 16, color: menuItemColor),
+              const SizedBox(width: 8),
+              Text('Hide Row', style: TextStyle(color: menuItemColor)),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'hide_column',
+          child: Row(
+            children: [
+              Icon(Icons.visibility_off, size: 16, color: menuItemColor),
+              const SizedBox(width: 8),
+              Text('Hide Column', style: TextStyle(color: menuItemColor)),
+            ],
+          ),
+        ),
+        if (_hiddenRows.isNotEmpty || _hiddenColumns.isNotEmpty)
+          const PopupMenuDivider(),
+        if (_hiddenRows.isNotEmpty)
+          PopupMenuItem(
+            value: 'unhide_all_rows',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide All Rows', style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (_hiddenColumns.isNotEmpty)
+          PopupMenuItem(
+            value: 'unhide_all_columns',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide All Columns',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+      ],
+    );
+
+    if (result == null) return;
+
+    switch (result) {
+      case 'hide_row':
+        _pushUndoSnapshot();
+        setState(() {
+          _hiddenRows.add(row);
+          _clearSelection();
+        });
+        _markDirty();
+        break;
+      case 'hide_column':
+        _pushUndoSnapshot();
+        setState(() {
+          _hiddenColumns.add(col);
+          _clearSelection();
+        });
+        _markDirty();
+        break;
+      case 'unhide_all_rows':
+        _unhideAllRows();
+        break;
+      case 'unhide_all_columns':
+        _unhideAllColumns();
+        break;
+    }
+  }
+
+  /// Show context menu for column headers
+  Future<void> _showColumnHeaderContextMenu(
+      BuildContext context, Offset position, int colIndex) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final menuBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final menuItemColor = isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+
+    final adjacentHidden = _findHiddenColumnsNear(colIndex);
+    final hasHiddenLeft = adjacentHidden.any((c) => c < colIndex);
+    final hasHiddenRight = adjacentHidden.any((c) => c > colIndex);
+
+    final RenderBox? overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      color: menuBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        PopupMenuItem(
+          value: 'hide',
+          child: Row(
+            children: [
+              Icon(Icons.visibility_off, size: 16, color: menuItemColor),
+              const SizedBox(width: 8),
+              Text('Hide Column', style: TextStyle(color: menuItemColor)),
+            ],
+          ),
+        ),
+        if (hasHiddenLeft || hasHiddenRight) const PopupMenuDivider(),
+        if (hasHiddenLeft)
+          PopupMenuItem(
+            value: 'unhide_left',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide Left Columns',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (hasHiddenRight)
+          PopupMenuItem(
+            value: 'unhide_right',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide Right Columns',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (_hiddenColumns.isNotEmpty)
+          PopupMenuItem(
+            value: 'unhide_all',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide All Columns',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+      ],
+    );
+
+    if (result == null) return;
+
+    switch (result) {
+      case 'hide':
+        _pushUndoSnapshot();
+        setState(() {
+          _hiddenColumns.add(colIndex);
+          _clearSelection();
+        });
+        _markDirty();
+        break;
+      case 'unhide_left':
+        _pushUndoSnapshot();
+        setState(() {
+          for (final c in adjacentHidden) {
+            if (c < colIndex) _hiddenColumns.remove(c);
+          }
+        });
+        _markDirty();
+        break;
+      case 'unhide_right':
+        _pushUndoSnapshot();
+        setState(() {
+          for (final c in adjacentHidden) {
+            if (c > colIndex) _hiddenColumns.remove(c);
+          }
+        });
+        _markDirty();
+        break;
+      case 'unhide_all':
+        _unhideAllColumns();
+        break;
+    }
+  }
+
+  /// Show context menu for row headers
+  Future<void> _showRowHeaderContextMenu(
+      BuildContext context, Offset position, int rowIndex) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final menuBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final menuItemColor = isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+
+    final adjacentHidden = _findHiddenRowsNear(rowIndex);
+    final hasHiddenAbove = adjacentHidden.any((r) => r < rowIndex);
+    final hasHiddenBelow = adjacentHidden.any((r) => r > rowIndex);
+
+    final RenderBox? overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      color: menuBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      items: [
+        PopupMenuItem(
+          value: 'hide',
+          child: Row(
+            children: [
+              Icon(Icons.visibility_off, size: 16, color: menuItemColor),
+              const SizedBox(width: 8),
+              Text('Hide Row', style: TextStyle(color: menuItemColor)),
+            ],
+          ),
+        ),
+        if (hasHiddenAbove || hasHiddenBelow) const PopupMenuDivider(),
+        if (hasHiddenAbove)
+          PopupMenuItem(
+            value: 'unhide_above',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide Above Rows',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (hasHiddenBelow)
+          PopupMenuItem(
+            value: 'unhide_below',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide Below Rows',
+                    style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (_hiddenRows.isNotEmpty)
+          PopupMenuItem(
+            value: 'unhide_all',
+            child: Row(
+              children: [
+                const Icon(Icons.visibility, size: 16, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('Unhide All Rows', style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+      ],
+    );
+
+    if (result == null) return;
+
+    switch (result) {
+      case 'hide':
+        _pushUndoSnapshot();
+        setState(() {
+          _hiddenRows.add(rowIndex);
+          _clearSelection();
+        });
+        _markDirty();
+        break;
+      case 'unhide_above':
+        _pushUndoSnapshot();
+        setState(() {
+          for (final r in adjacentHidden) {
+            if (r < rowIndex) _hiddenRows.remove(r);
+          }
+        });
+        _markDirty();
+        break;
+      case 'unhide_below':
+        _pushUndoSnapshot();
+        setState(() {
+          for (final r in adjacentHidden) {
+            if (r > rowIndex) _hiddenRows.remove(r);
+          }
+        });
+        _markDirty();
+        break;
+      case 'unhide_all':
+        _unhideAllRows();
+        break;
     }
   }
 
@@ -3656,12 +4816,12 @@ class _SheetScreenState extends State<SheetScreen> {
 
     const cardRadius = 16.0;
     final cardShadow = BoxShadow(
-      color: Colors.black.withOpacity(0.04),
+      color: Colors.black.withValues(alpha: 0.04),
       blurRadius: 14,
       offset: const Offset(0, 4),
     );
     final hoverShadow = BoxShadow(
-      color: Colors.black.withOpacity(0.07),
+      color: Colors.black.withValues(alpha: 0.07),
       blurRadius: 18,
       offset: const Offset(0, 6),
     );
@@ -3894,7 +5054,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                           BorderRadius.circular(cardRadius),
                                       border: Border.all(
                                         color: isHovered
-                                            ? _kBlue.withOpacity(0.35)
+                                            ? _kBlue.withValues(alpha: 0.35)
                                             : _borderColor,
                                       ),
                                       boxShadow: isHovered
@@ -4271,6 +5431,23 @@ class _SheetScreenState extends State<SheetScreen> {
     }
   }
 
+  Future<void> _refreshAllSheetsExplorerCache() async {
+    if (!mounted) return;
+
+    // After moving sheets, the "All Sheets" tree can appear stale because
+    // folder children are cached (even for folders that were expanded earlier
+    // and later collapsed). Clear caches and refresh expanded nodes so the move
+    // is reflected immediately without requiring manual collapse/expand.
+    if (_explorerFolderCache.isNotEmpty) {
+      setState(() => _explorerFolderCache.clear());
+    }
+
+    final expanded = _explorerExpandedFolderIds.toList(growable: false);
+    for (final folderId in expanded) {
+      await _ensureExplorerFolderLoaded(folderId, forceRefresh: true);
+    }
+  }
+
   // ── Recent sheet card ──
   Widget _buildRecentCard(SheetModel sheet) {
     final timeAgo = _timeAgo(sheet.updatedAt ?? sheet.createdAt);
@@ -4290,11 +5467,11 @@ class _SheetScreenState extends State<SheetScreen> {
             color: isHovered ? _surfaceAltColor : _surfaceColor,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: isHovered ? _kBlue.withOpacity(0.35) : _borderColor,
+              color: isHovered ? _kBlue.withValues(alpha: 0.35) : _borderColor,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(isHovered ? 0.07 : 0.04),
+                color: Colors.black.withValues(alpha: isHovered ? 0.07 : 0.04),
                 blurRadius: isHovered ? 18 : 14,
                 offset: const Offset(0, 5),
               ),
@@ -4490,7 +5667,7 @@ class _SheetScreenState extends State<SheetScreen> {
         border: Border.all(color: _borderColor),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 14,
             offset: const Offset(0, 4),
           ),
@@ -4538,7 +5715,8 @@ class _SheetScreenState extends State<SheetScreen> {
                       child: Container(
                         width: 1,
                         height: 36,
-                        color: _borderColor.withOpacity(_isDark ? 0.55 : 0.85),
+                        color: _borderColor.withValues(
+                            alpha: _isDark ? 0.55 : 0.85),
                       ),
                     ),
                   );
@@ -4566,7 +5744,8 @@ class _SheetScreenState extends State<SheetScreen> {
                         width: 30,
                         height: 30,
                         decoration: BoxDecoration(
-                          color: _kBlue.withOpacity(_isDark ? 0.35 : 0.18),
+                          color:
+                              _kBlue.withValues(alpha: _isDark ? 0.35 : 0.18),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(color: _borderColor),
                         ),
@@ -4739,7 +5918,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
                       final baseAlt = idx.isEven
                           ? _surfaceColor
-                          : _surfaceAltColor.withOpacity(0.7);
+                          : _surfaceAltColor.withValues(alpha: 0.7);
 
                       Color rowBg = isHovered ? _surfaceAltColor : baseAlt;
 
@@ -4751,10 +5930,10 @@ class _SheetScreenState extends State<SheetScreen> {
                         final isFolderSelected = folderId != null &&
                             _explorerSelectedFolderIds.contains(folderId);
                         if (isFolderSelected) {
-                          rowBg = _kBlue.withOpacity(0.10);
+                          rowBg = _kBlue.withValues(alpha: 0.10);
                         }
                         if (entry.isExpanded == true) {
-                          rowBg = _kBlue.withOpacity(0.06);
+                          rowBg = _kBlue.withValues(alpha: 0.06);
                         }
                       }
 
@@ -4764,11 +5943,11 @@ class _SheetScreenState extends State<SheetScreen> {
                         final isOpening = _openingSheetId == sheet.id;
                         final isActiveSheet = _currentSheet?.id == sheet.id;
                         rowBg = isSelected
-                            ? _kBlue.withOpacity(0.10)
+                            ? _kBlue.withValues(alpha: 0.10)
                             : isOpening
-                                ? _kBlue.withOpacity(0.08)
+                                ? _kBlue.withValues(alpha: 0.08)
                                 : isActiveSheet
-                                    ? _kBlue.withOpacity(0.06)
+                                    ? _kBlue.withValues(alpha: 0.06)
                                     : (isHovered ? _surfaceAltColor : baseAlt);
                       }
 
@@ -4810,8 +5989,9 @@ class _SheetScreenState extends State<SheetScreen> {
                                         : int.tryParse(
                                             entry.folder?['id']?.toString() ??
                                                 '');
-                                    if (folderId == null)
+                                    if (folderId == null) {
                                       return const SizedBox();
+                                    }
                                     return Padding(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 8),
@@ -5621,16 +6801,32 @@ class _SheetScreenState extends State<SheetScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 200),
-                child: Text(
-                  _currentSheet?.name ?? 'Untitled',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: _textPrimary,
+              Tooltip(
+                message: (!widget.readOnly && !isViewer)
+                    ? 'Rename sheet'
+                    : _currentSheet?.name ?? 'Untitled',
+                child: InkWell(
+                  onTap:
+                      (!widget.readOnly && !isViewer && _currentSheet != null)
+                          ? () => _renameSheet(_currentSheet!)
+                          : null,
+                  borderRadius: BorderRadius.circular(6),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 200),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 2, vertical: 1),
+                      child: Text(
+                        _currentSheet?.name ?? 'Untitled',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (isLockedByMe)
@@ -5727,6 +6923,41 @@ class _SheetScreenState extends State<SheetScreen> {
               ),
             ),
           ),
+          if (_isInventoryTrackerSheet()) ...[
+            const SizedBox(width: 10),
+            Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: _surfaceAltColor,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _borderColor, width: 1),
+              ),
+              child: Center(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<_InventorySortMode>(
+                    value: _inventorySortMode,
+                    icon: Icon(Icons.arrow_drop_down,
+                        size: 18, color: _textSecondary),
+                    style: TextStyle(fontSize: 12, color: _textPrimary),
+                    onChanged: (mode) {
+                      if (mode == null) return;
+                      if (_editingRow != null) {
+                        _saveEdit();
+                      }
+                      setState(() => _inventorySortMode = mode);
+                    },
+                    items: _InventorySortMode.values
+                        .map((m) => DropdownMenuItem<_InventorySortMode>(
+                              value: m,
+                              child: Text(_inventorySortLabel(m)),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(width: 12),
           // ─ Active users tracking panel (DB heartbeat) ─
           activeUsersPanel(),
@@ -5793,7 +7024,9 @@ class _SheetScreenState extends State<SheetScreen> {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isSelected
-              ? (_isDark ? _kBlue.withOpacity(0.16) : const Color(0xFFF0F4FF))
+              ? (_isDark
+                  ? _kBlue.withValues(alpha: 0.16)
+                  : const Color(0xFFF0F4FF))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
           border: Border(
@@ -6117,7 +7350,7 @@ class _SheetScreenState extends State<SheetScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: AppColors.primaryBlue.withOpacity(0.1),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(Icons.tune,
@@ -6248,7 +7481,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
       final total = double.tryParse(row['Total Quantity'] ?? '') ?? 0;
       final stock = double.tryParse(row['Stock'] ?? '') ?? 0;
-      final maintaining = double.tryParse(row['Maintaining'] ?? '') ?? 0;
+      final maintaining = double.tryParse(
+            (row['Maintaining Qty'] ?? row['Maintaining'] ?? '')
+                .replaceAll(',', ''),
+          ) ??
+          0;
       final critical = double.tryParse(row['Critical'] ?? '') ?? 0;
       final deficit = (critical - total).clamp(0, double.infinity);
       criticalRows.add({
@@ -6487,7 +7724,7 @@ class _SheetScreenState extends State<SheetScreen> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: severity.withOpacity(0.12),
+                                    color: severity.withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
@@ -6920,7 +8157,7 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // ignore: unused_element
   void _showFormulaDialog() {
-    // TODO: Implement formula dialog
+    // Formula dialog is not implemented yet.
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Formula dialog coming soon')),
     );
@@ -6941,11 +8178,11 @@ class _SheetScreenState extends State<SheetScreen> {
       IconData icon, String tooltip, bool active, VoidCallback onPressed) {
     final iconColor = _isDark ? const Color(0xFFE2E8F0) : _kNavy;
     final activeBg = _isDark
-        ? AppColors.primaryBlue.withOpacity(0.20)
-        : _kNavy.withOpacity(0.12);
+        ? AppColors.primaryBlue.withValues(alpha: 0.20)
+        : _kNavy.withValues(alpha: 0.12);
     final activeBorder = _isDark
-        ? AppColors.primaryBlue.withOpacity(0.45)
-        : _kNavy.withOpacity(0.3);
+        ? AppColors.primaryBlue.withValues(alpha: 0.45)
+        : _kNavy.withValues(alpha: 0.3);
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -8563,7 +9800,8 @@ class _SheetScreenState extends State<SheetScreen> {
       'Product Name',
       if (codeCol != null) codeCol,
       'Stock',
-      'Maintaining',
+      'Maintaining Qty',
+      'Maintaining Unit',
       'Critical',
     ].where(_columns.contains).toList();
   }
@@ -9208,23 +10446,84 @@ class _SheetScreenState extends State<SheetScreen> {
     final todayStr = _inventoryDateStr(DateTime.now());
 
     final q = _inventorySearchQuery.toLowerCase();
-    final filteredEntries = q.isEmpty
-        ? _data.asMap().entries.toList()
-        : _data.asMap().entries.where((e) {
-            final row = e.value;
-            return (row['Product Name'] ?? '')
-                    .toString()
-                    .toLowerCase()
-                    .contains(q) ||
-                _inventoryRowCode(row).toString().toLowerCase().contains(q);
-          }).toList();
+    final List<MapEntry<int, Map<String, String>>> filteredEntries = (q.isEmpty
+            ? _data.asMap().entries
+            : _data.asMap().entries.where((e) {
+                final row = e.value;
+                return (row['Product Name'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    _inventoryRowCode(row).toString().toLowerCase().contains(q);
+              }))
+        .where((e) => !_isRowHidden(e.key))
+        .toList();
 
-    final visibleColumnKeys = <String>[
-      ...frozenLeft,
-      for (final date in visibleDates) ...['DATE:$date:IN', 'DATE:$date:OUT'],
-      ...miscCols,
-      ...frozenRight,
-    ];
+    String norm(String v) => v.trim().toLowerCase();
+    String nameKey(Map<String, String> row) {
+      final n = norm((row['Product Name'] ?? '').toString());
+      return n.isEmpty ? '\u{10FFFF}' : n;
+    }
+
+    String codeKey(Map<String, String> row) {
+      final c = norm(_inventoryRowCode(row).toString());
+      return c.isEmpty ? '\u{10FFFF}' : c;
+    }
+
+    filteredEntries.sort((a, b) {
+      final ra = a.value;
+      final rb = b.value;
+
+      switch (_inventorySortMode) {
+        case _InventorySortMode.nameAsc:
+          final c1 = nameKey(ra).compareTo(nameKey(rb));
+          if (c1 != 0) return c1;
+          return codeKey(ra).compareTo(codeKey(rb));
+        case _InventorySortMode.codeAsc:
+          final c1 = codeKey(ra).compareTo(codeKey(rb));
+          if (c1 != 0) return c1;
+          return nameKey(ra).compareTo(nameKey(rb));
+        case _InventorySortMode.lowStockFirst:
+          final da = _criticalDeficitPctForRow(ra) ?? -1.0;
+          final db = _criticalDeficitPctForRow(rb) ?? -1.0;
+          final c1 = db.compareTo(da); // bigger deficit first
+          if (c1 != 0) return c1;
+          final c2 = nameKey(ra).compareTo(nameKey(rb));
+          if (c2 != 0) return c2;
+          return codeKey(ra).compareTo(codeKey(rb));
+      }
+    });
+
+    double colWidthForKey(String colKey) {
+      final colIdx = _columns.indexOf(colKey);
+      final base = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
+      if (colIdx < 0) return base;
+      return _columnWidths[colIdx] ?? base;
+    }
+
+    final visibleColumnKeys = <String>[];
+    for (final key in frozenLeft) {
+      final idx = _columns.indexOf(key);
+      if (idx >= 0 && !_isColumnHidden(idx)) visibleColumnKeys.add(key);
+    }
+    for (final date in visibleDates) {
+      final inKey = 'DATE:$date:IN';
+      final outKey = 'DATE:$date:OUT';
+      final inIdx = _columns.indexOf(inKey);
+      final outIdx = _columns.indexOf(outKey);
+      if (inIdx >= 0 && !_isColumnHidden(inIdx)) visibleColumnKeys.add(inKey);
+      if (outIdx >= 0 && !_isColumnHidden(outIdx)) {
+        visibleColumnKeys.add(outKey);
+      }
+    }
+    for (final key in miscCols) {
+      final idx = _columns.indexOf(key);
+      if (idx >= 0 && !_isColumnHidden(idx)) visibleColumnKeys.add(key);
+    }
+    for (final key in frozenRight) {
+      final idx = _columns.indexOf(key);
+      if (idx >= 0 && !_isColumnHidden(idx)) visibleColumnKeys.add(key);
+    }
 
     Map<String, int>? inventoryCellFromPosition(Offset localPosition) {
       final x = localPosition.dx / _zoomLevel;
@@ -9233,19 +10532,30 @@ class _SheetScreenState extends State<SheetScreen> {
 
       if (x < _rowNumWidth || y < dataStartY) return null;
 
-      final rowVisual = ((y - dataStartY) / _cellHeight).floor();
-      if (rowVisual < 0 || rowVisual >= filteredEntries.length) return null;
-      final row = filteredEntries[rowVisual].key;
+      // Resolve row using variable row heights.
+      int? resolvedRow;
+      double accY = dataStartY;
+      for (final entry in filteredEntries) {
+        final r = entry.key;
+        final h = _getRowHeight(r);
+        if (y >= accY && y < accY + h) {
+          resolvedRow = r;
+          break;
+        }
+        accY += h;
+      }
+      if (resolvedRow == null) return null;
 
+      // Resolve column using variable column widths + hidden columns.
       double accX = _rowNumWidth;
       for (final colKey in visibleColumnKeys) {
-        final width = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
-        if (x >= accX && x < accX + width) {
+        final w = colWidthForKey(colKey);
+        if (x >= accX && x < accX + w) {
           final col = _columns.indexOf(colKey);
           if (col < 0) return null;
-          return {'row': row, 'col': col};
+          return {'row': resolvedRow, 'col': col};
         }
-        accX += width;
+        accX += w;
       }
 
       return null;
@@ -9253,22 +10563,17 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Total grid width
     double totalWidth = _rowNumWidth;
-    for (final _ in frozenLeft) {
-      totalWidth += _invFixedColW;
-    }
-    for (final _ in visibleDates) {
-      totalWidth += _invSubColW * 2;
-    }
-    for (final _ in miscCols) {
-      totalWidth += _invFixedColW;
-    }
-    for (final _ in frozenRight) {
-      totalWidth += _invFixedColW;
+    for (final colKey in visibleColumnKeys) {
+      totalWidth += colWidthForKey(colKey);
     }
 
     // Approximate total height: two header rows + data rows.
+    double dataRowsHeight = 0;
+    for (final e in filteredEntries) {
+      dataRowsHeight += _getRowHeight(e.key);
+    }
     final double totalHeight =
-        _invHeaderH1 + _invHeaderH2 + filteredEntries.length * _cellHeight + 16;
+        _invHeaderH1 + _invHeaderH2 + dataRowsHeight + 16;
 
     final gridContent = SizedBox(
       width: totalWidth,
@@ -9280,8 +10585,8 @@ class _SheetScreenState extends State<SheetScreen> {
               frozenLeft, frozenRight, miscCols, visibleDates,
               canDelete: isAdminOrEditor && !widget.readOnly),
           // Data rows – filtered by search query
-          ...filteredEntries.map((e) => _buildInventoryDataRow(
-                e.key,
+          ...filteredEntries.asMap().entries.map((e) => _buildInventoryDataRow(
+                e.value.key,
                 frozenLeft,
                 frozenRight,
                 miscCols,
@@ -9289,6 +10594,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 isAdminOrEditor: isAdminOrEditor && !widget.readOnly,
                 isViewer: isViewer,
                 todayStr: todayStr,
+                displayRowNumber: e.key + 1,
               )),
         ],
       ),
@@ -9353,6 +10659,13 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final todayStr = _inventoryDateStr(DateTime.now());
 
+    double colWidthForKey(String colKey) {
+      final colIdx = _columns.indexOf(colKey);
+      final base = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
+      if (colIdx < 0) return base;
+      return _columnWidths[colIdx] ?? base;
+    }
+
     BoxDecoration deco(Color bg) => BoxDecoration(
           color: bg,
           border: const Border(
@@ -9363,24 +10676,105 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final double fullHeaderH = _invHeaderH1 + _invHeaderH2;
 
-    Widget hCell(String label, double w, double h, Color bg,
-            {bool bold = true}) =>
-        Container(
-          width: w,
-          height: h,
-          alignment: Alignment.center,
-          decoration: deco(bg),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: bold ? FontWeight.bold : FontWeight.w500,
-              color: textCol,
+    Widget resizableHeaderCell({
+      required String colKey,
+      required String label,
+      required double height,
+      required Color bg,
+      bool bold = true,
+    }) {
+      final colIndex = _columns.indexOf(colKey);
+      if (colIndex < 0 || _isColumnHidden(colIndex)) {
+        return const SizedBox.shrink();
+      }
+
+      final w = colWidthForKey(colKey);
+
+      final adjacentHidden = _findHiddenColumnsNear(colIndex);
+      final hasHiddenLeft = adjacentHidden.any((c) => c < colIndex);
+      final hasHiddenRight = adjacentHidden.any((c) => c > colIndex);
+
+      return SizedBox(
+        width: w,
+        height: height,
+        child: Stack(
+          children: [
+            GestureDetector(
+              onSecondaryTapDown: (details) {
+                _showColumnHeaderContextMenu(
+                    context, details.globalPosition, colIndex);
+              },
+              child: Container(
+                width: w,
+                height: height,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: bg,
+                  border: Border(
+                    right: const BorderSide(color: borderCol, width: 1),
+                    bottom: const BorderSide(color: borderCol, width: 1),
+                    left: hasHiddenLeft
+                        ? const BorderSide(color: Colors.green, width: 2)
+                        : BorderSide.none,
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: bold ? FontWeight.bold : FontWeight.w500,
+                    color: textCol,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
             ),
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-          ),
-        );
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  onHorizontalDragStart: (details) {
+                    _isResizingColumn = true;
+                    _resizingColumnIndex = colIndex;
+                    _resizingStartX = details.globalPosition.dx;
+                    _resizingStartWidth = w;
+                  },
+                  onHorizontalDragUpdate: (details) {
+                    if (_isResizingColumn && _resizingColumnIndex == colIndex) {
+                      final delta =
+                          (details.globalPosition.dx - _resizingStartX) /
+                              _zoomLevel;
+                      final newWidth = (_resizingStartWidth + delta)
+                          .clamp(_minCellWidth, 500.0);
+                      setState(() {
+                        _columnWidths[colIndex] = newWidth;
+                      });
+                    }
+                  },
+                  onHorizontalDragEnd: (_) {
+                    _isResizingColumn = false;
+                    _resizingColumnIndex = null;
+                    _markDirty();
+                  },
+                  child: Container(width: 6, color: Colors.transparent),
+                ),
+              ),
+            ),
+            if (hasHiddenRight)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: Container(width: 2, color: Colors.green),
+              ),
+          ],
+        ),
+      );
+    }
 
     // Date group header with embedded IN/OUT sub-header (no gap).
     Widget dateGroupCell(String date) {
@@ -9390,59 +10784,101 @@ class _SheetScreenState extends State<SheetScreen> {
       final label = isToday
           ? '${_inventoryDateLabel(date)}  TODAY'
           : _inventoryDateLabel(date);
+
+      final inKey = 'DATE:$date:IN';
+      final outKey = 'DATE:$date:OUT';
+      final inIdx = _columns.indexOf(inKey);
+      final outIdx = _columns.indexOf(outKey);
+
+      final bool inVisible = inIdx >= 0 && !_isColumnHidden(inIdx);
+      final bool outVisible = outIdx >= 0 && !_isColumnHidden(outIdx);
+      if (!inVisible && !outVisible) {
+        return const SizedBox.shrink();
+      }
+
+      final double inW = inVisible ? colWidthForKey(inKey) : 0.0;
+      final double outW = outVisible ? colWidthForKey(outKey) : 0.0;
+      final double groupW = inW + outW;
+
+      // Right-clicking the group uses the first visible sub-column.
+      final int? groupMenuCol =
+          inVisible ? inIdx : (outVisible ? outIdx : null);
+
       return SizedBox(
-        width: _invSubColW * 2,
+        width: groupW,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: _invSubColW * 2,
-              height: _invHeaderH1,
-              decoration: deco(bg),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Padding(
-                    padding: EdgeInsets.only(right: canDelete ? 18.0 : 0),
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: textCol,
+            GestureDetector(
+              onSecondaryTapDown: groupMenuCol == null
+                  ? null
+                  : (details) {
+                      _showColumnHeaderContextMenu(
+                          context, details.globalPosition, groupMenuCol);
+                    },
+              child: Container(
+                width: groupW,
+                height: _invHeaderH1,
+                decoration: deco(bg),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(right: canDelete ? 18.0 : 0),
+                      child: Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: textCol,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  if (canDelete)
-                    Positioned(
-                      right: 2,
-                      top: 2,
-                      child: GestureDetector(
-                        onTap: () => _deleteInventoryDateColumn(date),
-                        child: Container(
-                          width: 16,
-                          height: 16,
-                          decoration: BoxDecoration(
-                            color: Colors.red[700],
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: const Icon(
-                            Icons.close,
-                            size: 11,
-                            color: Colors.white,
+                    if (canDelete)
+                      Positioned(
+                        right: 2,
+                        top: 2,
+                        child: GestureDetector(
+                          onTap: () => _deleteInventoryDateColumn(date),
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: Colors.red[700],
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: const Icon(
+                              Icons.close,
+                              size: 11,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
             Row(
               children: [
-                hCell('IN', _invSubColW, _invHeaderH2, subBg, bold: false),
-                hCell('OUT', _invSubColW, _invHeaderH2, subBg, bold: false),
+                if (inVisible)
+                  resizableHeaderCell(
+                    colKey: inKey,
+                    label: 'IN',
+                    height: _invHeaderH2,
+                    bg: subBg,
+                    bold: false,
+                  ),
+                if (outVisible)
+                  resizableHeaderCell(
+                    colKey: outKey,
+                    label: 'OUT',
+                    height: _invHeaderH2,
+                    bg: subBg,
+                    bold: false,
+                  ),
               ],
             ),
           ],
@@ -9463,12 +10899,35 @@ class _SheetScreenState extends State<SheetScreen> {
           ),
         ),
         for (final col in frozenLeft)
-          hCell(col, _invFixedColW, fullHeaderH, navy),
-        for (final date in visibleDates) dateGroupCell(date),
+          resizableHeaderCell(
+              colKey: col,
+              label: col,
+              height: fullHeaderH,
+              bg: navy,
+              bold: true),
+        for (final date in visibleDates)
+          if ((() {
+            final inIdx = _columns.indexOf('DATE:$date:IN');
+            final outIdx = _columns.indexOf('DATE:$date:OUT');
+            final inVisible = inIdx >= 0 && !_isColumnHidden(inIdx);
+            final outVisible = outIdx >= 0 && !_isColumnHidden(outIdx);
+            return inVisible || outVisible;
+          })())
+            dateGroupCell(date),
         for (final col in miscCols)
-          hCell(col, _invFixedColW, fullHeaderH, navy),
+          resizableHeaderCell(
+              colKey: col,
+              label: col,
+              height: fullHeaderH,
+              bg: navy,
+              bold: true),
         for (final col in frozenRight)
-          hCell(col, _invFixedColW, fullHeaderH, darkNavy),
+          resizableHeaderCell(
+              colKey: col,
+              label: col,
+              height: fullHeaderH,
+              bg: darkNavy,
+              bold: true),
       ],
     );
   }
@@ -9482,6 +10941,7 @@ class _SheetScreenState extends State<SheetScreen> {
     required bool isAdminOrEditor,
     required bool isViewer,
     required String todayStr,
+    int? displayRowNumber,
   }) {
     final row = _data[rowIndex];
     final bool isRowSelected = _selectedRow == rowIndex;
@@ -9496,6 +10956,15 @@ class _SheetScreenState extends State<SheetScreen> {
       return AppColors.primaryOrange;
     }
 
+    final rowHeight = _getRowHeight(rowIndex);
+
+    double colWidthForKey(String colKey) {
+      final colIdx = _columns.indexOf(colKey);
+      final base = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
+      if (colIdx < 0) return base;
+      return _columnWidths[colIdx] ?? base;
+    }
+
     Widget dataCell({
       required String colKey,
       required double width,
@@ -9503,6 +10972,9 @@ class _SheetScreenState extends State<SheetScreen> {
       bool autoCalc = false,
     }) {
       final colIdx = _columns.indexOf(colKey);
+      if (colIdx < 0 || _isColumnHidden(colIdx)) {
+        return const SizedBox.shrink();
+      }
       final isEditing = _editingRow == rowIndex && _editingCol == colIdx;
       final isActiveCell = _selectedRow == rowIndex && _selectedCol == colIdx;
       final isInSel = colIdx >= 0 && _isInSelection(rowIndex, colIdx);
@@ -9580,11 +11052,20 @@ class _SheetScreenState extends State<SheetScreen> {
         onDoubleTap: (editable && !autoCalc && colIdx >= 0)
             ? () => _startEditing(rowIndex, colIdx)
             : null,
+        onSecondaryTapDown: (details) {
+          if (colIdx < 0) return;
+          if (_editingRow != null) {
+            _saveEdit();
+          }
+          _selectCell(rowIndex, colIdx);
+          _showCellContextMenu(
+              context, details.globalPosition, rowIndex, colIdx);
+        },
         child: Stack(
           children: [
             Container(
               width: width,
-              height: _cellHeight,
+              height: rowHeight,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: bgColor(),
@@ -9674,7 +11155,7 @@ class _SheetScreenState extends State<SheetScreen> {
                     message: '${cellOccupant.username} is here',
                     child: Container(
                       decoration: BoxDecoration(
-                        color: cellOccupant.color.withOpacity(0.15),
+                        color: cellOccupant.color.withValues(alpha: 0.15),
                         border:
                             Border.all(color: cellOccupant.color, width: 1.5),
                       ),
@@ -9709,34 +11190,95 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Row number cell
     final cells = <Widget>[
-      Container(
+      SizedBox(
         width: _rowNumWidth,
-        height: _cellHeight,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color:
-              isRowSelected ? const Color(0xFF4472C4) : const Color(0xFFF5F5F5),
-          border: Border(
-            right: BorderSide(color: Colors.grey[400]!, width: 1),
-            bottom: BorderSide(color: Colors.grey[300]!, width: 1),
-          ),
-        ),
-        child: Text(
-          '${rowIndex + 1}',
-          style: TextStyle(
-            fontSize: 11,
-            color: isRowSelected ? Colors.white : Colors.grey[600],
-            fontWeight: FontWeight.w500,
-          ),
+        height: rowHeight,
+        child: Stack(
+          children: [
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _selectedRow = rowIndex;
+                  _selectedCol = 0;
+                  _selectionEndRow = rowIndex;
+                  _selectionEndCol = _columns.length - 1;
+                  _updateFormulaBar();
+                });
+                _spreadsheetFocusNode.requestFocus();
+              },
+              onSecondaryTapDown: (details) {
+                _showRowHeaderContextMenu(
+                    context, details.globalPosition, rowIndex);
+              },
+              child: Container(
+                width: _rowNumWidth,
+                height: rowHeight,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: isRowSelected
+                      ? const Color(0xFF4472C4)
+                      : const Color(0xFFF5F5F5),
+                  border: Border(
+                    right: BorderSide(color: Colors.grey[400]!, width: 1),
+                    bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                  ),
+                ),
+                child: Text(
+                  '${displayRowNumber ?? (rowIndex + 1)}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isRowSelected ? Colors.white : Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeRow,
+                child: GestureDetector(
+                  onVerticalDragStart: (details) {
+                    _isResizingRow = true;
+                    _resizingRowIndex = rowIndex;
+                    _resizingStartY = details.globalPosition.dy;
+                    _resizingStartHeight = rowHeight;
+                  },
+                  onVerticalDragUpdate: (details) {
+                    if (_isResizingRow && _resizingRowIndex == rowIndex) {
+                      final delta =
+                          (details.globalPosition.dy - _resizingStartY) /
+                              _zoomLevel;
+                      final newHeight = (_resizingStartHeight + delta)
+                          .clamp(_minRowHeight, _maxRowHeight);
+                      setState(() {
+                        _rowHeights[rowIndex] = newHeight;
+                      });
+                    }
+                  },
+                  onVerticalDragEnd: (_) {
+                    _isResizingRow = false;
+                    _resizingRowIndex = null;
+                    _markDirty();
+                  },
+                  child: Container(height: 6, color: Colors.transparent),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     ];
 
     // Frozen left
     for (final col in frozenLeft) {
+      final idx = _columns.indexOf(col);
+      if (idx < 0 || _isColumnHidden(idx)) continue;
       cells.add(dataCell(
         colKey: col,
-        width: _invFixedColW,
+        width: colWidthForKey(col),
         editable: isAdminOrEditor,
       ));
     }
@@ -9747,32 +11289,44 @@ class _SheetScreenState extends State<SheetScreen> {
       // _startEditing will route them: historical → edit-request dialog,
       // today → direct edit (unless locked).  Admins bypass the dialog.
       final canEditDate = !isViewer;
-      cells.add(dataCell(
-        colKey: 'DATE:$date:IN',
-        width: _invSubColW,
-        editable: canEditDate,
-      ));
-      cells.add(dataCell(
-        colKey: 'DATE:$date:OUT',
-        width: _invSubColW,
-        editable: canEditDate,
-      ));
+      final inKey = 'DATE:$date:IN';
+      final outKey = 'DATE:$date:OUT';
+      final inIdx = _columns.indexOf(inKey);
+      final outIdx = _columns.indexOf(outKey);
+      if (inIdx >= 0 && !_isColumnHidden(inIdx)) {
+        cells.add(dataCell(
+          colKey: inKey,
+          width: colWidthForKey(inKey),
+          editable: canEditDate,
+        ));
+      }
+      if (outIdx >= 0 && !_isColumnHidden(outIdx)) {
+        cells.add(dataCell(
+          colKey: outKey,
+          width: colWidthForKey(outKey),
+          editable: canEditDate,
+        ));
+      }
     }
 
     // Misc columns
     for (final col in miscCols) {
+      final idx = _columns.indexOf(col);
+      if (idx < 0 || _isColumnHidden(idx)) continue;
       cells.add(dataCell(
         colKey: col,
-        width: _invFixedColW,
+        width: colWidthForKey(col),
         editable: isAdminOrEditor,
       ));
     }
 
     // Frozen right (auto-calculated)
     for (final col in frozenRight) {
+      final idx = _columns.indexOf(col);
+      if (idx < 0 || _isColumnHidden(idx)) continue;
       cells.add(dataCell(
         colKey: col,
-        width: _invFixedColW,
+        width: colWidthForKey(col),
         editable: false,
         autoCalc: true,
       ));
@@ -9788,12 +11342,12 @@ class _SheetScreenState extends State<SheetScreen> {
     // Width of data cells only (no row number column).
     double dataCellsWidth = 0;
     for (int c = 0; c < _columns.length; c++) {
-      dataCellsWidth += _getColumnWidth(c);
+      dataCellsWidth += _getVisibleColumnWidth(c);
     }
     // Total height of all data rows.
     double dataRowsHeight = 0;
     for (int r = 0; r < _data.length; r++) {
-      dataRowsHeight += _getRowHeight(r);
+      dataRowsHeight += _getVisibleRowHeight(r);
     }
     dataRowsHeight += 40;
 
@@ -9862,6 +11416,7 @@ class _SheetScreenState extends State<SheetScreen> {
                               children: _data
                                   .asMap()
                                   .entries
+                                  .where((e) => !_isRowHidden(e.key))
                                   .map((e) => _buildRowNumCellWidget(e.key))
                                   .toList(),
                             ),
@@ -9944,6 +11499,8 @@ class _SheetScreenState extends State<SheetScreen> {
                                           children: _data
                                               .asMap()
                                               .entries
+                                              .where(
+                                                  (e) => !_isRowHidden(e.key))
                                               .map((e) => _buildDataRow(e.key,
                                                   includeRowNum: false))
                                               .toList(),
@@ -9979,6 +11536,7 @@ class _SheetScreenState extends State<SheetScreen> {
     int col = -1;
     double accX = 0;
     for (int c = 0; c < _columns.length; c++) {
+      if (_isColumnHidden(c)) continue;
       final w = _getColumnWidth(c);
       if (x >= accX && x < accX + w) {
         col = c;
@@ -9991,6 +11549,7 @@ class _SheetScreenState extends State<SheetScreen> {
     int row = -1;
     double accY = 0;
     for (int r = 0; r < _data.length; r++) {
+      if (_isRowHidden(r)) continue;
       final h = _getRowHeight(r);
       if (y >= accY && y < accY + h) {
         row = r;
@@ -10278,7 +11837,11 @@ class _SheetScreenState extends State<SheetScreen> {
             // Header row
             _buildHeaderRow(),
             // Data rows
-            ..._data.asMap().entries.map((entry) {
+            ..._data
+                .asMap()
+                .entries
+                .where((entry) => !_isRowHidden(entry.key))
+                .map((entry) {
               return _buildDataRow(entry.key);
             }),
           ],
@@ -10333,13 +11896,21 @@ class _SheetScreenState extends State<SheetScreen> {
         children: [
           if (includeCorner) _buildCornerCellWidget(),
           // Column headers with resize handles
-          ..._columns.asMap().entries.map((entry) {
+          ..._columns.asMap().entries.where((entry) {
+            // Skip hidden columns
+            return !_isColumnHidden(entry.key);
+          }).map((entry) {
             final colIndex = entry.key;
             final colWidth = _getColumnWidth(colIndex);
             final bounds = _getSelectionBounds();
             final isColSelected = _selectedRow != null &&
                 colIndex >= bounds['minCol']! &&
                 colIndex <= bounds['maxCol']!;
+
+            // Check if there are hidden columns adjacent (for visual indicator)
+            final adjacentHidden = _findHiddenColumnsNear(colIndex);
+            final hasHiddenLeft = adjacentHidden.any((c) => c < colIndex);
+            final hasHiddenRight = adjacentHidden.any((c) => c > colIndex);
 
             return GestureDetector(
               onTap: () {
@@ -10354,6 +11925,10 @@ class _SheetScreenState extends State<SheetScreen> {
                 _spreadsheetFocusNode.requestFocus();
               },
               onDoubleTap: () => _renameColumn(colIndex),
+              onSecondaryTapDown: (details) {
+                _showColumnHeaderContextMenu(
+                    context, details.globalPosition, colIndex);
+              },
               child: SizedBox(
                 width: colWidth,
                 height: _headerHeight,
@@ -10367,6 +11942,10 @@ class _SheetScreenState extends State<SheetScreen> {
                       decoration: BoxDecoration(
                         border: Border(
                           right: BorderSide(color: gridBorder, width: 1),
+                          // Green indicator if hidden columns to the left
+                          left: hasHiddenLeft
+                              ? const BorderSide(color: Colors.green, width: 2)
+                              : BorderSide.none,
                         ),
                         color: isColSelected ? AppColors.lightBlue : headerBg,
                       ),
@@ -10399,8 +11978,9 @@ class _SheetScreenState extends State<SheetScreen> {
                           onHorizontalDragUpdate: (details) {
                             if (_isResizingColumn &&
                                 _resizingColumnIndex == colIndex) {
-                              final delta =
-                                  details.globalPosition.dx - _resizingStartX;
+                              final delta = (details.globalPosition.dx -
+                                      _resizingStartX) /
+                                  _zoomLevel;
                               final newWidth = (_resizingStartWidth + delta)
                                   .clamp(_minCellWidth, 500.0);
                               setState(() {
@@ -10419,6 +11999,17 @@ class _SheetScreenState extends State<SheetScreen> {
                         ),
                       ),
                     ),
+                    // Hidden columns indicator at right (if columns to the right are hidden)
+                    if (hasHiddenRight)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 2,
+                          color: Colors.green,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -10441,40 +12032,114 @@ class _SheetScreenState extends State<SheetScreen> {
         rowIndex >= bounds['minRow']! &&
         rowIndex <= bounds['maxRow']!;
     final rowHeight = _getRowHeight(rowIndex);
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedRow = rowIndex;
-          _selectedCol = 0;
-          _selectionEndRow = rowIndex;
-          _selectionEndCol = _columns.length - 1;
-          _updateFormulaBar();
-        });
-        _spreadsheetFocusNode.requestFocus();
-      },
-      onDoubleTap: () => _renameRow(rowIndex),
-      child: Container(
-        width: _rowNumWidth,
-        height: rowHeight,
-        decoration: BoxDecoration(
-          border: Border(
-            right: BorderSide(color: gridBorder, width: 1),
-            bottom: BorderSide(color: gridBorder, width: 1),
-          ),
-          color: isRowInSelection ? AppColors.lightBlue : rowHeaderBg,
-        ),
-        child: Center(
-          child: Text(
-            _rowLabels[rowIndex],
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: isRowInSelection ? FontWeight.w600 : FontWeight.w400,
-              color: isRowInSelection ? AppColors.primaryBlue : rowNumText,
+
+    // Check if there are hidden rows adjacent (for visual indicator)
+    final adjacentHidden = _findHiddenRowsNear(rowIndex);
+    final hasHiddenAbove = adjacentHidden.any((r) => r < rowIndex);
+    final hasHiddenBelow = adjacentHidden.any((r) => r > rowIndex);
+
+    return SizedBox(
+      width: _rowNumWidth,
+      height: rowHeight,
+      child: Stack(
+        children: [
+          // Main row header
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectedRow = rowIndex;
+                _selectedCol = 0;
+                _selectionEndRow = rowIndex;
+                _selectionEndCol = _columns.length - 1;
+                _updateFormulaBar();
+              });
+              _spreadsheetFocusNode.requestFocus();
+            },
+            onDoubleTap: () => _renameRow(rowIndex),
+            onSecondaryTapDown: (details) {
+              _showRowHeaderContextMenu(
+                  context, details.globalPosition, rowIndex);
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  right: BorderSide(color: gridBorder, width: 1),
+                  bottom: BorderSide(color: gridBorder, width: 1),
+                  // Green indicator if hidden rows above
+                  top: hasHiddenAbove
+                      ? const BorderSide(color: Colors.green, width: 2)
+                      : BorderSide.none,
+                ),
+                color: isRowInSelection ? AppColors.lightBlue : rowHeaderBg,
+              ),
+              child: Center(
+                child: Text(
+                  _rowLabels[rowIndex],
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight:
+                        isRowInSelection ? FontWeight.w600 : FontWeight.w400,
+                    color:
+                        isRowInSelection ? AppColors.primaryBlue : rowNumText,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
             ),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 1,
           ),
-        ),
+
+          // Resize handle at bottom edge
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeRow,
+              child: GestureDetector(
+                onVerticalDragStart: (details) {
+                  _isResizingRow = true;
+                  _resizingRowIndex = rowIndex;
+                  _resizingStartY = details.globalPosition.dy;
+                  _resizingStartHeight = rowHeight;
+                },
+                onVerticalDragUpdate: (details) {
+                  if (_isResizingRow && _resizingRowIndex == rowIndex) {
+                    final delta =
+                        (details.globalPosition.dy - _resizingStartY) /
+                            _zoomLevel;
+                    final newHeight = (_resizingStartHeight + delta)
+                        .clamp(_minRowHeight, _maxRowHeight);
+                    setState(() {
+                      _rowHeights[rowIndex] = newHeight;
+                    });
+                  }
+                },
+                onVerticalDragEnd: (details) {
+                  _isResizingRow = false;
+                  _resizingRowIndex = null;
+                  _markDirty();
+                },
+                child: Container(
+                  height: 6,
+                  color: Colors.transparent,
+                ),
+              ),
+            ),
+          ),
+
+          // Hidden rows indicator at bottom (if rows below are hidden)
+          if (hasHiddenBelow)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                height: 2,
+                color: Colors.green,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -10487,6 +12152,12 @@ class _SheetScreenState extends State<SheetScreen> {
     final editingBg = _isDark ? const Color(0xFF1F2937) : Colors.white;
     final cellTextColor = _isDark ? const Color(0xFFE5E7EB) : Colors.black87;
     final lockIconColor = _isDark ? const Color(0xFF94A3B8) : Colors.grey[500]!;
+    final activeCellBg = _isDark
+        ? AppColors.primaryBlue.withValues(alpha: 0.25)
+        : const Color(0xFFE8F0FE);
+    final selectionBg = _isDark
+        ? AppColors.primaryBlue.withValues(alpha: 0.15)
+        : const Color(0xFFD2E3FC);
     final bounds = _getSelectionBounds();
     // ignore: unused_local_variable
     final isRowInSelection = _selectedRow != null &&
@@ -10500,7 +12171,10 @@ class _SheetScreenState extends State<SheetScreen> {
         children: [
           if (includeRowNum) _buildRowNumCellWidget(rowIndex),
           // Data cells
-          ..._columns.asMap().entries.map((entry) {
+          ..._columns.asMap().entries.where((entry) {
+            // Skip hidden columns
+            return !_isColumnHidden(entry.key);
+          }).map((entry) {
             final colIndex = entry.key;
             final colName = entry.value;
 
@@ -10571,6 +12245,14 @@ class _SheetScreenState extends State<SheetScreen> {
                 if (_isResizingColumn || isCollapsed) return;
                 _startEditing(rowIndex, colIndex);
               },
+              onSecondaryTapDown: (details) {
+                if (_isResizingColumn || isCollapsed) return;
+                // Select the cell first
+                _selectCell(rowIndex, colIndex);
+                // Then show context menu
+                _showCellContextMenu(
+                    context, details.globalPosition, rowIndex, colIndex);
+              },
               child: Container(
                 width: cellWidth,
                 height: cellHeight,
@@ -10609,9 +12291,9 @@ class _SheetScreenState extends State<SheetScreen> {
                     return isEditing
                         ? editingBg
                         : isActiveCell
-                            ? const Color(0xFFE8F0FE)
+                            ? activeCellBg
                             : isInSel
-                                ? const Color(0xFFD2E3FC)
+                                ? selectionBg
                                 : (rowIndex % 2 == 0 ? rowEvenBg : rowOddBg);
                   }(),
                 ),
@@ -10763,7 +12445,7 @@ class _SheetScreenState extends State<SheetScreen> {
                             message: '$name is editing',
                             child: Container(
                               decoration: BoxDecoration(
-                                color: color.withOpacity(0.15),
+                                color: color.withValues(alpha: 0.15),
                                 border: Border.all(color: color, width: 1.5),
                               ),
                               child: Align(
@@ -10964,17 +12646,28 @@ class _TemplatePickerDialog extends StatefulWidget {
 class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
   int? _hoveredIndex;
 
-  static const List<Map<String, dynamic>> _templates =
+  static final List<Map<String, dynamic>> _templates =
       _SheetScreenState._kTemplates;
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final dialogBg = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final surface = isDark ? const Color(0xFF111827) : Colors.white;
+    final surface2 = isDark ? const Color(0xFF0B1220) : _SheetScreenState._kBg;
+    final border =
+        isDark ? const Color(0xFF334155) : _SheetScreenState._kBorder;
+    final titleColor =
+        isDark ? const Color(0xFFF1F5F9) : _SheetScreenState._kNavy;
+    final bodyColor =
+        isDark ? const Color(0xFF94A3B8) : _SheetScreenState._kGray;
+
     return Dialog(
-      backgroundColor: Colors.white,
+      backgroundColor: dialogBg,
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: _SheetScreenState._kBorder, width: 1),
+        side: BorderSide(color: border, width: 1),
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 700, maxHeight: 640),
@@ -10989,10 +12682,12 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: _SheetScreenState._kBg,
+                      color: surface2,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
-                          color: _SheetScreenState._kBorder, width: 1),
+                        color: border,
+                        width: 1,
+                      ),
                     ),
                     child: const Icon(
                       Icons.dashboard_customize_outlined,
@@ -11005,21 +12700,21 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Choose a Template',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w700,
-                            color: _SheetScreenState._kNavy,
+                            color: titleColor,
                             letterSpacing: 0.2,
                           ),
                         ),
                         Text(
                           'Start your sheet with a pre-defined structure. You can customise it afterwards.',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             height: 1.3,
-                            color: _SheetScreenState._kGray,
+                            color: bodyColor,
                           ),
                         ),
                       ],
@@ -11028,13 +12723,13 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                   IconButton(
                     onPressed: () => Navigator.pop(context),
                     icon: const Icon(Icons.close, size: 20),
-                    color: _SheetScreenState._kGray,
+                    color: bodyColor,
                   ),
                 ],
               ),
 
               const SizedBox(height: 20),
-              const Divider(height: 1, color: _SheetScreenState._kBorder),
+              Divider(height: 1, color: border),
               const SizedBox(height: 16),
 
               // ── Template cards grid ──
@@ -11065,20 +12760,20 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
                           decoration: BoxDecoration(
-                            color: isHovered
-                                ? _SheetScreenState._kBg
-                                : Colors.white,
+                            color: isHovered ? surface2 : surface,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isHovered
-                                  ? color.withOpacity(0.55)
-                                  : _SheetScreenState._kBorder,
+                                  ? color.withValues(alpha: 0.55)
+                                  : border,
                               width: 1.2,
                             ),
                             boxShadow: isHovered
                                 ? [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.05),
+                                      color: Colors.black.withValues(
+                                        alpha: isDark ? 0.28 : 0.05,
+                                      ),
                                       blurRadius: 10,
                                       offset: const Offset(0, 3),
                                     )
@@ -11095,10 +12790,10 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: _SheetScreenState._kBg,
+                                      color: surface2,
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
-                                        color: _SheetScreenState._kBorder,
+                                        color: border,
                                       ),
                                     ),
                                     child: Icon(icon, color: color, size: 20),
@@ -11110,7 +12805,7 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 13,
-                                        color: _SheetScreenState._kNavy,
+                                        color: titleColor,
                                       ),
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
@@ -11124,10 +12819,10 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                               // Description
                               Text(
                                 t['description'] as String,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
                                   height: 1.25,
-                                  color: _SheetScreenState._kGray,
+                                  color: bodyColor,
                                 ),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -11144,10 +12839,10 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: _SheetScreenState._kBg,
+                                      color: surface2,
                                       borderRadius: BorderRadius.circular(6),
                                       border: Border.all(
-                                        color: _SheetScreenState._kBorder,
+                                        color: border,
                                       ),
                                     ),
                                     child: Text(
@@ -11165,19 +12860,18 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 6, vertical: 2),
                                             decoration: BoxDecoration(
-                                              color: _SheetScreenState._kBg,
+                                              color: surface2,
                                               borderRadius:
                                                   BorderRadius.circular(6),
                                               border: Border.all(
-                                                color:
-                                                    _SheetScreenState._kBorder,
+                                                color: border,
                                               ),
                                             ),
                                             child: Text(
                                               '+${cols.length - 4} more',
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                 fontSize: 9,
-                                                color: _SheetScreenState._kGray,
+                                                color: bodyColor,
                                               ),
                                             ),
                                           )
@@ -11194,29 +12888,32 @@ class _TemplatePickerDialogState extends State<_TemplatePickerDialog> {
               ),
 
               const SizedBox(height: 16),
-              const Divider(height: 1, color: _SheetScreenState._kBorder),
+              Divider(height: 1, color: border),
               const SizedBox(height: 12),
 
               // ── Footer ──
               Row(
                 children: [
-                  const Icon(Icons.info_outline,
-                      size: 14, color: _SheetScreenState._kGray),
+                  Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: bodyColor,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     'Templates pre-fill column headers and a sample row. All content is editable.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
-                      color: _SheetScreenState._kGray,
+                      color: bodyColor,
                     ),
                   ),
                   const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel'),
                     style: TextButton.styleFrom(
-                      foregroundColor: _SheetScreenState._kGray,
+                      foregroundColor: bodyColor,
                     ),
+                    child: const Text('Cancel'),
                   ),
                 ],
               ),
@@ -11304,7 +13001,7 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
                 borderRadius: BorderRadius.circular(10),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.28),
+                    color: Colors.black.withValues(alpha: 0.28),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -11324,7 +13021,8 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
                           color: p.color,
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: Colors.white.withOpacity(0.3), width: 2),
+                              color: Colors.white.withValues(alpha: 0.3),
+                              width: 2),
                         ),
                         alignment: Alignment.center,
                         child: Text(p.initials,
@@ -11449,7 +13147,7 @@ class _PresenceAvatarState extends State<_PresenceAvatar> {
             boxShadow: (_hovered || _pinned)
                 ? [
                     BoxShadow(
-                      color: p.color.withOpacity(0.55),
+                      color: p.color.withValues(alpha: 0.55),
                       blurRadius: 8,
                       spreadRadius: 1,
                     )
@@ -11632,7 +13330,7 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.28),
+                      color: Colors.black.withValues(alpha: 0.28),
                       blurRadius: 14,
                       offset: const Offset(0, 6),
                     ),
@@ -11651,7 +13349,7 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
                             color: _avatarColor,
                             shape: BoxShape.circle,
                             border: Border.all(
-                                color: Colors.white.withOpacity(0.32),
+                                color: Colors.white.withValues(alpha: 0.32),
                                 width: 2),
                           ),
                           alignment: Alignment.center,

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../config/constants.dart';
 
@@ -101,7 +102,7 @@ class SocketService {
 
   /// socket_io_client v2 sometimes delivers payloads as List([Map]) instead
   /// of Map directly. This unwraps either format into a plain
-  /// Map<String, dynamic>.
+  /// `Map<String, dynamic>`.
   static Map<String, dynamic> _unwrap(dynamic data) {
     if (data is Map) return Map<String, dynamic>.from(data);
     if (data is List && data.isNotEmpty && data[0] is Map) {
@@ -112,17 +113,17 @@ class SocketService {
 
   void _setupListeners() {
     _socket?.onConnect((_) {
-      print('Socket connected');
+      debugPrint('Socket connected');
       onConnect?.call();
     });
 
     _socket?.onDisconnect((_) {
-      print('Socket disconnected');
+      debugPrint('Socket disconnected');
       onDisconnect?.call();
     });
 
     _socket?.onConnectError((error) {
-      print('Socket connection error: $error');
+      debugPrint('Socket connection error: $error');
       onError?.call({'code': 'CONNECT_ERROR', 'message': error.toString()});
     });
 
@@ -140,7 +141,7 @@ class SocketService {
     // ── V2 presence events ──
     _socket?.on('presence_update', (d) {
       final m = _unwrap(d);
-      print('[Socket] presence_update received: ${m["users"]}');
+      debugPrint('[Socket] presence_update received: ${m["users"]}');
       onPresenceUpdate?.call(m);
     });
     _socket?.on('cell_focused', (d) => onCellFocused?.call(_unwrap(d)));

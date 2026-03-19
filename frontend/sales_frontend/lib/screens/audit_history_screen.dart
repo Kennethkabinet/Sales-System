@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
 
-// ── HireGround-style colour palette ──
+// ── HireGround-style color palette ──
 const Color _kBlue = Color(0xFF4285F4);
 const Color _kNavy = Color(0xFF1F2937);
 const Color _kGray = Color(0xFF6B7280);
@@ -321,7 +321,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                 border: Border.all(color: _borderColor),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
+                    color: Colors.black.withValues(alpha: 0.04),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -334,7 +334,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                 decoration: InputDecoration(
                   hintText: 'Search logs...',
                   hintStyle: TextStyle(
-                      fontSize: 14, color: _textSecondary.withOpacity(0.8)),
+                      fontSize: 14,
+                      color: _textSecondary.withValues(alpha: 0.8)),
                   prefixIcon: Container(
                     padding: const EdgeInsets.only(left: 14, right: 10),
                     child: Icon(Icons.search_rounded,
@@ -482,10 +483,11 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: value != null ? _kBlue.withOpacity(0.08) : _surfaceColor,
+          color: value != null ? _kBlue.withValues(alpha: 0.08) : _surfaceColor,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: value != null ? _kBlue.withOpacity(0.3) : _borderColor),
+              color:
+                  value != null ? _kBlue.withValues(alpha: 0.3) : _borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -571,12 +573,12 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
           color: _dateRangeFilter != 'All Time'
-              ? _kBlue.withOpacity(0.08)
+              ? _kBlue.withValues(alpha: 0.08)
               : _surfaceColor,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: _dateRangeFilter != 'All Time'
-                ? _kBlue.withOpacity(0.3)
+                ? _kBlue.withValues(alpha: 0.3)
                 : _borderColor,
           ),
         ),
@@ -683,12 +685,13 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             decoration: BoxDecoration(
               color: isExpanded
-                  ? _kBlue.withOpacity(0.04)
+                  ? _kBlue.withValues(alpha: 0.04)
                   : (index.isOdd
-                      ? _surfaceAltColor.withOpacity(0.8)
+                      ? _surfaceAltColor.withValues(alpha: 0.8)
                       : _surfaceColor),
               border: Border(
-                  bottom: BorderSide(color: _borderColor.withOpacity(0.5))),
+                  bottom:
+                      BorderSide(color: _borderColor.withValues(alpha: 0.5))),
             ),
             child: Row(
               children: [
@@ -764,7 +767,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                   child: Text(
                     _getDescription(log),
                     style: TextStyle(
-                        fontSize: 13, color: _textPrimary.withOpacity(0.85)),
+                        fontSize: 13,
+                        color: _textPrimary.withValues(alpha: 0.85)),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 1,
                   ),
@@ -823,7 +827,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
       height: 36,
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [_kBlue, _kBlue.withOpacity(0.7)],
+          colors: [_kBlue, _kBlue.withValues(alpha: 0.7)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -877,7 +881,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
         border: Border.all(color: _borderColor),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Colors.black.withValues(alpha: 0.06),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -942,7 +946,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                                 log.entityName!,
                                 style: TextStyle(
                                   fontSize: 14,
-                                  color: _textPrimary.withOpacity(0.85),
+                                  color: _textPrimary.withValues(alpha: 0.85),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -1049,7 +1053,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                             decoration: BoxDecoration(
                               color: const Color(0xFFFEF2F2),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: _kRed.withOpacity(0.2)),
+                              border: Border.all(
+                                  color: _kRed.withValues(alpha: 0.2)),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1092,8 +1097,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                             decoration: BoxDecoration(
                               color: const Color(0xFFF0FDF4),
                               borderRadius: BorderRadius.circular(10),
-                              border:
-                                  Border.all(color: _kGreen.withOpacity(0.2)),
+                              border: Border.all(
+                                  color: _kGreen.withValues(alpha: 0.2)),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1288,7 +1293,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
         ),
         child: Icon(icon,
             size: 18,
-            color: enabled ? _textPrimary : _textSecondary.withOpacity(0.5)),
+            color:
+                enabled ? _textPrimary : _textSecondary.withValues(alpha: 0.5)),
       ),
     );
   }
@@ -1403,8 +1409,8 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
     final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$hour:${dt.minute.toString().padLeft(2, '0')} $ampm';
+    final meridiem = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:${dt.minute.toString().padLeft(2, '0')} $meridiem';
   }
 
   String _formatTimestamp(DateTime? dt) {
@@ -1496,7 +1502,7 @@ class _DateRangePickerDialogState extends State<_DateRangePickerDialog> {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.15),
+              color: Colors.black.withValues(alpha: 0.15),
               blurRadius: 30,
               offset: const Offset(0, 10),
             ),
@@ -1518,7 +1524,7 @@ class _DateRangePickerDialogState extends State<_DateRangePickerDialog> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: _kBlue.withOpacity(0.1),
+                      color: _kBlue.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child:
@@ -1733,7 +1739,7 @@ class _DateRangePickerDialogState extends State<_DateRangePickerDialog> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Material(
-        color: isSelected ? _kBlue.withOpacity(0.1) : Colors.transparent,
+        color: isSelected ? _kBlue.withValues(alpha: 0.1) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: () {
@@ -1817,7 +1823,7 @@ class _DateRangePickerDialogState extends State<_DateRangePickerDialog> {
                 color: isStart || isEnd
                     ? _kBlue
                     : isInRange
-                        ? _kBlue.withOpacity(0.15)
+                        ? _kBlue.withValues(alpha: 0.15)
                         : Colors.transparent,
                 borderRadius: BorderRadius.horizontal(
                   left: isStart ? const Radius.circular(20) : Radius.zero,
@@ -1840,7 +1846,7 @@ class _DateRangePickerDialogState extends State<_DateRangePickerDialog> {
                           ? FontWeight.w600
                           : FontWeight.w400,
                       color: isFuture
-                          ? _kGray.withOpacity(0.4)
+                          ? _kGray.withValues(alpha: 0.4)
                           : isStart || isEnd
                               ? Colors.white
                               : _kNavy,

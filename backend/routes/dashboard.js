@@ -190,7 +190,7 @@ router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, re
       WHERE is_active = TRUE
         AND columns ? 'Product Name'
         AND columns ? 'Total Quantity'
-        AND columns ? 'Maintaining'
+        AND (columns ? 'Maintaining' OR columns ? 'Maintaining Qty')
         AND (columns ? 'QC Code' OR columns ? 'QB Code')
       ORDER BY created_at ASC
     `);
@@ -252,7 +252,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         WHERE is_active = TRUE
           AND columns ? 'Product Name'
           AND columns ? 'Total Quantity'
-          AND columns ? 'Maintaining'
+          AND (columns ? 'Maintaining' OR columns ? 'Maintaining Qty')
           AND (columns ? 'QC Code' OR columns ? 'QB Code')
         ORDER BY id ASC
       `);
@@ -300,7 +300,12 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       const code = (d['QB Code'] || d['QC Code'] || '').toString().trim();
       const productKey = `${name.toLowerCase()}|${code.toLowerCase()}`;
 
-      const maintaining = parseFloat(d['Maintaining']) || 0;
+      const unitRaw = (d['Maintaining Unit'] || '').toString().trim().toLowerCase();
+      const maintainingQtyRaw = (d['Maintaining Qty'] ?? '').toString().replace(/,/g, '').trim();
+      const isPR = unitRaw === 'pr' || unitRaw === 'per request' || unitRaw === 'per-request' || maintainingQtyRaw === '-';
+      const maintaining = isPR
+        ? 0
+        : (maintainingQtyRaw ? (parseFloat(maintainingQtyRaw) || 0) : (parseFloat(d['Maintaining']) || 0));
       const totalQty    = parseFloat(d['Total Quantity']) || 0;
 
       // Aggregate product across sheets by product name + QB/QC code

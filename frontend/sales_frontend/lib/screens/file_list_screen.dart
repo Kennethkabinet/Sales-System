@@ -195,6 +195,8 @@ class _FileListScreenState extends State<FileListScreen> {
         year: values['year']!,
         month: values['month']!,
       );
+
+      if (!mounted) return;
       final workspace = response['workspace'] as Map<String, dynamic>?;
       final inventoryYearFolder =
           workspace?['folders']?['inventory_year'] as Map<String, dynamic>?;
@@ -246,18 +248,18 @@ class _FileListScreenState extends State<FileListScreen> {
     final count = _selectedFileIds.length;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Delete Selected Files'),
         content: Text(
             'Permanently delete $count file${count > 1 ? 's' : ''}? This cannot be undone.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(_, false),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(_, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Delete'),
           ),
         ],
@@ -655,7 +657,8 @@ class _FileListScreenState extends State<FileListScreen> {
                               width: 28,
                               height: 28,
                               decoration: BoxDecoration(
-                                color: _fileColor(file.type).withOpacity(0.15),
+                                color: _fileColor(file.type)
+                                    .withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(5),
                               ),
                               child: Icon(_fileIcon(file.type),
@@ -1129,7 +1132,7 @@ class _FolderCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.amber.withOpacity(0.15),
+                      color: Colors.amber.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child:
@@ -1235,7 +1238,7 @@ class _FileCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _getFileColor(file.type).withOpacity(0.1),
+                      color: _getFileColor(file.type).withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Icon(
