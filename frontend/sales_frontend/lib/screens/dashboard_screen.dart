@@ -8,6 +8,7 @@ import '../providers/theme_provider.dart';
 import '../config/constants.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
+import '../widgets/app_modal.dart';
 import 'login_screen.dart';
 import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
@@ -63,11 +64,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _pendingEditRequestCount = 0;
   final TextEditingController _headerSearchCtrl = TextEditingController();
   final FocusNode _headerSearchFocus = FocusNode();
+  final FocusNode _shortcutsFocus =
+      FocusNode(debugLabel: 'dashboard_shortcuts_root');
   String? _pendingDashboardSectionId;
   int _dashboardJumpToken = 0;
   final List<String> _recentSearchLabels = [];
   List<Map<String, dynamic>> _sheetFoldersForSearch = [];
   static const int _maxRecentSearches = 6;
+
+  Future<void> _refreshDashboard() async {
+    final data = context.read<DataProvider>();
+    await Future.wait([
+      data.loadDashboard(),
+      data.loadInventorySheets(),
+      data.loadInventoryDashboard(),
+    ]);
+  }
 
   void _focusHeaderSearch() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -113,17 +125,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() => _pendingEditRequestCount++);
       final requester = data['requested_by'] as String? ?? 'Someone';
       final cellRef = data['cell_ref'] as String? ?? '';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      AppModal.show(
+        context,
+        title: 'Edit request',
         content: Text('$requester requests edit access for cell $cellRef'),
-        backgroundColor: Colors.orange[800],
-        duration: const Duration(seconds: 8),
-        action: SnackBarAction(
-          label: 'Review',
-          textColor: Colors.white,
-          onPressed: () =>
-              setState(() => _selectedIndex = _editRequestsTabIndex),
-        ),
-      ));
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              if (!mounted) return;
+              setState(() => _selectedIndex = _editRequestsTabIndex);
+            },
+            child: const Text('Review'),
+          ),
+        ],
+      );
     };
   }
 
@@ -148,6 +168,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     SocketService.instance.onAdminEditNotification = null;
     _headerSearchCtrl.dispose();
     _headerSearchFocus.dispose();
+    _shortcutsFocus.dispose();
     super.dispose();
   }
 
@@ -381,6 +402,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _rememberSearch(target);
     _headerSearchCtrl.clear();
     FocusManager.instance.primaryFocus?.unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_shortcutsFocus.hasFocus) {
+        _shortcutsFocus.requestFocus();
+      }
+    });
     setState(() {
       _selectedIndex = target.tabIndex;
       if (target.tabIndex == _editRequestsTabIndex) {
@@ -467,6 +494,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _FocusHeaderSearchIntent(),
         SingleActivator(LogicalKeyboardKey.keyK, meta: true):
             _FocusHeaderSearchIntent(),
+        SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _FocusHeaderSearchIntent(),
+        SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            _FocusHeaderSearchIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -477,6 +508,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }),
         },
         child: Focus(
+          focusNode: _shortcutsFocus,
           autofocus: true,
           child: Scaffold(
             backgroundColor: pageBg,
@@ -672,6 +704,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                               ),
                               const SizedBox(width: 10),
+                              if (_selectedIndex == 0) ...[
+                                _HeaderIconButton(
+                                  icon: Icons.refresh_rounded,
+                                  badge: 0,
+                                  onTap: () async {
+                                    try {
+                                      await _refreshDashboard();
+                                    } catch (_) {
+                                      // Keep UI resilient; provider already holds error state.
+                                    }
+                                  },
+                                ),
+                                const SizedBox(width: 10),
+                              ],
                               _HeaderIconButton(
                                 icon: isDark
                                     ? Icons.dark_mode_outlined
@@ -903,11 +949,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (matches.isNotEmpty) {
               _goToSearchTarget(matches.first);
             } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('No matching pages found.'),
-                  duration: Duration(seconds: 2),
-                ),
+              AppModal.showText(
+                context,
+                title: 'No matches',
+                message: 'No matching pages found.',
               );
             }
           },
@@ -1010,10 +1055,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        const SizedBox(width: 8),
-        Icon(Icons.keyboard_arrow_down,
-            size: 18,
-            color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
       ],
     );
   }
@@ -1443,9 +1484,120 @@ class _DashboardContentState extends State<_DashboardContent> {
   int? _lastAppliedSheetId;
   bool _userOverrodeSheetFilter = false;
 
+  // Discrepancy count state (computed by scanning selected Inventory sheets)
+  int? _inventoryDiscrepancyCount;
+  bool _inventoryDiscrepancyLoading = false;
+  String _inventoryDiscrepancySheetKey = '';
+  int _inventoryDiscrepancyLoadToken = 0;
+
+  static const String _kInventoryCommentCol = 'Comment';
+  static const String _kInventoryLegacyRemarksCol = 'Remarks';
+  static const String _kInventoryNoteTypeCol = 'Note Type';
+  static const String _kInventoryNoteTitleCol = 'Note Title';
+  static const String _kInventoryNoteTypeDiscrepancy = 'discrepancy';
+
+  List<int> _effectiveInventorySheetIds(List<Map<String, dynamic>> sheets) {
+    if (_selectedSheetIds.isNotEmpty) return _selectedSheetIds.toList();
+    return sheets.map((s) => s['id']).whereType<int>().toList(growable: false);
+  }
+
+  String _sheetIdsKey(Iterable<int> ids) {
+    final sorted = ids.toList()..sort();
+    return sorted.join(',');
+  }
+
+  bool _rowHasDiscrepancy(Map<dynamic, dynamic> row) {
+    final body =
+        (row[_kInventoryCommentCol] ?? row[_kInventoryLegacyRemarksCol] ?? '')
+            .toString()
+            .trim();
+    final title = (row[_kInventoryNoteTitleCol] ?? '').toString().trim();
+    if (body.isEmpty && title.isEmpty) return false;
+
+    final type =
+        (row[_kInventoryNoteTypeCol] ?? '').toString().trim().toLowerCase();
+    return type.isEmpty || type == _kInventoryNoteTypeDiscrepancy;
+  }
+
+  int _countDiscrepanciesInSheetPayload(Map<String, dynamic> sheet) {
+    final rows = (sheet['rows'] as List?) ?? const [];
+    var count = 0;
+    for (final r in rows) {
+      if (r is Map) {
+        if (_rowHasDiscrepancy(r)) count++;
+      }
+    }
+    return count;
+  }
+
+  Future<void> _loadInventoryDiscrepancyCount({
+    required List<int> sheetIds,
+  }) async {
+    final key = _sheetIdsKey(sheetIds);
+    if (_inventoryDiscrepancyLoading && key == _inventoryDiscrepancySheetKey) {
+      return;
+    }
+
+    final token = ++_inventoryDiscrepancyLoadToken;
+    setState(() {
+      _inventoryDiscrepancyLoading = true;
+      _inventoryDiscrepancySheetKey = key;
+    });
+
+    var total = 0;
+    for (final id in sheetIds) {
+      try {
+        final resp = await ApiService.getSheetData(id);
+        final sheetRaw = resp['sheet'];
+        if (sheetRaw is Map<String, dynamic>) {
+          total += _countDiscrepanciesInSheetPayload(sheetRaw);
+        }
+      } catch (_) {
+        // Best-effort: if one sheet fails to load, still show totals from others.
+      }
+    }
+
+    if (!mounted || token != _inventoryDiscrepancyLoadToken) return;
+    setState(() {
+      _inventoryDiscrepancyCount = total;
+      _inventoryDiscrepancyLoading = false;
+    });
+  }
+
+  void _maybeLoadInventoryDiscrepancyCount(List<Map<String, dynamic>> sheets) {
+    final ids = _effectiveInventorySheetIds(sheets);
+    final key = _sheetIdsKey(ids);
+    if (ids.isEmpty) return;
+    if (_inventoryDiscrepancyLoading) return;
+    if (_inventoryDiscrepancyCount != null &&
+        key == _inventoryDiscrepancySheetKey) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadInventoryDiscrepancyCount(sheetIds: ids);
+    });
+  }
+
+  void _onDashboardFilterTextChanged() {
+    if (!mounted) return;
+    // Reset pagination when filters change.
+    if (_alertPage != 0) {
+      setState(() => _alertPage = 0);
+    } else {
+      setState(() {});
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+
+    _searchCtrl.addListener(_onDashboardFilterTextChanged);
+    _productNameFilterCtrl.addListener(_onDashboardFilterTextChanged);
+    _qbCodeFilterCtrl.addListener(_onDashboardFilterTextChanged);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final data = context.read<DataProvider>();
       // Load available sheets for the filter, then load dashboard
@@ -1475,6 +1627,10 @@ class _DashboardContentState extends State<_DashboardContent> {
 
   @override
   void dispose() {
+    _searchCtrl.removeListener(_onDashboardFilterTextChanged);
+    _productNameFilterCtrl.removeListener(_onDashboardFilterTextChanged);
+    _qbCodeFilterCtrl.removeListener(_onDashboardFilterTextChanged);
+
     _searchCtrl.dispose();
     _productNameFilterCtrl.dispose();
     _qbCodeFilterCtrl.dispose();
@@ -1502,6 +1658,13 @@ class _DashboardContentState extends State<_DashboardContent> {
     await provider.loadInventoryDashboard(
       sheetIds: ids.isEmpty ? null : ids.toList(),
     );
+
+    final effectiveIds = ids.isEmpty
+        ? provider.inventorySheets.map((s) => s['id']).whereType<int>().toList()
+        : ids.toList();
+    if (effectiveIds.isNotEmpty) {
+      await _loadInventoryDiscrepancyCount(sheetIds: effectiveIds);
+    }
   }
 
   String _productStockKey(Map<String, dynamic> product) {
@@ -2017,6 +2180,7 @@ class _DashboardContentState extends State<_DashboardContent> {
     return Consumer<DataProvider>(
       builder: (context, data, _) {
         final sheets = data.inventorySheets;
+        _maybeLoadInventoryDiscrepancyCount(sheets);
         final currentSheetId = data.currentSheetId;
         if (!_userOverrodeSheetFilter &&
             currentSheetId != null &&
@@ -2180,6 +2344,10 @@ class _DashboardContentState extends State<_DashboardContent> {
                     ? null
                     : _selectedSheetIds.toList(),
               ),
+              if (_effectiveInventorySheetIds(data.inventorySheets).isNotEmpty)
+                _loadInventoryDiscrepancyCount(
+                  sheetIds: _effectiveInventorySheetIds(data.inventorySheets),
+                ),
             ]);
           },
           child: SingleChildScrollView(
@@ -2240,6 +2408,8 @@ class _DashboardContentState extends State<_DashboardContent> {
                   lowCount: lowCount,
                   criticalCount: criticalCount,
                   healthScore: healthScore,
+                  discrepancyCount: _inventoryDiscrepancyCount,
+                  discrepancyLoading: _inventoryDiscrepancyLoading,
                   trendData: trendData,
                 ),
                 const SizedBox(height: 28),
@@ -2514,6 +2684,8 @@ class _DashboardContentState extends State<_DashboardContent> {
     required int lowCount,
     required int criticalCount,
     required int healthScore,
+    required int? discrepancyCount,
+    required bool discrepancyLoading,
     required List<Map<String, dynamic>> trendData,
   }) {
     final totalStockQty = _selectedStockQty(inv);
@@ -2572,13 +2744,13 @@ class _DashboardContentState extends State<_DashboardContent> {
         sparkline: const [6, 5, 4, 4, 3, 3, 2],
       ),
       _StatCardData(
-        title: 'Inventory Health Score',
-        value: '$healthScore%',
-        icon: Icons.health_and_safety_outlined,
+        title: 'Discrepancies',
+        value: discrepancyLoading ? '…' : '${discrepancyCount ?? 0}',
+        icon: Icons.report_problem_outlined,
         color: const Color(0xFF2E7D32),
         bgColor: const Color(0xFFE8F5E9),
-        trendPct: (healthScore / 10).clamp(0, 10).toDouble(),
-        trendUp: true,
+        trendPct: 0,
+        trendUp: false,
         sparkline: const [2, 2, 3, 4, 4, 6, 7],
       ),
       _StatCardData(
@@ -3018,6 +3190,52 @@ class _StockQtyFilterDropdown extends StatefulWidget {
 
 class _StockQtyFilterDropdownState extends State<_StockQtyFilterDropdown> {
   bool _hovered = false;
+  final LayerLink _layerLink = LayerLink();
+  final TextEditingController _searchCtrl = TextEditingController();
+  OverlayEntry? _overlay;
+  bool _isOpen = false;
+
+  @override
+  void dispose() {
+    _closeDropdown(updateState: false);
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _toggleDropdown() => _isOpen ? _closeDropdown() : _openDropdown();
+
+  void _openDropdown() {
+    _searchCtrl.clear();
+    _overlay = _buildOverlay();
+    Overlay.of(context).insert(_overlay!);
+    setState(() => _isOpen = true);
+  }
+
+  void _closeDropdown({bool updateState = true}) {
+    _overlay?.remove();
+    _overlay = null;
+    if (updateState && mounted) {
+      setState(() => _isOpen = false);
+    } else {
+      _isOpen = false;
+    }
+  }
+
+  OverlayEntry _buildOverlay() {
+    return OverlayEntry(
+      builder: (_) => _ProductStockDropdownOverlay(
+        layerLink: _layerLink,
+        selectedKey: widget.selectedKey,
+        productStocks: widget.productStocks,
+        searchCtrl: _searchCtrl,
+        onSelect: (key) {
+          widget.onChanged(key);
+          _closeDropdown();
+        },
+        onClose: _closeDropdown,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3037,81 +3255,255 @@ class _StockQtyFilterDropdownState extends State<_StockQtyFilterDropdown> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.only(top: 4),
-        height: 26,
-        padding: const EdgeInsets.symmetric(horizontal: 7),
-        decoration: BoxDecoration(
-          color: bg,
-          border: Border.all(color: border, width: 1),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: _hovered
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFF0277BD).withValues(alpha: 0.10),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
-                  )
-                ]
-              : [],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.filter_list_rounded,
-              size: 11,
-              color: iconColor,
+      child: CompositedTransformTarget(
+        link: _layerLink,
+        child: GestureDetector(
+          onTap: _toggleDropdown,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            margin: const EdgeInsets.only(top: 4),
+            height: 26,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+            decoration: BoxDecoration(
+              color: bg,
+              border: Border.all(color: border, width: 1),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: _hovered
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF0277BD).withValues(alpha: 0.10),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      )
+                    ]
+                  : [],
             ),
-            const SizedBox(width: 3),
-            Expanded(
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: widget.selectedKey,
-                  isDense: true,
-                  isExpanded: true,
-                  borderRadius: BorderRadius.circular(10),
-                  icon: Icon(
-                    Icons.expand_more_rounded,
-                    size: 13,
-                    color: iconColor,
-                  ),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                  ),
-                  onChanged: widget.onChanged,
-                  items: [
-                    const DropdownMenuItem<String>(
-                      value: '__all__',
-                      child: Text('All Products'),
-                    ),
-                    ...widget.productStocks.map((p) {
-                      final name = p['product_name']?.toString() ?? '-';
-                      final code = p['qb_code']?.toString() ??
-                          p['qc_code']?.toString() ??
-                          '';
-                      // Must match _productStockKey format: '$name|$code' lowercase
-                      final key =
-                          '${name.trim().toLowerCase()}|${code.trim().toLowerCase()}';
-                      return DropdownMenuItem<String>(
-                        value: key,
-                        child: Text(
-                          code.isEmpty ? name : '$name ($code)',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                      );
-                    }),
-                  ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.filter_list_rounded,
+                  size: 11,
+                  color: iconColor,
                 ),
-              ),
+                const SizedBox(width: 3),
+                Flexible(
+                  child: Text(
+                    _selectedLabel,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(
+                  Icons.expand_more_rounded,
+                  size: 13,
+                  color: iconColor,
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  String get _selectedLabel {
+    if (widget.selectedKey == '__all__') return 'All Products';
+    final parts = widget.selectedKey.split('|');
+    final name = parts.isNotEmpty ? parts.first.trim() : '';
+    final code = parts.length > 1 ? parts[1].trim() : '';
+    if (name.isEmpty) return 'All Products';
+    return code.isEmpty ? name : '$name ($code)';
+  }
+}
+
+class _ProductStockDropdownOverlay extends StatefulWidget {
+  final LayerLink layerLink;
+  final String selectedKey;
+  final List<Map<String, dynamic>> productStocks;
+  final TextEditingController searchCtrl;
+  final ValueChanged<String> onSelect;
+  final VoidCallback onClose;
+
+  const _ProductStockDropdownOverlay({
+    required this.layerLink,
+    required this.selectedKey,
+    required this.productStocks,
+    required this.searchCtrl,
+    required this.onSelect,
+    required this.onClose,
+  });
+
+  @override
+  State<_ProductStockDropdownOverlay> createState() =>
+      _ProductStockDropdownOverlayState();
+}
+
+class _ProductStockDropdownOverlayState
+    extends State<_ProductStockDropdownOverlay> {
+  static const double _itemH = 40;
+  static const int _maxVisible = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.searchCtrl.addListener(_rebuild);
+  }
+
+  void _rebuild() => setState(() {});
+
+  @override
+  void dispose() {
+    widget.searchCtrl.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  String _keyOf(Map<String, dynamic> p) {
+    final name = (p['product_name']?.toString() ?? '').trim();
+    final code =
+        (p['qb_code']?.toString() ?? p['qc_code']?.toString() ?? '').trim();
+    return '${name.toLowerCase()}|${code.toLowerCase()}';
+  }
+
+  String _labelOf(Map<String, dynamic> p) {
+    final name = (p['product_name']?.toString() ?? '-').trim();
+    final code =
+        (p['qb_code']?.toString() ?? p['qc_code']?.toString() ?? '').trim();
+    return code.isEmpty ? name : '$name ($code)';
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    final q = widget.searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return widget.productStocks;
+    return widget.productStocks.where((p) {
+      final label = _labelOf(p).toLowerCase();
+      return label.contains(q);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF111827) : Colors.white;
+    final border = isDark ? const Color(0xFF334155) : Colors.grey.shade200;
+    final divider = isDark ? const Color(0xFF1F2937) : Colors.grey.shade100;
+    final searchBorder =
+        isDark ? const Color(0xFF334155) : Colors.grey.shade300;
+    final searchHint =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFFBBBBBB);
+    final emptyText =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF9E9E9E);
+
+    final filtered = _filtered;
+    final listH = (filtered.length.clamp(1, _maxVisible) * _itemH);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: widget.onClose,
+            behavior: HitTestBehavior.translucent,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        CompositedTransformFollower(
+          link: widget.layerLink,
+          targetAnchor: Alignment.bottomLeft,
+          followerAnchor: Alignment.topLeft,
+          offset: const Offset(0, 6),
+          showWhenUnlinked: false,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: 340,
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: border),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.10),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                    child: TextField(
+                      controller: widget.searchCtrl,
+                      autofocus: true,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Search item...',
+                        hintStyle: TextStyle(fontSize: 13, color: searchHint),
+                        prefixIcon: const Icon(Icons.search, size: 17),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 9),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide: BorderSide(color: searchBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide: const BorderSide(
+                              color: AppColors.primaryBlue, width: 1.5),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(7),
+                          borderSide: BorderSide(color: searchBorder),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Divider(height: 1, color: divider),
+                  _DropdownItem(
+                    label: 'All Products',
+                    selected: widget.selectedKey == '__all__',
+                    isAll: true,
+                    onTap: () => widget.onSelect('__all__'),
+                  ),
+                  Divider(height: 1, color: divider),
+                  SizedBox(
+                    height: listH,
+                    child: filtered.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No items found',
+                              style: TextStyle(fontSize: 12, color: emptyText),
+                            ),
+                          )
+                        : ListView.builder(
+                            primary: false,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            itemCount: filtered.length,
+                            itemBuilder: (_, i) {
+                              final p = filtered[i];
+                              final key = _keyOf(p);
+                              final label = _labelOf(p);
+                              return _DropdownItem(
+                                label: label,
+                                selected: widget.selectedKey == key,
+                                onTap: () => widget.onSelect(key),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

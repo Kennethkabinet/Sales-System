@@ -190,13 +190,18 @@ router.delete('/products/:id', authenticate, requireRole(['admin']), async (req,
 router.get('/transactions', authenticate, async (req, res) => {
   try {
     const isAdmin = req.user.role === 'admin';
-    const { date, from, to } = req.query;
+    const { date, from, to, all } = req.query;
 
     let dateClause = '';
     let params = [];
     let paramIdx = 1;
 
-    if (date) {
+    if (all === 'true') {
+      if (!isAdmin) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only admins can query all dates' } });
+      }
+      dateClause = '';
+    } else if (date) {
       dateClause = `AND t.transaction_date = $${paramIdx++}`;
       params.push(date);
     } else if (from && to) {
@@ -206,8 +211,10 @@ router.get('/transactions', authenticate, async (req, res) => {
       dateClause = `AND t.transaction_date BETWEEN $${paramIdx++} AND $${paramIdx++}`;
       params.push(from, to);
     } else {
-      // Default: today only
-      dateClause = `AND t.transaction_date = CURRENT_DATE`;
+      // Default: recent window (align with /inventory/dates limits)
+      const daysBack = isAdmin ? 89 : 29;
+      dateClause = `AND t.transaction_date >= CURRENT_DATE - $${paramIdx++}`;
+      params.push(daysBack);
     }
 
     const result = await pool.query(
@@ -318,7 +325,7 @@ router.post('/transactions', authenticate, async (req, res) => {
 });
 
 // PUT /inventory/transactions/:id  – Update a transaction
-// Normal users can only edit today's own entries; admin can edit any
+// Editors/users can edit today & yesterday; admin can edit any
 router.put('/transactions/:id', authenticate, async (req, res) => {
   const isViewer = req.user.role === 'viewer';
   if (isViewer) {
@@ -332,7 +339,16 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const prev = await client.query('SELECT * FROM inventory_transactions WHERE id = $1', [id]);
+    const prev = await client.query(
+      `SELECT
+          t.*,
+          (t.transaction_date = CURRENT_DATE) AS is_today,
+          (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
+          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+       FROM inventory_transactions t
+       WHERE t.id = $1`,
+      [id]
+    );
     if (!prev.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
@@ -340,12 +356,17 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
     const old = prev.rows[0];
 
     const isAdmin = req.user.role === 'admin';
-    const isOwner = old.created_by === req.user.id;
-    const isToday = old.transaction_date.toISOString().split('T')[0] === new Date().toISOString().split('T')[0];
+    const role = req.user.role;
+    const isTodayOrYesterday = !!old.is_today || !!old.is_yesterday;
 
-    if (!isAdmin && (!isOwner || !isToday)) {
+    if (!isAdmin && !(['editor', 'user'].includes(role) && isTodayOrYesterday)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only edit your own transactions from today' } });
+      return res.status(403).json({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Editors can only edit transactions from today or yesterday. For older dates, submit an edit request.',
+        }
+      });
     }
 
     if (qty_in !== undefined && qty_in < 0) {
@@ -387,7 +408,7 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
 });
 
 // DELETE /inventory/transactions/:id
-// Normal users: only own + today; Admin: any
+// Editors/users: today & yesterday; Admin: any
 router.delete('/transactions/:id', authenticate, async (req, res) => {
   const isViewer = req.user.role === 'viewer';
   if (isViewer) {
@@ -399,7 +420,16 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const prev = await client.query('SELECT * FROM inventory_transactions WHERE id = $1', [id]);
+    const prev = await client.query(
+      `SELECT
+          t.*,
+          (t.transaction_date = CURRENT_DATE) AS is_today,
+          (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
+          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+       FROM inventory_transactions t
+       WHERE t.id = $1`,
+      [id]
+    );
     if (!prev.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
@@ -407,12 +437,17 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
     const old = prev.rows[0];
 
     const isAdmin = req.user.role === 'admin';
-    const isOwner = old.created_by === req.user.id;
-    const isToday = old.transaction_date.toISOString().split('T')[0] === new Date().toISOString().split('T')[0];
+    const role = req.user.role;
+    const isTodayOrYesterday = !!old.is_today || !!old.is_yesterday;
 
-    if (!isAdmin && (!isOwner || !isToday)) {
+    if (!isAdmin && !(['editor', 'user'].includes(role) && isTodayOrYesterday)) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only delete your own transactions from today' } });
+      return res.status(403).json({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Editors can only delete transactions from today or yesterday. For older dates, submit an edit request.',
+        }
+      });
     }
 
     await client.query('DELETE FROM inventory_transactions WHERE id = $1', [id]);
@@ -426,6 +461,76 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('DELETE /inventory/transactions/:id error:', err);
+    res.status(500).json({ error: { code: 'SERVER_ERROR', message: err.message } });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /inventory/transactions/:id/edit-request
+// Editors/users: request an admin-reviewed edit for transactions older than yesterday
+router.post('/transactions/:id/edit-request', authenticate, async (req, res) => {
+  const isViewer = req.user.role === 'viewer';
+  if (isViewer) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Viewers cannot submit edit requests' } });
+  }
+
+  const { id } = req.params;
+  const role = req.user.role;
+  if (!['admin', 'editor', 'user'].includes(role)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Insufficient role' } });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const prev = await client.query(
+      `SELECT
+          t.*,
+          p.product_name,
+          (t.transaction_date = CURRENT_DATE) AS is_today,
+          (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
+          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+       FROM inventory_transactions t
+       JOIN product_master p ON p.id = t.product_id
+       WHERE t.id = $1`,
+      [id]
+    );
+
+    if (!prev.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Transaction not found' } });
+    }
+    const tx = prev.rows[0];
+
+    if (!tx.is_older) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: {
+          code: 'BAD_REQUEST',
+          message: 'No request needed for today or yesterday transactions.',
+        }
+      });
+    }
+
+    await logInventoryAudit(client, {
+      transactionId: tx.id,
+      productId: tx.product_id,
+      action: 'EDIT_REQUEST',
+      oldData: tx,
+      newData: {
+        requested_by: req.user.id,
+        requested_by_role: role,
+      },
+      userId: req.user.id,
+    });
+
+    await client.query('COMMIT');
+    res.status(201).json({ message: 'Edit request submitted' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST /inventory/transactions/:id/edit-request error:', err);
     res.status(500).json({ error: { code: 'SERVER_ERROR', message: err.message } });
   } finally {
     client.release();

@@ -7,6 +7,7 @@ import '../models/file.dart';
 import '../services/api_service.dart';
 import 'table_view_screen.dart';
 import 'dart:io';
+import '../widgets/app_modal.dart';
 
 class FileListScreen extends StatefulWidget {
   const FileListScreen({super.key});
@@ -221,22 +222,20 @@ class _FileListScreenState extends State<FileListScreen> {
       final createdSheetName = (inventorySheet?['name'] ?? '').toString();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(createdSheetName.isEmpty
-                ? 'Linked monthly sheets created successfully'
-                : 'Linked monthly sheets created: $createdSheetName'),
-            backgroundColor: Colors.green,
-          ),
+        await AppModal.showText(
+          context,
+          title: 'Workspace created',
+          message: createdSheetName.isEmpty
+              ? 'Linked monthly sheets created successfully'
+              : 'Linked monthly sheets created: $createdSheetName',
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to create workspace: $e'),
-          backgroundColor: Colors.red,
-        ),
+      await AppModal.showText(
+        context,
+        title: 'Create failed',
+        message: 'Failed to create workspace: $e',
       );
     }
   }
@@ -288,10 +287,10 @@ class _FileListScreenState extends State<FileListScreen> {
     }
     setState(() => _selectedFileIds.clear());
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Files moved successfully'),
-            backgroundColor: Colors.green),
+      await AppModal.showText(
+        context,
+        title: 'Move complete',
+        message: 'Files moved successfully',
       );
     }
   }
@@ -318,13 +317,12 @@ class _FileListScreenState extends State<FileListScreen> {
         );
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(success
-                  ? 'File "$fileName" uploaded successfully!'
-                  : 'Failed to upload file'),
-              backgroundColor: success ? Colors.green : Colors.red,
-            ),
+          await AppModal.showText(
+            context,
+            title: success ? 'Upload complete' : 'Upload failed',
+            message: success
+                ? 'File "$fileName" uploaded successfully!'
+                : 'Failed to upload file',
           );
         }
       }
@@ -352,12 +350,11 @@ class _FileListScreenState extends State<FileListScreen> {
         parentId: selectedParentId,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                success ? 'Folder "$name" created' : 'Failed to create folder'),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
+        await AppModal.showText(
+          context,
+          title: success ? 'Folder created' : 'Create failed',
+          message:
+              success ? 'Folder "$name" created' : 'Failed to create folder',
         );
       }
     }
@@ -370,12 +367,11 @@ class _FileListScreenState extends State<FileListScreen> {
       final success =
           await context.read<DataProvider>().renameFileItem(file.id, name);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                success ? 'File renamed to "$name"' : 'Failed to rename file'),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
+        await AppModal.showText(
+          context,
+          title: success ? 'Rename complete' : 'Rename failed',
+          message:
+              success ? 'File renamed to "$name"' : 'Failed to rename file',
         );
       }
     }
@@ -388,13 +384,11 @@ class _FileListScreenState extends State<FileListScreen> {
       final success =
           await context.read<DataProvider>().renameFolder(folder.id, name);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(success
-                ? 'Folder renamed to "$name"'
-                : 'Failed to rename folder'),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
+        await AppModal.showText(
+          context,
+          title: success ? 'Rename complete' : 'Rename failed',
+          message:
+              success ? 'Folder renamed to "$name"' : 'Failed to rename folder',
         );
       }
     }
@@ -407,12 +401,10 @@ class _FileListScreenState extends State<FileListScreen> {
       final folderId = targetId == -1 ? null : targetId;
       final success = await data.moveFileToFolder(file.id, folderId: folderId);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                success ? 'File moved successfully' : 'Failed to move file'),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
+        await AppModal.showText(
+          context,
+          title: success ? 'Move complete' : 'Move failed',
+          message: success ? 'File moved successfully' : 'Failed to move file',
         );
       }
     }
@@ -434,21 +426,19 @@ class _FileListScreenState extends State<FileListScreen> {
         final f = File(outputPath);
         await f.writeAsBytes(bytes);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Downloaded to: $outputPath'),
-              backgroundColor: Colors.green,
-            ),
+          await AppModal.showText(
+            context,
+            title: 'Download complete',
+            message: 'Downloaded to: $outputPath',
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Download failed: $e'),
-            backgroundColor: Colors.red,
-          ),
+        await AppModal.showText(
+          context,
+          title: 'Download failed',
+          message: 'Download failed: $e',
         );
       }
     }

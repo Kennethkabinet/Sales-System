@@ -258,24 +258,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                     'Status', user?.isActive == true ? 'Active' : 'Inactive'),
 
                 const SizedBox(height: 20),
-
-                // View profile button
-                OutlinedButton(
-                  onPressed: () {},
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _textSecondary,
-                    side: BorderSide(color: _borderColor),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 10),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: const Text(
-                    'View Public Profile',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                  ),
-                ),
               ],
             ),
           ),

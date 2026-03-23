@@ -29,10 +29,15 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   bool _isLoading = true;
   String? _error;
   String _searchQuery = '';
-  String _roleFilter = 'All Users';
+  String _roleFilter = 'All Roles';
   String _statusFilter = 'All Status';
   final String _sortMode = 'Sort by Name';
   final TextEditingController _searchController = TextEditingController();
+
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
 
   // Pagination state
   int _currentPage = 1;
@@ -53,28 +58,237 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
-    setState(() {
+    _safeSetState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
       final users = await ApiService.getUsers();
+      if (!mounted) return;
       final departments = await ApiService.getDepartments();
+      if (!mounted) return;
 
-      setState(() {
+      _safeSetState(() {
         _users = users;
         _departments = departments;
         _isLoading = false;
       });
+
+      if (!mounted) return;
       _applyFilters();
     } catch (e) {
-      setState(() {
+      _safeSetState(() {
         _error = e.toString();
         _isLoading = false;
       });
     }
+  }
+
+  String _humanizeField(String field) {
+    switch (field) {
+      case 'full_name':
+        return 'Full name';
+      case 'department_id':
+        return 'Department';
+      case 'email':
+        return 'Email';
+      case 'username':
+        return 'Username';
+      case 'password':
+        return 'Password';
+      case 'role':
+        return 'Role';
+      default:
+        if (field.isEmpty) return 'Field';
+        return field
+            .replaceAll('_', ' ')
+            .split(' ')
+            .where((p) => p.isNotEmpty)
+            .map((p) => p[0].toUpperCase() + p.substring(1))
+            .join(' ');
+    }
+  }
+
+  String _formatUserManagementError(Object error) {
+    if (error is ApiException) {
+      if (error.code == 'VALIDATION_ERROR' &&
+          error.details != null &&
+          error.details!.isNotEmpty) {
+        final lines = <String>[];
+        for (final d in error.details!) {
+          final field = (d['path'] ?? d['param'] ?? '').toString();
+          final msg = (d['msg'] ?? d['message'] ?? 'Invalid value').toString();
+
+          if (field.trim().isEmpty) {
+            lines.add('• $msg');
+          } else {
+            lines.add('• ${_humanizeField(field)}: $msg');
+          }
+        }
+        return lines.join('\n');
+      }
+
+      return error.message;
+    }
+
+    return error.toString();
+  }
+
+  Future<void> _showErrorModal({
+    required String title,
+    required Object error,
+  }) async {
+    if (!mounted) return;
+    final message = _formatUserManagementError(error);
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppColors.border),
+        ),
+        child: Container(
+          width: 560,
+          constraints: const BoxConstraints(maxWidth: 560),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: _kNavy,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    message,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.35,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: SizedBox(
+                  height: 44,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: const BorderSide(color: AppColors.border),
+                      ),
+                    ),
+                    child: const Text(
+                      'OK',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: _kNavy,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMessageModal({
+    required String title,
+    required String message,
+  }) async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppColors.border),
+        ),
+        child: Container(
+          width: 560,
+          constraints: const BoxConstraints(maxWidth: 560),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: _kNavy,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    message,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.35,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: SizedBox(
+                  height: 44,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: const BorderSide(color: AppColors.border),
+                      ),
+                    ),
+                    child: const Text(
+                      'OK',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: _kNavy,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _showCreateUserDialog() async {
@@ -91,641 +305,517 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppColors.border),
-        ),
-        child: Container(
-          width: 640,
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: StatefulBuilder(
-            builder: (context, setDialogState) => SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Header
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppColors.lightBlue,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(
-                              Icons.person_add,
-                              color: AppColors.primaryBlue,
-                              size: 24,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Create New User',
-                                  style: TextStyle(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.bold,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Add a new user to your organization',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 32),
+      builder: (context) {
+        final theme = Theme.of(context);
+        final isDark = theme.brightness == Brightness.dark;
+        final cs = theme.colorScheme;
 
-                      // Name Fields (Two columns)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'First Name',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: firstNameController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter first name',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  validator: (value) =>
-                                      value == null || value.isEmpty
-                                          ? 'Required'
-                                          : null,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Last Name',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: lastNameController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter last name',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  validator: (value) =>
-                                      value == null || value.isEmpty
-                                          ? 'Required'
-                                          : null,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
+        final borderColor = cs.outline.withValues(alpha: isDark ? 0.65 : 0.45);
+        final fieldFill = cs.surfaceContainerHighest;
+        final hintColor = cs.onSurfaceVariant.withValues(alpha: 0.75);
+        final linkColor = isDark ? cs.primaryContainer : cs.primary;
 
-                      // Middle Initial and Username
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Middle Initial',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: middleInitialController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Optional',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.grey[50],
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  maxLength: 2,
-                                  buildCounter: (context,
-                                          {required currentLength,
-                                          required isFocused,
-                                          maxLength}) =>
-                                      null,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Username',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: usernameController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter username',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty) {
-                                      return 'Required';
-                                    }
-                                    if (value.length < 3) {
-                                      return 'Min 3 characters';
-                                    }
-                                    return null;
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
+        final labelStyle = TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: cs.onSurface,
+        );
 
-                      // Email and Password
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Email',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: emailController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter email address',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  keyboardType: TextInputType.emailAddress,
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty) {
-                                      return 'Required';
-                                    }
-                                    if (!value.contains('@')) {
-                                      return 'Invalid email';
-                                    }
-                                    return null;
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Password',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                    color: _kNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                TextFormField(
-                                  controller: passwordController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Enter password',
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide:
-                                          BorderSide(color: Colors.grey[300]!),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: _kNavy, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                  ),
-                                  obscureText: true,
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty) {
-                                      return 'Required';
-                                    }
-                                    if (value.length < 6) {
-                                      return 'Min 6 characters';
-                                    }
-                                    return null;
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
+        final subLabelStyle = TextStyle(
+          fontSize: 14,
+          color: cs.onSurfaceVariant,
+        );
 
-                      // Role Selection (Segmented Buttons)
-                      const Text(
-                        'Role',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: _kNavy,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          _buildRoleButton(
-                            label: 'Editor',
-                            isSelected: selectedRole == 'editor',
-                            onTap: () =>
-                                setDialogState(() => selectedRole = 'editor'),
-                          ),
-                          const SizedBox(width: 12),
-                          _buildRoleButton(
-                            label: 'Viewer',
-                            isSelected: selectedRole == 'viewer',
-                            onTap: () =>
-                                setDialogState(() => selectedRole = 'viewer'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
+        InputDecoration deco({required String hint}) => InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(color: hintColor),
+              filled: true,
+              fillColor: fieldFill,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: borderColor),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: borderColor),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: cs.primary, width: 2),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 14,
+              ),
+            );
 
-                      // Department Section
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Department',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: _kNavy,
-                            ),
-                          ),
-                          Row(
-                            children: [
-                              InkWell(
-                                onTap: () async {
-                                  final result =
-                                      await _showAddDepartmentDialog();
-                                  if (result != null) {
-                                    setDialogState(() {
-                                      // Department was added, refresh the list
-                                    });
-                                  }
-                                },
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.add,
-                                        size: 16, color: AppColors.primaryBlue),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'New',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: AppColors.primaryBlue,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+        final ShapeBorder dialogShape = theme.dialogTheme.shape ??
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: borderColor),
+            );
+
+        return Dialog(
+          backgroundColor: theme.dialogTheme.backgroundColor,
+          shape: dialogShape,
+          child: Container(
+            width: 640,
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: StatefulBuilder(
+              builder: (context, setDialogState) => SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Header
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: cs.primary
+                                    .withValues(alpha: isDark ? 0.20 : 0.12),
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              const SizedBox(width: 16),
-                              InkWell(
-                                onTap: () async {
-                                  final needsUpdate =
-                                      await _showManageDepartmentsDialog();
-                                  if (needsUpdate == true) {
-                                    setDialogState(() {
-                                      // Check if selected department was deleted
-                                      if (selectedDepartment != null &&
-                                          !_departments.any((d) =>
-                                              d.id == selectedDepartment)) {
-                                        selectedDepartment = null;
+                              child: Icon(
+                                Icons.person_add,
+                                color: cs.primary,
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Create New User',
+                                    style: TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
+                                      color: cs.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Add a new user to your organization',
+                                    style: subLabelStyle,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 32),
+
+                        // Name Fields (Two columns)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'First Name',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: firstNameController,
+                                    decoration: deco(hint: 'Enter first name'),
+                                    validator: (value) =>
+                                        value == null || value.isEmpty
+                                            ? 'Required'
+                                            : null,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Last Name',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: lastNameController,
+                                    decoration: deco(hint: 'Enter last name'),
+                                    validator: (value) =>
+                                        value == null || value.isEmpty
+                                            ? 'Required'
+                                            : null,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Middle Initial and Username
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Middle Initial',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: middleInitialController,
+                                    decoration: deco(hint: 'Optional'),
+                                    maxLength: 2,
+                                    buildCounter: (context,
+                                            {required currentLength,
+                                            required isFocused,
+                                            maxLength}) =>
+                                        null,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Username',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: usernameController,
+                                    decoration: deco(hint: 'Enter username'),
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Required';
                                       }
-                                    });
+                                      if (value.length < 3) {
+                                        return 'Min 3 characters';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Email and Password
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Email',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: emailController,
+                                    decoration:
+                                        deco(hint: 'Enter email address'),
+                                    keyboardType: TextInputType.emailAddress,
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Required';
+                                      }
+                                      if (!value.contains('@')) {
+                                        return 'Invalid email';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Password',
+                                    style: labelStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    controller: passwordController,
+                                    decoration: deco(hint: 'Enter password'),
+                                    obscureText: true,
+                                    validator: (value) {
+                                      if (value == null || value.isEmpty) {
+                                        return 'Required';
+                                      }
+                                      if (value.length < 6) {
+                                        return 'Min 6 characters';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Role Selection (Segmented Buttons)
+                        Text(
+                          'Role',
+                          style: labelStyle,
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            _buildRoleButton(
+                              label: 'Admin',
+                              isSelected: selectedRole == 'admin',
+                              onTap: () =>
+                                  setDialogState(() => selectedRole = 'admin'),
+                            ),
+                            const SizedBox(width: 12),
+                            _buildRoleButton(
+                              label: 'Editor',
+                              isSelected: selectedRole == 'editor',
+                              onTap: () =>
+                                  setDialogState(() => selectedRole = 'editor'),
+                            ),
+                            const SizedBox(width: 12),
+                            _buildRoleButton(
+                              label: 'Viewer',
+                              isSelected: selectedRole == 'viewer',
+                              onTap: () =>
+                                  setDialogState(() => selectedRole = 'viewer'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Department Section
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Department',
+                              style: labelStyle,
+                            ),
+                            Row(
+                              children: [
+                                InkWell(
+                                  onTap: () async {
+                                    final result =
+                                        await _showAddDepartmentDialog();
+                                    if (result != null) {
+                                      setDialogState(() {
+                                        // Department was added, refresh the list
+                                      });
+                                    }
+                                  },
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.add,
+                                          size: 16, color: linkColor),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'New',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: linkColor,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                InkWell(
+                                  onTap: () async {
+                                    final needsUpdate =
+                                        await _showManageDepartmentsDialog();
+                                    if (needsUpdate == true) {
+                                      setDialogState(() {
+                                        // Check if selected department was deleted
+                                        if (selectedDepartment != null &&
+                                            !_departments.any((d) =>
+                                                d.id == selectedDepartment)) {
+                                          selectedDepartment = null;
+                                        }
+                                      });
+                                    }
+                                  },
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.settings,
+                                          size: 16, color: linkColor),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Manage',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: linkColor,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: borderColor),
+                            borderRadius: BorderRadius.circular(8),
+                            color: fieldFill,
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<int?>(
+                              value: selectedDepartment,
+                              hint: Text(
+                                'None',
+                                style: TextStyle(color: hintColor),
+                              ),
+                              isExpanded: true,
+                              icon: Icon(Icons.keyboard_arrow_down,
+                                  color: cs.onSurfaceVariant),
+                              items: [
+                                const DropdownMenuItem(
+                                  value: null,
+                                  child: Text('None'),
+                                ),
+                                ..._departments.map((dept) => DropdownMenuItem(
+                                      value: dept.id,
+                                      child: Text(dept.name),
+                                    )),
+                              ],
+                              onChanged: (value) {
+                                setDialogState(() {
+                                  selectedDepartment = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 32),
+
+                        // Actions
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            // Cancel Button
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.pop(context),
+                                style: OutlinedButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  side: BorderSide(color: borderColor),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Cancel',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            // Create Button
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  if (formKey.currentState!.validate()) {
+                                    final fullName =
+                                        '${firstNameController.text.trim()} '
+                                        '${middleInitialController.text.trim().isNotEmpty ? "${middleInitialController.text.trim()}. " : ""}'
+                                        '${lastNameController.text.trim()}';
+
+                                    try {
+                                      await ApiService.createUser(
+                                        username:
+                                            usernameController.text.trim(),
+                                        email: emailController.text.trim(),
+                                        password: passwordController.text,
+                                        fullName: fullName.trim(),
+                                        role: selectedRole,
+                                        departmentId: selectedDepartment,
+                                      );
+
+                                      if (context.mounted) {
+                                        Navigator.pop(context);
+                                        _loadData();
+                                        await _showMessageModal(
+                                          title: 'User created',
+                                          message: 'User created successfully.',
+                                        );
+                                      }
+                                    } catch (e) {
+                                      await _showErrorModal(
+                                        title: 'Create user failed',
+                                        error: e,
+                                      );
+                                    }
                                   }
                                 },
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.settings,
-                                        size: 16, color: AppColors.primaryBlue),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Manage',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: AppColors.primaryBlue,
-                                      ),
-                                    ),
-                                  ],
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primaryBlue,
+                                  foregroundColor: Colors.white,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Create User',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey[300]!),
-                          borderRadius: BorderRadius.circular(8),
-                          color: Colors.white,
+                            ),
+                          ],
                         ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<int?>(
-                            value: selectedDepartment,
-                            hint: Text(
-                              'None',
-                              style: TextStyle(color: Colors.grey[600]),
-                            ),
-                            isExpanded: true,
-                            icon: Icon(Icons.keyboard_arrow_down,
-                                color: Colors.grey[600]),
-                            items: [
-                              const DropdownMenuItem(
-                                value: null,
-                                child: Text('None'),
-                              ),
-                              ..._departments.map((dept) => DropdownMenuItem(
-                                    value: dept.id,
-                                    child: Text(dept.name),
-                                  )),
-                            ],
-                            onChanged: (value) {
-                              setDialogState(() {
-                                selectedDepartment = value;
-                              });
-                            },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-
-                      // Actions
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Cancel Button
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(context),
-                              style: OutlinedButton.styleFrom(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
-                                side: BorderSide(color: Colors.grey[300]!),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: _kNavy,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          // Create Button
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () async {
-                                if (formKey.currentState!.validate()) {
-                                  final fullName =
-                                      '${firstNameController.text.trim()} '
-                                      '${middleInitialController.text.trim().isNotEmpty ? "${middleInitialController.text.trim()}. " : ""}'
-                                      '${lastNameController.text.trim()}';
-
-                                  try {
-                                    await ApiService.createUser(
-                                      username: usernameController.text.trim(),
-                                      email: emailController.text.trim(),
-                                      password: passwordController.text,
-                                      fullName: fullName.trim(),
-                                      role: selectedRole,
-                                      departmentId: selectedDepartment,
-                                    );
-
-                                    if (context.mounted) {
-                                      Navigator.pop(context);
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content:
-                                              Text('User created successfully'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                      _loadData();
-                                    }
-                                  } catch (e) {
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        SnackBar(
-                                          content:
-                                              Text('Failed to create user: $e'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  }
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primaryBlue,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              child: const Text(
-                                'Create User',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -734,6 +824,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     required bool isSelected,
     required VoidCallback onTap,
   }) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+    final borderColor = cs.outline.withValues(alpha: isDark ? 0.65 : 0.45);
+    final unselectedFill = cs.surfaceContainerHighest;
+
     return Expanded(
       child: InkWell(
         onTap: onTap,
@@ -741,9 +837,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.primaryBlue : Colors.white,
+            color: isSelected ? AppColors.primaryBlue : unselectedFill,
             border: Border.all(
-              color: isSelected ? AppColors.primaryBlue : Colors.grey[300]!,
+              color: isSelected ? AppColors.primaryBlue : borderColor,
               width: isSelected ? 2 : 1,
             ),
             borderRadius: BorderRadius.circular(8),
@@ -754,7 +850,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: isSelected ? Colors.white : _kNavy,
+                color: isSelected ? Colors.white : cs.onSurface,
               ),
             ),
           ),
@@ -885,22 +981,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
                   if (context.mounted) {
                     Navigator.pop(context, true);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Department created successfully'),
-                        backgroundColor: Colors.green,
-                      ),
+                    await _showMessageModal(
+                      title: 'Department created',
+                      message: 'Department created successfully.',
                     );
                   }
                 } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Failed to create department: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
+                  await _showErrorModal(
+                    title: 'Create department failed',
+                    error: e,
+                  );
                 }
               }
             },
@@ -1110,26 +1200,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                           setDialogState(() {});
 
                                           if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              const SnackBar(
-                                                content: Text(
-                                                    'Department deleted successfully'),
-                                                backgroundColor: Colors.green,
-                                              ),
+                                            await _showMessageModal(
+                                              title: 'Department deleted',
+                                              message:
+                                                  'Department deleted successfully.',
                                             );
                                           }
                                         } catch (e) {
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                    'Failed to delete department: $e'),
-                                                backgroundColor: Colors.red,
-                                              ),
-                                            );
-                                          }
+                                          await _showErrorModal(
+                                            title: 'Delete department failed',
+                                            error: e,
+                                          );
                                         }
                                       }
                                     },
@@ -1254,6 +1335,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       border: OutlineInputBorder(),
                     ),
                     items: const [
+                      DropdownMenuItem(value: 'admin', child: Text('Admin')),
                       DropdownMenuItem(value: 'viewer', child: Text('Viewer')),
                       DropdownMenuItem(value: 'editor', child: Text('Editor')),
                     ],
@@ -1311,23 +1393,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
                   if (context.mounted) {
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('User updated successfully'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
                     _loadData();
+                    await _showMessageModal(
+                      title: 'User updated',
+                      message: 'User updated successfully.',
+                    );
                   }
                 } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Failed to update user: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
+                  await _showErrorModal(
+                    title: 'Update user failed',
+                    error: e,
+                  );
                 }
               }
             },
@@ -1363,23 +1439,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       try {
         await ApiService.deactivateUser(user.id);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('User deactivated'),
-              backgroundColor: Colors.green,
-            ),
-          );
           _loadData();
+          await _showMessageModal(
+            title: 'User deactivated',
+            message: 'User deactivated successfully.',
+          );
         }
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to deactivate user: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        await _showErrorModal(title: 'Deactivate user failed', error: e);
       }
     }
   }
@@ -1440,23 +1507,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       try {
         await ApiService.deleteUserPermanently(user.id);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('User "${user.username}" permanently deleted'),
-              backgroundColor: Colors.green,
-            ),
-          );
           _loadData();
+          await _showMessageModal(
+            title: 'User deleted',
+            message: 'User "${user.username}" permanently deleted.',
+          );
         }
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete user: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        await _showErrorModal(title: 'Delete user failed', error: e);
       }
     }
   }
@@ -1465,23 +1523,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     try {
       await ApiService.reactivateUser(user.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('User reactivated'),
-            backgroundColor: Colors.green,
-          ),
-        );
         _loadData();
+        await _showMessageModal(
+          title: 'User reactivated',
+          message: 'User reactivated successfully.',
+        );
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to reactivate user: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      await _showErrorModal(title: 'Reactivate user failed', error: e);
     }
   }
 
@@ -1747,12 +1796,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
           // Role filter - modern dropdown
           _buildModernDropdown(
-            value: _roleFilter == 'All Users' ? null : _roleFilter,
-            hint: 'All Roles',
+            value: _roleFilter,
+            allLabel: 'All Roles',
             icon: Icons.badge_rounded,
-            items: ['Editor', 'Viewer'],
+            items: ['Admin', 'Editor', 'Viewer'],
             onChanged: (v) {
-              setState(() => _roleFilter = v ?? 'All Users');
+              setState(() => _roleFilter = v);
               _applyFilters();
             },
           ),
@@ -1760,12 +1809,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
           // Status filter
           _buildModernDropdown(
-            value: _statusFilter == 'All Status' ? null : _statusFilter,
-            hint: 'All Status',
+            value: _statusFilter,
+            allLabel: 'All Status',
             icon: Icons.toggle_on_rounded,
             items: ['Active', 'Suspended'],
             onChanged: (v) {
-              setState(() => _statusFilter = v ?? 'All Status');
+              setState(() => _statusFilter = v);
               _applyFilters();
             },
           ),
@@ -1791,25 +1840,29 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   Widget _buildModernDropdown({
-    required String? value,
-    required String hint,
+    required String value,
+    required String allLabel,
     required IconData icon,
     required List<String> items,
-    required ValueChanged<String?> onChanged,
+    required ValueChanged<String> onChanged,
   }) {
-    return PopupMenuButton<String?>(
+    // NOTE: Do NOT use `null` as a menu value.
+    // PopupMenuButton treats `null` as “cancel” and will not call `onSelected`,
+    // which makes the "All" option impossible to re-select.
+    return PopupMenuButton<String>(
       onSelected: onChanged,
       offset: const Offset(0, 45),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       itemBuilder: (context) => [
-        PopupMenuItem<String?>(
-          value: null,
+        PopupMenuItem<String>(
+          value: allLabel,
           child: Row(
             children: [
               Icon(icon, size: 18, color: _kGray),
               const SizedBox(width: 10),
-              Text(hint, style: TextStyle(fontSize: 13, color: _textPrimary)),
-              if (value == null) ...[
+              Text(allLabel,
+                  style: TextStyle(fontSize: 13, color: _textPrimary)),
+              if (value == allLabel) ...[
                 const Spacer(),
                 Icon(Icons.check, size: 16, color: _kBlue),
               ],
@@ -1844,29 +1897,33 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: value != null ? _kBlue.withValues(alpha: 0.08) : _surfaceColor,
+          color: value != allLabel
+              ? _kBlue.withValues(alpha: 0.08)
+              : _surfaceColor,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color:
-                  value != null ? _kBlue.withValues(alpha: 0.3) : _borderColor),
+              color: value != allLabel
+                  ? _kBlue.withValues(alpha: 0.3)
+                  : _borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon,
-                size: 16, color: value != null ? _kBlue : _textSecondary),
+                size: 16, color: value != allLabel ? _kBlue : _textSecondary),
             const SizedBox(width: 8),
             Text(
-              value ?? hint,
+              value,
               style: TextStyle(
                 fontSize: 13,
-                color: value != null ? _kBlue : _textSecondary,
-                fontWeight: value != null ? FontWeight.w500 : FontWeight.w400,
+                color: value != allLabel ? _kBlue : _textSecondary,
+                fontWeight:
+                    value != allLabel ? FontWeight.w500 : FontWeight.w400,
               ),
             ),
             const SizedBox(width: 6),
             Icon(Icons.keyboard_arrow_down_rounded,
-                size: 18, color: value != null ? _kBlue : _textSecondary),
+                size: 18, color: value != allLabel ? _kBlue : _textSecondary),
           ],
         ),
       ),
@@ -2391,6 +2448,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
     // Role
     switch (_roleFilter) {
+      case 'Admin':
+        result = result.where((u) => u.role == 'admin').toList();
+        break;
       case 'Editor':
         result = result.where((u) => u.role == 'editor').toList();
         break;

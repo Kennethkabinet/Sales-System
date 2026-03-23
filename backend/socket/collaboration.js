@@ -28,6 +28,34 @@ class CollaborationHandler {
     this.startLockCleanup();
   }
 
+  /**
+   * Force-disconnect all sockets for a given user.
+   * Used for admin actions like suspending an account.
+   */
+  kickUser(userId, payload = { code: 'AUTH_SUSPENDED', message: 'Account is suspended' }) {
+    const id = Number(userId);
+    if (!Number.isFinite(id)) return;
+
+    for (const [socketId, info] of this.activeUsers.entries()) {
+      if (Number(info?.userId) !== id) continue;
+      const socket = this.io.sockets.sockets.get(socketId);
+      if (!socket) continue;
+
+      try {
+        socket.emit('auth_revoked', payload);
+      } catch (_) {
+        // ignore
+      }
+
+      // Disconnect immediately; this will trigger cleanup in handleDisconnect.
+      try {
+        socket.disconnect(true);
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
   _normalizeSheetId(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return null;

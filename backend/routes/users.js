@@ -13,7 +13,7 @@ const createUserValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('full_name').trim().notEmpty().withMessage('Full name is required'),
-  body('role').isIn(['viewer', 'editor']).withMessage('Role must be viewer or editor'),
+  body('role').isIn(['viewer', 'editor', 'admin']).withMessage('Role must be viewer, editor, or admin'),
   body('department_id').optional().isInt()
 ];
 
@@ -489,6 +489,15 @@ router.delete('/:id', authenticate, requireAdminAccess, async (req, res) => {
       'UPDATE users SET is_active = FALSE, deactivated_at = CURRENT_TIMESTAMP, deactivated_by = $1 WHERE id = $2',
       [req.user.id, id]
     );
+
+    // Force-logout active sessions for the suspended user.
+    const collab = req.app.get('collab');
+    if (collab && typeof collab.kickUser === 'function') {
+      collab.kickUser(id, {
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'Account is suspended',
+      });
+    }
 
     await auditService.log({
       userId: req.user.id,

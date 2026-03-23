@@ -27,12 +27,12 @@ router.post('/login', loginValidation, async (req, res) => {
 
     // Get user with role and department
     const result = await pool.query(`
-      SELECT u.id, u.username, u.email, u.password_hash, u.full_name, u.department_id,
+      SELECT u.id, u.username, u.email, u.password_hash, u.full_name, u.department_id, u.is_active,
              r.name as role, d.name as department_name
       FROM users u
       LEFT JOIN roles r ON u.role_id = r.id
       LEFT JOIN departments d ON u.department_id = d.id
-      WHERE u.username = $1 AND u.is_active = TRUE
+      WHERE u.username = $1
     `, [username]);
 
     if (result.rows.length === 0) {
@@ -43,6 +43,15 @@ router.post('/login', loginValidation, async (req, res) => {
     }
 
     const user = result.rows[0];
+
+    // If the account is suspended, show the correct reason.
+    // (This intentionally takes precedence over password checks.)
+    if (!user.is_active) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'ACCOUNT_SUSPENDED', message: 'Account is suspended' }
+      });
+    }
 
     // Verify password
     const validPassword = await bcrypt.compare(password, user.password_hash);

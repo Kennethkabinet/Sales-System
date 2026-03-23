@@ -49,6 +49,8 @@ class AuthProvider extends ChangeNotifier {
   Future<void> initialize() async {
     _isLoading = true;
 
+    _setupAuthRevocationHandlers();
+
     try {
       final prefs = await SharedPreferences.getInstance();
       _token = prefs.getString('auth_token');
@@ -75,12 +77,15 @@ class AuthProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
 
+    _setupAuthRevocationHandlers();
+
     try {
       final result = await ApiService.login(username, password);
 
       if (result.success && result.token != null && result.user != null) {
         _token = result.token;
         _user = result.user;
+        _error = null;
 
         // Store token
         final prefs = await SharedPreferences.getInstance();
@@ -121,10 +126,10 @@ class AuthProvider extends ChangeNotifier {
   }
 
   /// Clear auth state
-  Future<void> _clearAuth() async {
+  Future<void> _clearAuth({String? errorMessage}) async {
     _token = null;
     _user = null;
-    _error = null;
+    _error = errorMessage;
 
     ApiService.setAuthToken(null);
     SocketService.instance.disconnect();
@@ -150,6 +155,45 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  void _setupAuthRevocationHandlers() {
+    // WebSocket auth revoked (e.g. admin suspended account)
+    SocketService.instance.onAuthRevoked = (payload) {
+      final code = payload['code']?.toString();
+      final message = payload['message']?.toString();
+
+      if (code == 'ACCOUNT_SUSPENDED' || code == 'AUTH_SUSPENDED') {
+        _forceLogout(message ?? 'Account is suspended');
+        return;
+      }
+
+      _forceLogout(message ?? 'Session ended. Please log in again.');
+    };
+
+    // HTTP auth errors (expired token, suspended account)
+    ApiService.onAuthError = (e) {
+      if (e.code == 'ACCOUNT_SUSPENDED' || e.code == 'AUTH_SUSPENDED') {
+        _forceLogout(e.message.isNotEmpty ? e.message : 'Account is suspended');
+        return;
+      }
+      if (e.code == 'AUTH_INVALID') {
+        _forceLogout('Session expired. Please log in again.');
+        return;
+      }
+    };
+  }
+
+  Future<void> _forceLogout(String message) async {
+    // Avoid extra work if we're already logged out.
+    if (_token == null && _user == null) {
+      _error = message;
+      notifyListeners();
+      return;
+    }
+
+    await _clearAuth(errorMessage: message);
+    notifyListeners();
+  }
+
   Future<bool> register(
       {required String username,
       required String email,
@@ -158,6 +202,8 @@ class AuthProvider extends ChangeNotifier {
     _isLoading = true;
     _error = null;
     notifyListeners();
+
+    _setupAuthRevocationHandlers();
 
     try {
       final result = await ApiService.register(
@@ -170,6 +216,7 @@ class AuthProvider extends ChangeNotifier {
       if (result.success && result.token != null && result.user != null) {
         _token = result.token;
         _user = result.user;
+        _error = null;
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth_token', _token!);

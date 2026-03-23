@@ -4,6 +4,7 @@ import 'package:data_table_2/data_table_2.dart';
 import '../providers/data_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/file.dart';
+import '../widgets/app_modal.dart';
 
 class TableViewScreen extends StatefulWidget {
   final FileModel file;
@@ -50,9 +51,10 @@ class _TableViewScreenState extends State<TableViewScreen> {
     if (data.lockedRows.containsKey(rowId) &&
         data.lockedRows[rowId] !=
             context.read<AuthProvider>().user?.id.toString()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('This row is being edited by another user')),
+      AppModal.showText(
+        context,
+        title: 'Row locked',
+        message: 'This row is being edited by another user',
       );
       return;
     }
@@ -149,8 +151,10 @@ class _TableViewScreenState extends State<TableViewScreen> {
             icon: const Icon(Icons.download),
             tooltip: 'Export',
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Export feature coming soon')),
+              AppModal.showText(
+                context,
+                title: 'Coming soon',
+                message: 'Export feature coming soon',
               );
             },
           ),

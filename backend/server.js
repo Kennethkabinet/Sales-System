@@ -49,7 +49,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const sheetRoutes = require('./routes/sheets');
 const inventoryRoutes = require('./routes/inventory');
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 
 // Health check routes
 app.get('/', (req, res) => {
@@ -120,8 +120,8 @@ app.use((req, res) => {
   });
 });
 
-// Start server
-server.listen(PORT, () => {
+// Start server (bind to all interfaces so LAN devices can connect)
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n========================================`);
   console.log(`  Sales & Inventory Management System`);
   console.log(`========================================`);

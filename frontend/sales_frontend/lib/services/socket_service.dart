@@ -55,6 +55,9 @@ class SocketService {
   /// Confirmation that this user's request was submitted
   Function(Map<String, dynamic>)? onEditRequestSubmitted;
 
+  /// Server revoked auth (e.g., account suspended). Payload: { code, message }
+  Function(Map<String, dynamic>)? onAuthRevoked;
+
   SocketService._();
 
   static SocketService get instance {
@@ -137,6 +140,9 @@ class SocketService {
     _socket?.on('cursor_moved', (d) => onCursorMoved?.call(_unwrap(d)));
     _socket?.on('row_locks', (_) {/* handled elsewhere */});
     _socket?.on('error', (d) => onError?.call(_unwrap(d)));
+
+    // Auth revoked (e.g. suspended). Force the app to clear session.
+    _socket?.on('auth_revoked', (d) => onAuthRevoked?.call(_unwrap(d)));
 
     // ── V2 presence events ──
     _socket?.on('presence_update', (d) {

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/data_provider.dart';
 import '../models/formula.dart';
 import '../config/constants.dart';
+import '../widgets/app_modal.dart';
 
 class FormulaListScreen extends StatefulWidget {
   const FormulaListScreen({super.key});
@@ -209,9 +210,10 @@ class _FormulaListScreenState extends State<FormulaListScreen> {
             onPressed: () {
               if (nameController.text.isEmpty ||
                   expressionController.text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Name and expression are required')),
+                AppModal.showText(
+                  context,
+                  title: 'Missing required fields',
+                  message: 'Name and expression are required',
                 );
                 return;
               }

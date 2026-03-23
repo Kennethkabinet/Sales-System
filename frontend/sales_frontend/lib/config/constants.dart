@@ -35,9 +35,14 @@ class AppConfig {
   static const String appName = 'Synergy Graphics';
   static const String appVersion = '1.0.0';
 
-  // API Configuration
-  static const String apiBaseUrl = 'http://192.168.3.224:3000/api';
-  static const String wsBaseUrl = 'http://192.168.3.224:3000';
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://192.168.3.224:3000/api',
+  );
+  static const String wsBaseUrl = String.fromEnvironment(
+    'WS_BASE_URL',
+    defaultValue: 'http://192.168.3.224:3000',
+  );
 
   // Timeouts
   static const Duration apiTimeout = Duration(seconds: 30);

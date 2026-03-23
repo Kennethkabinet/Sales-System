@@ -4,6 +4,37 @@ const pool = require('../db');
 const { authenticate } = require('../middleware/auth');
 const { requireAdminAccess } = require('../middleware/rbac');
 
+function _invColId(col) {
+  if (typeof col !== 'string') return null;
+  const m = col.match(/^INV:([^|]+)\|/);
+  return m ? m[1] : null;
+}
+
+function _findInvColById(columns, id) {
+  if (!Array.isArray(columns)) return null;
+  const hit = columns.find(c => typeof c === 'string' && c.startsWith(`INV:${id}|`));
+  return hit || null;
+}
+
+function _looksLikeInventoryTrackerColumns(columns) {
+  if (!Array.isArray(columns)) return false;
+
+  const hasProduct = columns.includes('Product Name') || _findInvColById(columns, 'product_name');
+  const hasTotal = columns.includes('Total Quantity') || _findInvColById(columns, 'total_qty');
+  const hasStock = columns.includes('Stock') || _findInvColById(columns, 'stock');
+  const hasMaint =
+    columns.includes('Maintaining') ||
+    columns.includes('Maintaining Qty') ||
+    _findInvColById(columns, 'maintaining_qty') ||
+    _findInvColById(columns, 'maintaining_unit');
+  const hasCode =
+    columns.includes('QB Code') ||
+    columns.includes('QC Code') ||
+    _findInvColById(columns, 'code');
+
+  return Boolean(hasProduct && (hasTotal || hasStock) && hasMaint && hasCode);
+}
+
 // GET /dashboard/stats - Get dashboard statistics (Admin only)
 router.get('/stats', authenticate, requireAdminAccess, async (req, res) => {
   try {
@@ -186,15 +217,17 @@ router.get('/active-editors', authenticate, requireAdminAccess, async (req, res)
 router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT id, name, created_at FROM sheets
+      SELECT id, name, created_at, columns
+      FROM sheets
       WHERE is_active = TRUE
-        AND columns ? 'Product Name'
-        AND columns ? 'Total Quantity'
-        AND (columns ? 'Maintaining' OR columns ? 'Maintaining Qty')
-        AND (columns ? 'QC Code' OR columns ? 'QB Code')
       ORDER BY created_at ASC
     `);
-    res.json({ success: true, sheets: result.rows });
+
+    const sheets = (result.rows || [])
+      .filter(r => _looksLikeInventoryTrackerColumns(r.columns))
+      .map(r => ({ id: r.id, name: r.name, created_at: r.created_at }));
+
+    res.json({ success: true, sheets });
   } catch (error) {
     console.error('GET /dashboard/inventory-sheets error:', error);
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Failed to get inventory sheets' } });
@@ -204,6 +237,9 @@ router.get('/inventory-sheets', authenticate, requireAdminAccess, async (req, re
 // GET /dashboard/inventory-overview – Reads from Inventory Tracker sheets (Admin only)
 router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, res) => {
   try {
+    // This data should never be cached by intermediaries/clients.
+    res.set('Cache-Control', 'no-store');
+
     // ── 1. Resolve sheet IDs: use ?sheet_ids=43,52 if provided, else all inventory sheets ─
     // Accepts formats like "1,2", ["1","2"], [1,2], or "[1,2]".
     const parseSheetIds = (raw) => {
@@ -241,22 +277,26 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
     };
 
     let sheetIds;
-    const hasSheetFilter = Object.prototype.hasOwnProperty.call(req.query, 'sheet_ids');
-    if (hasSheetFilter) {
-      sheetIds = parseSheetIds(req.query.sheet_ids);
+    const sheetIdsRaw =
+      (Object.prototype.hasOwnProperty.call(req.query, 'sheet_ids') ? req.query.sheet_ids : undefined) ??
+      (Object.prototype.hasOwnProperty.call(req.query, 'sheetIds') ? req.query.sheetIds : undefined) ??
+      (Object.prototype.hasOwnProperty.call(req.query, 'sheet_id') ? req.query.sheet_id : undefined) ??
+      (Object.prototype.hasOwnProperty.call(req.query, 'sheetId') ? req.query.sheetId : undefined);
+
+    if (sheetIdsRaw !== undefined) {
+      sheetIds = parseSheetIds(sheetIdsRaw);
     }
 
     if (!sheetIds) {
       const sheetsRes = await pool.query(`
-        SELECT id FROM sheets
+        SELECT id, columns
+        FROM sheets
         WHERE is_active = TRUE
-          AND columns ? 'Product Name'
-          AND columns ? 'Total Quantity'
-          AND (columns ? 'Maintaining' OR columns ? 'Maintaining Qty')
-          AND (columns ? 'QC Code' OR columns ? 'QB Code')
         ORDER BY id ASC
       `);
-      sheetIds = sheetsRes.rows.map(r => r.id);
+      sheetIds = (sheetsRes.rows || [])
+        .filter(r => _looksLikeInventoryTrackerColumns(r.columns))
+        .map(r => r.id);
     }
 
     const emptyResponse = {
@@ -274,19 +314,60 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
 
     if (!sheetIds.length) return res.json(emptyResponse);
 
-    // ── 2. Fetch all non-empty product rows from those sheets ───────────────
+    // ── 2. Load sheet columns to resolve encoded inventory keys ─────────────
+    const metaRes = await pool.query(`
+      SELECT id, columns
+      FROM sheets
+      WHERE id = ANY($1) AND is_active = TRUE
+    `, [sheetIds]);
+
+    const sheetMetaById = new Map();
+    for (const r of (metaRes.rows || [])) {
+      sheetMetaById.set(r.id, { columns: r.columns });
+    }
+
+    const resolveKeysForSheet = (sheetId) => {
+      const meta = sheetMetaById.get(sheetId);
+      const cols = meta?.columns;
+      const columns = Array.isArray(cols) ? cols : [];
+
+      const productKey = _findInvColById(columns, 'product_name') || (columns.includes('Product Name') ? 'Product Name' : null);
+      const codeKey = _findInvColById(columns, 'code') || (columns.includes('QB Code') ? 'QB Code' : (columns.includes('QC Code') ? 'QC Code' : null));
+      const stockKey = _findInvColById(columns, 'stock') || (columns.includes('Stock') ? 'Stock' : null);
+      const totalKey = _findInvColById(columns, 'total_qty') || (columns.includes('Total Quantity') ? 'Total Quantity' : null);
+      const maintainingQtyKey = _findInvColById(columns, 'maintaining_qty') || (columns.includes('Maintaining Qty') ? 'Maintaining Qty' : null);
+      const maintainingUnitKey = _findInvColById(columns, 'maintaining_unit') || (columns.includes('Maintaining Unit') ? 'Maintaining Unit' : null);
+      const maintainingLegacyKey = columns.includes('Maintaining') ? 'Maintaining' : null;
+      const criticalKey = _findInvColById(columns, 'critical') || (columns.includes('Critical') ? 'Critical' : null);
+
+      return {
+        productKey,
+        codeKey,
+        stockKey,
+        totalKey,
+        maintainingQtyKey,
+        maintainingUnitKey,
+        maintainingLegacyKey,
+        criticalKey,
+      };
+    };
+
+    const keysBySheetId = new Map();
+    for (const id of sheetIds) {
+      keysBySheetId.set(id, resolveKeysForSheet(id));
+    }
+
+    // ── 3. Fetch sheet rows (filtering identity in JS so encoded keys work) ─
     const rowsRes = await pool.query(`
       SELECT sheet_id, data
       FROM sheet_data
       WHERE sheet_id = ANY($1)
-        AND data->>'Product Name' IS NOT NULL
-        AND TRIM(data->>'Product Name') != ''
-      ORDER BY sheet_id ASC
+      ORDER BY sheet_id ASC, row_number ASC
     `, [sheetIds]);
 
     if (!rowsRes.rows.length) return res.json(emptyResponse);
 
-    // ── 3. Process rows ─────────────────────────────────────────────────────
+    // ── 4. Process rows ─────────────────────────────────────────────────────
     // productMap: keyed by normalized product name + QB/QC code; values are summed across sheets
     const productMap = {};   // key → { name, qc_code, maintaining_qty, current_stock }
     const dateInMap  = {};   // "YYYY-MM-DD" → total qty IN
@@ -295,18 +376,27 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
 
     for (const row of rowsRes.rows) {
       const d = row.data;
-      const name = (d['Product Name'] || '').trim();
-      if (!name) continue;
-      const code = (d['QB Code'] || d['QC Code'] || '').toString().trim();
+      const keys = keysBySheetId.get(row.sheet_id) || {};
+      const name = ((keys.productKey ? d[keys.productKey] : d['Product Name']) || '').toString().trim();
+      const code = ((keys.codeKey ? d[keys.codeKey] : (d['QB Code'] || d['QC Code'])) || '').toString().trim();
+      if (!name && !code) continue;
       const productKey = `${name.toLowerCase()}|${code.toLowerCase()}`;
 
-      const unitRaw = (d['Maintaining Unit'] || '').toString().trim().toLowerCase();
-      const maintainingQtyRaw = (d['Maintaining Qty'] ?? '').toString().replace(/,/g, '').trim();
+      const unitRaw = ((keys.maintainingUnitKey ? d[keys.maintainingUnitKey] : d['Maintaining Unit']) || '').toString().trim().toLowerCase();
+      const maintainingQtyRaw = ((keys.maintainingQtyKey ? d[keys.maintainingQtyKey] : d['Maintaining Qty']) ?? '').toString().replace(/,/g, '').trim();
       const isPR = unitRaw === 'pr' || unitRaw === 'per request' || unitRaw === 'per-request' || maintainingQtyRaw === '-';
+
+      const legacyMaintRaw = (keys.maintainingLegacyKey ? d[keys.maintainingLegacyKey] : d['Maintaining']) || '';
       const maintaining = isPR
         ? 0
-        : (maintainingQtyRaw ? (parseFloat(maintainingQtyRaw) || 0) : (parseFloat(d['Maintaining']) || 0));
-      const totalQty    = parseFloat(d['Total Quantity']) || 0;
+        : (maintainingQtyRaw ? (parseFloat(maintainingQtyRaw) || 0) : (parseFloat(legacyMaintRaw) || 0));
+
+      // Total Quantity card must reflect only the Total Quantity column.
+      // No fallback to Stock (it can be stale/derived).
+      const qtyRaw = keys.totalKey ? d[keys.totalKey] : d['Total Quantity'];
+      const qtyText = (qtyRaw ?? '').toString().replace(/,/g, '').trim();
+      const hasQty = qtyText.length > 0 && Number.isFinite(parseFloat(qtyText));
+      const totalQty = hasQty ? (parseFloat(qtyText) || 0) : 0;
 
       // Aggregate product across sheets by product name + QB/QC code
       if (!productMap[productKey]) {
@@ -315,11 +405,15 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
           qc_code: code,
           maintaining_qty: 0,
           current_stock: 0,
+          stock_data_points: 0,
         };
         productOutMap[productKey] = 0;
       }
       productMap[productKey].maintaining_qty += maintaining;
-      productMap[productKey].current_stock += totalQty;
+      if (hasQty) {
+        productMap[productKey].current_stock += totalQty;
+        productMap[productKey].stock_data_points += 1;
+      }
       if (code && !productMap[productKey].qc_code) {
         productMap[productKey].qc_code = code;
       }
@@ -343,7 +437,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
 
     const products = Object.values(productMap);
 
-    // ── 4. Summary stats ────────────────────────────────────────────────────
+    // ── 5. Summary stats ────────────────────────────────────────────────────
     const now = new Date();
     const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
@@ -356,16 +450,18 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       if (date.startsWith(currentMonthPrefix)) totalUsedThisMonth += qty;
     }
 
+    const stockDataProducts = products.filter(p => (p.stock_data_points || 0) > 0);
+
     const summary = {
       total_materials:            products.length,
-      total_stock_qty:            products.reduce((s, p) => s + p.current_stock, 0),
-      low_stock_count:            products.filter(p => p.current_stock > 0 && p.maintaining_qty > 0 && p.current_stock <= p.maintaining_qty).length,
-      out_of_stock_count:         products.filter(p => p.current_stock <= 0).length,
+      total_stock_qty:            stockDataProducts.reduce((s, p) => s + p.current_stock, 0),
+      low_stock_count:            stockDataProducts.filter(p => p.current_stock > 0 && p.maintaining_qty > 0 && p.current_stock <= p.maintaining_qty).length,
+      out_of_stock_count:         stockDataProducts.filter(p => p.current_stock <= 0).length,
       total_purchases_this_month: Math.round(totalPurchasesThisMonth),
       total_used_this_month:      Math.round(totalUsedThisMonth),
     };
 
-    // ── 5. Monthly trend ────────────────────────────────────────────────────
+    // ── 6. Monthly trend ────────────────────────────────────────────────────
     const monthlyMap = {};
     const allDates = new Set([...Object.keys(dateInMap), ...Object.keys(dateOutMap)]);
     for (const date of allDates) {
@@ -382,7 +478,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         return { month_label: label, stock_in: Math.round(v.stock_in), stock_out: Math.round(v.stock_out) };
       });
 
-    // ── 5b. Daily trend (for day-by-day charts + month/year filtering) ──────
+    // ── 6b. Daily trend (for day-by-day charts + month/year filtering) ──────
     const dailyTrend = Array.from(allDates)
       .sort((a, b) => a.localeCompare(b))
       .map((date) => ({
@@ -391,7 +487,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
         stock_out: Math.round(dateOutMap[date] || 0),
       }));
 
-    // ── 6. Category breakdown ───────────────────────────────────────────────
+    // ── 7. Category breakdown ───────────────────────────────────────────────
     const categoryMap = {};
     for (const p of products) {
       const n = p.name.toLowerCase();
@@ -417,7 +513,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       }))
       .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
-    // ── 7. Ink consumption breakdown ────────────────────────────────────────
+    // ── 8. Ink consumption breakdown ────────────────────────────────────────
     const inkMap = {};
     for (const [productKey, totalOut] of Object.entries(productOutMap)) {
       if (totalOut <= 0) continue;
@@ -438,7 +534,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       .map(([ink_type, total_used]) => ({ ink_type, total_used: Math.round(total_used) }))
       .sort((a, b) => b.total_used - a.total_used);
 
-    // ── 8. Low-stock alert list ─────────────────────────────────────────────
+    // ── 9. Low-stock alert list ─────────────────────────────────────────────
     const lowStockItems = products
       .filter(p => p.maintaining_qty > 0 && p.current_stock <= p.maintaining_qty)
       .sort((a, b) => a.current_stock - b.current_stock)

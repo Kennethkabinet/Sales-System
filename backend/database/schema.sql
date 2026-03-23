@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS sheets (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     columns JSONB DEFAULT '["A", "B", "C", "D", "E"]',
+    grid_meta JSONB DEFAULT '{}',
     created_by INTEGER REFERENCES users(id),
     last_edited_by INTEGER REFERENCES users(id),
     department_id INTEGER REFERENCES departments(id),

@@ -22,18 +22,25 @@ const authenticate = async (req, res, next) => {
       
       // Get user from database
       const result = await pool.query(`
-        SELECT u.id, u.username, u.email, u.full_name, u.department_id,
+        SELECT u.id, u.username, u.email, u.full_name, u.department_id, u.is_active,
                r.name as role, d.name as department_name
         FROM users u
         LEFT JOIN roles r ON u.role_id = r.id
         LEFT JOIN departments d ON u.department_id = d.id
-        WHERE u.id = $1 AND u.is_active = TRUE
+        WHERE u.id = $1
       `, [decoded.userId]);
       
       if (result.rows.length === 0) {
         return res.status(401).json({
           success: false,
           error: { code: 'AUTH_INVALID', message: 'User not found or inactive' }
+        });
+      }
+
+      if (!result.rows[0].is_active) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'ACCOUNT_SUSPENDED', message: 'Account is suspended' }
         });
       }
       

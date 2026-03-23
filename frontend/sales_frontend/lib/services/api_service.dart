@@ -11,6 +11,10 @@ class ApiService {
   static String? _authToken;
   static const Duration timeout = AppConfig.apiTimeout;
 
+  /// Optional hook invoked when an authenticated request fails due to
+  /// revoked/invalid auth (e.g. account suspended).
+  static void Function(ApiException e)? onAuthError;
+
   static void setAuthToken(String? token) {
     _authToken = token;
   }
@@ -108,11 +112,37 @@ class ApiService {
       final errBlock = errMap != null && errMap['error'] is Map
           ? errMap['error'] as Map
           : null;
-      throw ApiException(
+
+      List<Map<String, dynamic>>? details;
+      final rawDetails = errBlock?['details'];
+      if (rawDetails is List) {
+        details = rawDetails
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      final ex = ApiException(
         code: (errBlock?['code'] as String?) ?? 'ERROR',
         message: (errBlock?['message'] as String?) ?? 'Request failed',
         statusCode: response.statusCode,
+        details: details,
       );
+
+      // If this request was authenticated, allow the app to react to
+      // suspension/expired tokens by clearing local session state.
+      if (_authToken != null &&
+          (ex.statusCode == 401 || ex.statusCode == 403) &&
+          (ex.code == 'ACCOUNT_SUSPENDED' ||
+              ex.code == 'AUTH_SUSPENDED' ||
+              ex.code == 'AUTH_INVALID')) {
+        try {
+          onAuthError?.call(ex);
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      throw ex;
     }
   }
 
@@ -559,12 +589,14 @@ class ApiService {
     int sheetId,
     String name,
     List<String> columns,
-    List<Map<String, dynamic>> rows,
-  ) async {
+    List<Map<String, dynamic>> rows, {
+    Map<String, dynamic>? gridMeta,
+  }) async {
     return await _put('${ApiEndpoints.sheets}/$sheetId', {
       'name': name,
       'columns': columns,
       'rows': rows,
+      if (gridMeta != null) 'grid_meta': gridMeta,
     });
   }
 
@@ -950,6 +982,13 @@ class ApiService {
     return await _delete('${ApiEndpoints.inventoryTransactions}/$id');
   }
 
+  /// Submit an edit request for an older transaction (before yesterday)
+  static Future<Map<String, dynamic>> submitInventoryTransactionEditRequest(
+      int id) async {
+    return await _post(
+        '${ApiEndpoints.inventoryTransactions}/$id/edit-request', {});
+  }
+
   /// Inventory audit log (admin only)
   static Future<Map<String, dynamic>> getInventoryAudit(
       {int page = 1, int limit = 100}) async {
@@ -1255,9 +1294,13 @@ class ApiException implements Exception {
   final String code;
   final String message;
   final int statusCode;
+  final List<Map<String, dynamic>>? details;
 
   ApiException(
-      {required this.code, required this.message, required this.statusCode});
+      {required this.code,
+      required this.message,
+      required this.statusCode,
+      this.details});
 
   @override
   String toString() => message;

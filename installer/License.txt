@@ -1,0 +1,41 @@
+SGCO — License Agreement (EULA)
+Version: 1.0
+Publisher: KO
+
+IMPORTANT: PLEASE READ CAREFULLY
+
+This End User License Agreement ("Agreement") is a legal agreement between you (either an individual or a single entity) and KO ("Publisher") for the software product identified above, including any associated media, printed materials, and electronic documentation (the "Software").
+
+BY INSTALLING, COPYING, OR USING THE SOFTWARE, YOU AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT INSTALL OR USE THE SOFTWARE.
+
+1) LICENSE GRANT
+Publisher grants you a non-exclusive, non-transferable, revocable license to install and use one copy of the Software on devices you own or control, solely for your internal business use.
+
+2) RESTRICTIONS
+You may not:
+- Reverse engineer, decompile, or disassemble the Software, except to the extent permitted by applicable law.
+- Rent, lease, lend, sell, sublicense, assign, or otherwise transfer the Software to any third party.
+- Remove, alter, or obscure any proprietary notices.
+
+3) OWNERSHIP
+The Software is licensed, not sold. Publisher retains all right, title, and interest in and to the Software, including all intellectual property rights.
+
+4) UPDATES
+Publisher may provide updates or upgrades to the Software. This Agreement will apply to such updates unless accompanied by separate terms.
+
+5) TERMINATION
+This Agreement is effective until terminated. It will terminate automatically if you fail to comply with any term. Upon termination, you must stop using and uninstall all copies of the Software.
+
+6) DISCLAIMER OF WARRANTIES
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, PUBLISHER DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+7) LIMITATION OF LIABILITY
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL PUBLISHER BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS, DATA, OR BUSINESS INTERRUPTION, ARISING OUT OF OR RELATED TO THE SOFTWARE OR THIS AGREEMENT, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+8) GOVERNING LAW
+This Agreement will be governed by the laws applicable in your jurisdiction, without regard to conflict of law principles.
+
+9) ENTIRE AGREEMENT
+This Agreement constitutes the entire agreement between you and Publisher regarding the Software and supersedes any prior agreements.
+
+If you have questions about this Agreement, contact the Publisher (KO).

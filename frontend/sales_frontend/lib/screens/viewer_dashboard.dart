@@ -21,6 +21,10 @@ class ViewerDashboard extends StatefulWidget {
 class _ViewerDashboardState extends State<ViewerDashboard> {
   int _selectedIndex = 0; // 0 = Sheets, 1 = Settings
 
+  final FocusNode _shortcutsFocus = FocusNode(
+    debugLabel: 'ViewerDashboardShortcutsFocus',
+  );
+
   final TextEditingController _headerSearchCtrl = TextEditingController();
   final FocusNode _headerSearchFocus = FocusNode();
 
@@ -61,6 +65,7 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
 
   @override
   void dispose() {
+    _shortcutsFocus.dispose();
     _headerSearchCtrl.dispose();
     _headerSearchFocus.dispose();
     super.dispose();
@@ -195,6 +200,10 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
   void _handleSearchSelected(_HeaderSearchItem item) {
     _headerSearchCtrl.clear();
     FocusManager.instance.primaryFocus?.unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _shortcutsFocus.requestFocus();
+    });
 
     if (item.kind == _HeaderSearchKind.settings) {
       setState(() => _selectedIndex = 1);
@@ -398,8 +407,15 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyK, control: true):
             _focusHeaderSearch,
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
+            _focusHeaderSearch,
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _focusHeaderSearch,
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            _focusHeaderSearch,
       },
       child: Focus(
+        focusNode: _shortcutsFocus,
         autofocus: true,
         child: Scaffold(
           backgroundColor: pageBg,
@@ -632,9 +648,6 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                                           fontSize: 11, color: textMuted)),
                                 ],
                               ),
-                              const SizedBox(width: 8),
-                              Icon(Icons.keyboard_arrow_down,
-                                  size: 18, color: textMuted),
                             ],
                           ),
                         ],

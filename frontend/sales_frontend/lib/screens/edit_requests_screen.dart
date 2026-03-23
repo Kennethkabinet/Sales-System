@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../config/constants.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
+import '../widgets/app_modal.dart';
 
 // cspell:ignore Colour collab
 
@@ -27,6 +28,9 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
   int _itemsPerPage = 20;
   final List<int> _itemsPerPageOptions = [10, 20, 50];
 
+  final ScrollController _hScroll = ScrollController();
+  final ScrollController _vScroll = ScrollController();
+
   static const List<String> _statusOptions = [
     'All',
     'pending',
@@ -46,6 +50,13 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _hScroll.dispose();
+    _vScroll.dispose();
+    super.dispose();
   }
 
   // ─────────────────────────────────────────────────────────
@@ -95,18 +106,20 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
         rejectReason: approved ? null : 'Rejected by admin',
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(approved ? 'Request approved.' : 'Request rejected.'),
-          backgroundColor: approved ? Colors.green : Colors.red,
-        ));
+        await AppModal.showText(
+          context,
+          title: approved ? 'Request approved' : 'Request rejected',
+          message: approved ? 'Request approved.' : 'Request rejected.',
+        );
         _load();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed: $e'),
-          backgroundColor: Colors.red,
-        ));
+        await AppModal.showText(
+          context,
+          title: 'Action failed',
+          message: 'Failed: $e',
+        );
       }
     }
   }
@@ -135,18 +148,20 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
     try {
       await ApiService.deleteEditRequest(id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Request deleted.'),
-          backgroundColor: Colors.grey,
-        ));
+        await AppModal.showText(
+          context,
+          title: 'Request deleted',
+          message: 'Request deleted.',
+        );
         _load();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to delete: $e'),
-          backgroundColor: Colors.red,
-        ));
+        await AppModal.showText(
+          context,
+          title: 'Delete failed',
+          message: 'Failed to delete: $e',
+        );
       }
     }
   }
@@ -325,37 +340,154 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(_surfaceAltColor),
-            headingRowHeight: 52,
-            dataRowMinHeight: 62,
-            dataRowMaxHeight: 70,
-            dividerThickness: 1.0,
-            headingTextStyle: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: _textSecondary,
-              letterSpacing: 0.4,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Scrollbar(
+              controller: _hScroll,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                controller: _hScroll,
+                scrollDirection: Axis.horizontal,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: Scrollbar(
+                    controller: _vScroll,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _vScroll,
+                      child: DataTable(
+                        headingRowColor:
+                            WidgetStateProperty.all(_surfaceAltColor),
+                        headingRowHeight: 44,
+                        dataRowMinHeight: 52,
+                        dataRowMaxHeight: 56,
+                        dividerThickness: 1.0,
+                        headingTextStyle: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: _textSecondary,
+                          letterSpacing: 0.4,
+                        ),
+                        dataTextStyle: TextStyle(
+                          fontSize: 13,
+                          color: _isDark
+                              ? const Color(0xFFE5E7EB)
+                              : Colors.black87,
+                        ),
+                        columnSpacing: 18,
+                        horizontalMargin: 16,
+                        columns: const [
+                          DataColumn(
+                              label:
+                                  SizedBox(width: 180, child: Text('Sheet'))),
+                          DataColumn(
+                              label: SizedBox(
+                                  width: 90, child: Text('Requester'))),
+                          DataColumn(
+                              label: SizedBox(width: 70, child: Text('Cell'))),
+                          DataColumn(
+                              label:
+                                  SizedBox(width: 200, child: Text('Column'))),
+                          DataColumn(
+                              label: SizedBox(
+                                  width: 140, child: Text('Proposed Value'))),
+                          DataColumn(
+                              label: SizedBox(
+                                  width: 140, child: Text('Requested At'))),
+                          DataColumn(
+                              label:
+                                  SizedBox(width: 110, child: Text('Status'))),
+                          DataColumn(
+                              label: SizedBox(
+                                  width: 110, child: Text('Reviewed By'))),
+                          DataColumn(
+                              label:
+                                  SizedBox(width: 90, child: Text('Actions'))),
+                        ],
+                        rows: _paged.map(_buildRow).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _cellText(
+    String text, {
+    double? width,
+    TextStyle? style,
+    bool monospace = false,
+    String? tooltip,
+  }) {
+    final effectiveText = text.isEmpty ? '—' : text;
+    final effectiveStyle = monospace
+        ? (style ?? const TextStyle()).copyWith(fontFamily: 'monospace')
+        : style;
+
+    final child = Text(
+      effectiveText,
+      overflow: TextOverflow.ellipsis,
+      maxLines: 1,
+      style: effectiveStyle,
+    );
+
+    final wrapped = Tooltip(message: tooltip ?? effectiveText, child: child);
+    if (width == null) return wrapped;
+    return SizedBox(width: width, child: wrapped);
+  }
+
+  String _formatColumnName(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty || t == '—') return '—';
+
+    // Inventory date columns: DATE:YYYY-MM-DD:IN / DATE:YYYY-MM-DD:OUT
+    final m = RegExp(r'^DATE:(\d{4}-\d{2}-\d{2})(?::(IN|OUT))?$').firstMatch(t);
+    if (m != null) {
+      final date = m.group(1)!;
+      final side = (m.group(2) ?? '').toUpperCase();
+      if (side.isEmpty) return 'Date — $date';
+      return '$side — $date';
+    }
+
+    // General cleanups (keep minimal): collapse underscores, trim.
+    return t.replaceAll('_', ' ');
+  }
+
+  Widget _proposedValueCell(String raw) {
+    final v = raw.trim().isEmpty ? '—' : raw.trim();
+    final bg = _isDark
+        ? AppColors.primaryBlue.withValues(alpha: 0.18)
+        : AppColors.primaryBlue.withValues(alpha: 0.10);
+    final border = _isDark
+        ? AppColors.primaryBlue.withValues(alpha: 0.45)
+        : AppColors.primaryBlue.withValues(alpha: 0.25);
+    final textColor = _isDark ? const Color(0xFFE5E7EB) : _textPrimary;
+
+    return SizedBox(
+      width: 140,
+      child: Tooltip(
+        message: v,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: border),
+          ),
+          child: Text(
+            v,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 13,
+              color: textColor,
+              fontWeight: FontWeight.w700,
             ),
-            dataTextStyle: TextStyle(
-                fontSize: 13,
-                color: _isDark ? const Color(0xFFE5E7EB) : Colors.black87),
-            columnSpacing: 36,
-            horizontalMargin: 24,
-            columns: const [
-              DataColumn(label: Text('Sheet')),
-              DataColumn(label: Text('Requester')),
-              DataColumn(label: Text('Cell')),
-              DataColumn(label: Text('Column')),
-              DataColumn(label: Text('Proposed Value')),
-              DataColumn(label: Text('Requested At')),
-              DataColumn(label: Text('Status')),
-              DataColumn(label: Text('Reviewed By')),
-              DataColumn(label: Text('Actions')),
-            ],
-            rows: _paged.map(_buildRow).toList(),
           ),
         ),
       ),
@@ -383,71 +515,120 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
         ? requestedAt.substring(0, 16).replaceAll('T', ' ')
         : requestedAt;
 
+    final rawColumn = (req['column_name'] as String? ?? '—');
+    final columnDisplay = _formatColumnName(rawColumn);
+
+    final rawProposed = (req['proposed_value'] as String? ?? '—');
+
     return DataRow(cells: [
       // Sheet name
-      DataCell(Text(req['sheet_name'] as String? ?? '—',
-          style: const TextStyle(fontWeight: FontWeight.w500))),
-      // Requester
-      DataCell(Text(req['requester_username'] as String? ?? '—')),
-      // Cell ref
-      DataCell(Text(req['cell_reference'] as String? ?? '—',
-          style: const TextStyle(fontFamily: 'monospace'))),
-      // Column name
-      DataCell(SizedBox(
-        width: 120,
-        child: Text(req['column_name'] as String? ?? '—',
-            overflow: TextOverflow.ellipsis),
-      )),
-      // Proposed value
-      DataCell(SizedBox(
-        width: 100,
-        child: Text(req['proposed_value'] as String? ?? '—',
-            overflow: TextOverflow.ellipsis),
-      )),
-      // Requested at
-      DataCell(Text(displayDate,
-          style: TextStyle(fontSize: 11, color: _textSecondary))),
-      // Status badge
-      DataCell(Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: statusColor.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+      DataCell(
+        _cellText(
+          (req['sheet_name'] as String? ?? '—').trim(),
+          width: 180,
+          style: const TextStyle(fontWeight: FontWeight.w500),
         ),
-        child: Text(_capitalize(status),
-            style: TextStyle(
-                color: statusColor, fontSize: 11, fontWeight: FontWeight.w600)),
+      ),
+      // Requester
+      DataCell(
+        _cellText(
+          (req['requester_username'] as String? ?? '—').trim(),
+          width: 90,
+        ),
+      ),
+      // Cell ref
+      DataCell(
+        _cellText(
+          (req['cell_reference'] as String? ?? '—').trim(),
+          width: 70,
+          monospace: true,
+        ),
+      ),
+      // Column name
+      DataCell(
+        _cellText(
+          columnDisplay,
+          width: 200,
+          tooltip: rawColumn.trim().isEmpty ? '—' : rawColumn.trim(),
+        ),
+      ),
+      // Proposed value
+      DataCell(_proposedValueCell(rawProposed)),
+      // Requested at
+      DataCell(
+        _cellText(
+          displayDate,
+          width: 140,
+          style: TextStyle(fontSize: 11, color: _textSecondary),
+        ),
+      ),
+      // Status badge
+      DataCell(SizedBox(
+        width: 110,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+            ),
+            child: Text(
+              _capitalize(status),
+              style: TextStyle(
+                color: statusColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
       )),
       // Reviewed by
-      DataCell(Text(req['reviewer_username'] as String? ?? '—',
-          style: TextStyle(fontSize: 11, color: _textSecondary))),
+      DataCell(
+        _cellText(
+          (req['reviewer_username'] as String? ?? '—').trim(),
+          width: 110,
+          style: TextStyle(fontSize: 11, color: _textSecondary),
+        ),
+      ),
       // Action buttons (only for pending)
-      DataCell(isPending
-          ? Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(
-                icon: const Icon(Icons.check_circle,
-                    color: Colors.green, size: 20),
-                tooltip: 'Approve',
-                onPressed: () => _resolve(req, true),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      DataCell(SizedBox(
+        width: 90,
+        child: isPending
+            ? Row(mainAxisSize: MainAxisSize.min, children: [
+                IconButton(
+                  icon: const Icon(Icons.check_circle,
+                      color: Colors.green, size: 20),
+                  tooltip: 'Approve',
+                  onPressed: () => _resolve(req, true),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 30, minHeight: 30),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.cancel, color: Colors.red, size: 20),
+                  tooltip: 'Reject',
+                  onPressed: () => _resolve(req, false),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 30, minHeight: 30),
+                ),
+              ])
+            : Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  icon: Icon(Icons.delete_outline,
+                      color: _textSecondary, size: 20),
+                  tooltip: 'Delete request',
+                  onPressed: () => _deleteRequest(req),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 30, minHeight: 30),
+                ),
               ),
-              IconButton(
-                icon: const Icon(Icons.cancel, color: Colors.red, size: 20),
-                tooltip: 'Reject',
-                onPressed: () => _resolve(req, false),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-              ),
-            ])
-          : IconButton(
-              icon: Icon(Icons.delete_outline, color: _textSecondary, size: 20),
-              tooltip: 'Delete request',
-              onPressed: () => _deleteRequest(req),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-            )),
+      )),
     ]);
   }
 

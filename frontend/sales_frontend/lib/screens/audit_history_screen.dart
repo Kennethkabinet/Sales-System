@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:excel/excel.dart' as xls;
+import 'dart:io';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
+import '../widgets/app_modal.dart';
 
 // ── HireGround-style color palette ──
 const Color _kBlue = Color(0xFF4285F4);
@@ -28,6 +35,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   DateTime? _endDate;
   final TextEditingController _searchCtrl = TextEditingController();
   int? _expandedIndex;
+  bool _isExporting = false;
 
   // Pagination
   int _currentPage = 1;
@@ -66,6 +74,395 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Export helpers
+  // ─────────────────────────────────────────────────────────
+
+  List<AuditLog> _filteredLogsForExport(List<AuditLog> allLogs) {
+    var filtered = allLogs;
+
+    if (_actionFilter != null) {
+      filtered = filtered
+          .where((l) => l.action.toUpperCase() == _actionFilter)
+          .toList();
+    }
+
+    if (_entityFilter != null) {
+      filtered = filtered
+          .where((l) => l.entityType.toUpperCase() == _entityFilter)
+          .toList();
+    }
+
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      filtered = filtered.where((l) {
+        return (l.userName?.toLowerCase().contains(q) ?? false) ||
+            l.action.toLowerCase().contains(q) ||
+            l.entityType.toLowerCase().contains(q) ||
+            (l.entityName?.toLowerCase().contains(q) ?? false) ||
+            (_getDescription(l).toLowerCase().contains(q)) ||
+            (l.ipAddress?.toLowerCase().contains(q) ?? false);
+      }).toList();
+    }
+
+    return filtered;
+  }
+
+  String _formatDateTime(DateTime? dt) {
+    if (dt == null) return '-';
+    return DateFormat('yyyy-MM-dd HH:mm').format(dt);
+  }
+
+  String _dateRangeLabel() {
+    if (_dateRangeFilter != 'Custom') return _dateRangeFilter;
+    final s =
+        _startDate != null ? DateFormat('yyyy-MM-dd').format(_startDate!) : '-';
+    final e =
+        _endDate != null ? DateFormat('yyyy-MM-dd').format(_endDate!) : '-';
+    return 'Custom ($s to $e)';
+  }
+
+  Future<void> _showExportMenu() async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final pos = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final rect = Rect.fromLTWH(pos.dx, pos.dy, box.size.width, box.size.height);
+
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(rect, Offset.zero & overlay.size),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      items: const [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf_rounded, size: 18),
+              SizedBox(width: 10),
+              Text('Export PDF Report'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart_rounded, size: 18),
+              SizedBox(width: 10),
+              Text('Export Excel (.xlsx)'),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (choice == null) return;
+    if (choice == 'pdf') {
+      await _exportPdf();
+    } else if (choice == 'excel') {
+      await _exportExcel();
+    }
+  }
+
+  Future<void> _exportPdf() async {
+    if (_isExporting) return;
+
+    setState(() => _isExporting = true);
+    try {
+      final data = context.read<DataProvider>();
+      final logs = _filteredLogsForExport(data.auditLogs);
+
+      if (logs.isEmpty) {
+        await AppModal.showText(
+          context,
+          title: 'Nothing to export',
+          message: 'No logs to export.',
+        );
+        return;
+      }
+
+      final timestamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Audit Log PDF',
+        fileName: 'audit_log_report_$timestamp.pdf',
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+      );
+      if (savePath == null) return;
+
+      final doc = pw.Document();
+
+      PdfColor pdfColor(Color c) => PdfColor.fromInt(c.toARGB32() & 0x00FFFFFF);
+      final brandBlue = pdfColor(_kBlue);
+      final border = PdfColor.fromInt(0xE5E7EB);
+
+      final headerStyle = pw.TextStyle(
+        fontSize: 18,
+        fontWeight: pw.FontWeight.bold,
+        color: brandBlue,
+      );
+      final labelStyle = pw.TextStyle(
+        fontSize: 10,
+        color: PdfColors.grey700,
+      );
+      final valueStyle = pw.TextStyle(
+        fontSize: 10,
+        color: PdfColors.black,
+      );
+
+      final reportTitle = 'Audit Log Report';
+
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          margin: const pw.EdgeInsets.all(24),
+          footer: (context) => pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text(
+              'Page ${context.pageNumber} of ${context.pagesCount}',
+              style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+            ),
+          ),
+          build: (context) {
+            final subtitle =
+                'Generated: ${_formatDateTime(DateTime.now())}   •   Total: ${logs.length}';
+            final filters = <List<String>>[
+              ['Action', _actionFilter ?? 'All'],
+              ['Entity', _entityFilter ?? 'All'],
+              ['Date Range', _dateRangeLabel()],
+              [
+                'Search',
+                _searchCtrl.text.trim().isEmpty ? '-' : _searchCtrl.text.trim()
+              ],
+            ];
+
+            final tableHeaders = [
+              'Date/Time',
+              'User',
+              'Action',
+              'Entity',
+              'Entity Name',
+              'Description',
+              'IP',
+            ];
+
+            String ellipsize(String s, int max) {
+              if (s.length <= max) return s;
+              return '${s.substring(0, max - 1)}…';
+            }
+
+            final tableData = logs.map((l) {
+              return [
+                _formatDateTime(l.timestamp),
+                (l.userName ?? '-'),
+                l.action.toUpperCase(),
+                l.entityType.toUpperCase(),
+                (l.entityName ?? '-'),
+                ellipsize(_getDescription(l), 90),
+                (l.ipAddress ?? '-'),
+              ];
+            }).toList();
+
+            return [
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(reportTitle, style: headerStyle),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        subtitle,
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.grey700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  pw.Container(
+                    padding: const pw.EdgeInsets.all(10),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: border, width: 1),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: filters
+                          .map(
+                            (f) => pw.Padding(
+                              padding: const pw.EdgeInsets.only(bottom: 2),
+                              child: pw.Row(
+                                mainAxisSize: pw.MainAxisSize.min,
+                                children: [
+                                  pw.SizedBox(
+                                    width: 72,
+                                    child: pw.Text(
+                                      '${f[0]}:',
+                                      style: labelStyle,
+                                    ),
+                                  ),
+                                  pw.Text(f[1], style: valueStyle),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 14),
+              pw.TableHelper.fromTextArray(
+                headers: tableHeaders,
+                data: tableData,
+                headerDecoration: pw.BoxDecoration(
+                  color: PdfColors.grey200,
+                  border: pw.Border.all(color: border, width: 1),
+                ),
+                cellStyle: const pw.TextStyle(fontSize: 8),
+                headerStyle: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.black,
+                ),
+                cellAlignment: pw.Alignment.centerLeft,
+                headerAlignment: pw.Alignment.centerLeft,
+                border: pw.TableBorder.all(color: border, width: 0.5),
+                columnWidths: {
+                  0: const pw.FlexColumnWidth(1.4),
+                  1: const pw.FlexColumnWidth(1.0),
+                  2: const pw.FlexColumnWidth(0.7),
+                  3: const pw.FlexColumnWidth(0.9),
+                  4: const pw.FlexColumnWidth(1.1),
+                  5: const pw.FlexColumnWidth(2.7),
+                  6: const pw.FlexColumnWidth(1.0),
+                },
+              ),
+            ];
+          },
+        ),
+      );
+
+      final bytes = await doc.save();
+      await File(savePath).writeAsBytes(bytes);
+
+      if (!mounted) return;
+      await AppModal.showText(
+        context,
+        title: 'Export complete',
+        message: 'Saved PDF: $savePath',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await AppModal.showText(
+        context,
+        title: 'Export failed',
+        message: 'Export failed: $e',
+      );
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
+  }
+
+  Future<void> _exportExcel() async {
+    if (_isExporting) return;
+
+    setState(() => _isExporting = true);
+    try {
+      final data = context.read<DataProvider>();
+      final logs = _filteredLogsForExport(data.auditLogs);
+
+      if (logs.isEmpty) {
+        await AppModal.showText(
+          context,
+          title: 'Nothing to export',
+          message: 'No logs to export.',
+        );
+        return;
+      }
+
+      final timestamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Audit Log Excel',
+        fileName: 'audit_log_report_$timestamp.xlsx',
+        type: FileType.custom,
+        allowedExtensions: const ['xlsx'],
+      );
+      if (savePath == null) return;
+
+      final book = xls.Excel.createExcel();
+      final sheet = book['Audit Logs'];
+
+      // Header row
+      final headers = [
+        'Date/Time',
+        'User',
+        'Action',
+        'Entity',
+        'Entity Name',
+        'Description',
+        'IP',
+      ];
+      sheet.appendRow(headers.map((h) => xls.TextCellValue(h)).toList());
+
+      // Bold headers
+      final headerStyle = xls.CellStyle(
+        bold: true,
+        backgroundColorHex: xls.ExcelColor.fromHexString('FFE5E7EB'),
+      );
+      for (var c = 0; c < headers.length; c++) {
+        final cell = sheet.cell(
+          xls.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: 0),
+        );
+        cell.cellStyle = headerStyle;
+      }
+
+      for (final l in logs) {
+        sheet.appendRow([
+          xls.TextCellValue(_formatDateTime(l.timestamp)),
+          xls.TextCellValue(l.userName ?? '-'),
+          xls.TextCellValue(l.action.toUpperCase()),
+          xls.TextCellValue(l.entityType.toUpperCase()),
+          xls.TextCellValue(l.entityName ?? '-'),
+          xls.TextCellValue(_getDescription(l)),
+          xls.TextCellValue(l.ipAddress ?? '-'),
+        ]);
+      }
+
+      // Remove the default "Sheet1" if present and unused
+      if (book.sheets.keys.contains('Sheet1') && book.sheets.keys.length > 1) {
+        book.delete('Sheet1');
+      }
+
+      final bytes = book.encode();
+      if (bytes == null) {
+        throw Exception('Failed to generate Excel bytes');
+      }
+      await File(savePath).writeAsBytes(bytes, flush: true);
+
+      if (!mounted) return;
+      await AppModal.showText(
+        context,
+        title: 'Export complete',
+        message: 'Saved Excel: $savePath',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await AppModal.showText(
+        context,
+        title: 'Export failed',
+        message: 'Export failed: $e',
+      );
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
   }
 
   // ── Action badge colors ──
@@ -400,18 +797,9 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
 
           // Export button
           ElevatedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Export functionality coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              );
-            },
+            onPressed: _isExporting ? null : _showExportMenu,
             icon: const Icon(Icons.download_rounded, size: 18),
-            label: const Text('Export'),
+            label: Text(_isExporting ? 'Exporting...' : 'Export'),
             style: ElevatedButton.styleFrom(
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,

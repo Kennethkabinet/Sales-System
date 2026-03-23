@@ -560,6 +560,8 @@ class DataProvider extends ChangeNotifier {
 
   Future<void> loadInventoryDashboard({List<int>? sheetIds}) async {
     _isLoading = true;
+    // Avoid showing stale totals when changing filters/sheets.
+    _inventoryDashboardData = null;
     notifyListeners();
 
     try {
@@ -567,6 +569,8 @@ class DataProvider extends ChangeNotifier {
           await ApiService.getInventoryOverview(sheetIds: sheetIds);
     } catch (e) {
       _error = e.toString();
+      // Keep UI consistent: if load fails, don't keep old dashboard values.
+      _inventoryDashboardData = null;
     } finally {
       _isLoading = false;
       notifyListeners();

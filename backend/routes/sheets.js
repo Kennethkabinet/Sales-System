@@ -9,9 +9,109 @@ const {
   requireRole 
 } = require('../middleware/rbac');
 const auditService = require('../services/auditService');
-const XLSX = require('xlsx');
 const ExcelJS = require('exceljs');
 const bcrypt = require('bcrypt');
+const path = require('path');
+
+const toCsv = (rows) => {
+  const escapeCell = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (/[\r\n",]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  return rows.map((r) => (r || []).map(escapeCell).join(',')).join('\r\n') + '\r\n';
+};
+
+const parseCsv = (text) => {
+  const rows = [];
+  let row = [];
+  let cur = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = i + 1 < text.length ? text[i + 1] : '';
+
+    if (inQuotes) {
+      if (ch === '"' && next === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (ch === ',') {
+      row.push(cur);
+      cur = '';
+      continue;
+    }
+    if (ch === '\r') {
+      if (next === '\n') i++;
+      row.push(cur);
+      rows.push(row);
+      row = [];
+      cur = '';
+      continue;
+    }
+    if (ch === '\n') {
+      row.push(cur);
+      rows.push(row);
+      row = [];
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+
+  row.push(cur);
+  rows.push(row);
+  return rows.filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
+};
+
+const worksheetToAoa = (worksheet, { defval = '' } = {}) => {
+  if (!worksheet) return [];
+  const maxCols = Math.max(
+    worksheet.columnCount || 0,
+    worksheet.getRow(1)?.cellCount || 0
+  );
+  const rows = [];
+  worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    const rowArr = [];
+    for (let c = 1; c <= maxCols; c++) {
+      const cell = row.getCell(c);
+      const value = cell?.value;
+
+      if (value === null || value === undefined) {
+        rowArr.push(defval);
+        continue;
+      }
+      if (typeof value === 'object') {
+        if (value.richText) {
+          rowArr.push(value.richText.map((t) => t.text).join(''));
+        } else if (value.formula !== undefined) {
+          rowArr.push(value.result ?? defval);
+        } else if (value.text !== undefined) {
+          rowArr.push(value.text);
+        } else {
+          rowArr.push(cell.text ?? String(value));
+        }
+      } else {
+        rowArr.push(value);
+      }
+    }
+    rows[rowNumber - 1] = rowArr;
+  });
+  return rows;
+};
 
 // Multer memory storage for sheet file imports
 const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -21,6 +121,11 @@ pool.query(`
   ALTER TABLE sheets ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
   ALTER TABLE folders ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
 `).catch(err => console.error('[Migration] password_hash columns:', err.message));
+
+// Self-healing migration: grid metadata (cell formatting, merged cells, borders, etc.)
+pool.query(`
+  ALTER TABLE sheets ADD COLUMN IF NOT EXISTS grid_meta JSONB DEFAULT '{}'::jsonb;
+`).catch(err => console.error('[Migration] grid_meta column:', err.message));
 
 // Self-healing migration: active users heartbeat table for per-sheet presence polling
 pool.query(`
@@ -281,11 +386,27 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
     const originalName = req.file.originalname || 'Imported Sheet';
     const sheetName = req.body.name || originalName.replace(/\.(xlsx?|csv)$/i, '');
 
-    // Parse with XLSX (supports xlsx, xls, csv)
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const firstSheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[firstSheetName];
-    const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    const ext = path.extname(originalName).toLowerCase();
+    let rawData;
+    if (ext === '.csv') {
+      const text = req.file.buffer.toString('utf8');
+      rawData = parseCsv(text);
+    } else if (ext === '.xlsx') {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(req.file.buffer);
+      const ws = wb.worksheets[0];
+      rawData = worksheetToAoa(ws, { defval: '' });
+    } else if (ext === '.xls') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNSUPPORTED_FORMAT', message: 'Legacy .xls is not supported. Please save as .xlsx or .csv.' }
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'UNSUPPORTED_FORMAT', message: 'Unsupported file type. Please upload a .xlsx or .csv file.' }
+      });
+    }
 
     if (!rawData || rawData.length === 0) {
       return res.status(400).json({ success: false, error: { code: 'EMPTY_FILE', message: 'The file appears to be empty' } });
@@ -838,7 +959,7 @@ router.get('/:id', authenticate, requireSheetAccess, async (req, res) => {
     const sheetResult = await pool.query(`
       SELECT s.id, s.name, s.columns, s.created_by, u.username as created_by_name,
              s.created_at, s.updated_at, s.last_edited_by, le.username as last_edited_by_name,
-             s.shown_to_viewers, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
+             s.shown_to_viewers, s.grid_meta, sl.locked_by, lu.username as locked_by_name, sl.locked_at,
              ses.user_id as editing_user_id, seu.username as editing_user_name
       FROM sheets s
       LEFT JOIN users u ON s.created_by = u.id
@@ -924,7 +1045,7 @@ router.post('/', authenticate, requireSheetEditAccess, async (req, res) => {
 router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, columns, rows } = req.body;
+    const { name, columns, rows, grid_meta } = req.body;
 
     // Check if sheet is locked by another user
     const lockCheck = await pool.query(`
@@ -967,10 +1088,16 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
     const oldData = oldDataResult.rows;
 
     // Update sheet metadata with last editor
+    const gridMetaJson = grid_meta === undefined ? null : JSON.stringify(grid_meta ?? {});
     await pool.query(`
-      UPDATE sheets SET name = $1, columns = $2, last_edited_by = $3, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $4
-    `, [name, JSON.stringify(columns), req.user.id, id]);
+      UPDATE sheets
+      SET name = $1,
+          columns = $2,
+          grid_meta = COALESCE($3::jsonb, grid_meta),
+          last_edited_by = $4,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $5
+    `, [name, JSON.stringify(columns), gridMetaJson, req.user.id, id]);
 
     // Track column renames
     const oldColumns = oldSheet.columns;
@@ -1398,11 +1525,11 @@ router.get('/:id/export', authenticate, async (req, res) => {
 
     // CSV export stays simple.
     if (normalizeFormat === 'csv') {
-      const wb = XLSX.utils.book_new();
-
       // ── Detect Inventory Tracker (has DATE:YYYY-MM-DD:IN columns) ──
       const invDateRegex = /^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/;
       const isInventoryTracker = columns.some(col => invDateRegex.test(col));
+
+      let wsData;
 
       if (isInventoryTracker) {
         const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
@@ -1429,7 +1556,7 @@ router.get('/:id/export', authenticate, async (req, res) => {
           ...frozenRight.map(() => ''),
         ];
 
-        const wsData = [headerRow1, headerRow2];
+        wsData = [headerRow1, headerRow2];
         rows.forEach(row => {
           const rowArr = [
             ...frozenLeft.map(col => row[col] || ''),
@@ -1438,21 +1565,17 @@ router.get('/:id/export', authenticate, async (req, res) => {
           ];
           wsData.push(rowArr);
         });
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
       } else {
-        const wsData = [];
+        wsData = [];
         wsData.push(columns);
         rows.forEach(row => {
           const rowArray = columns.map(col => row[col] || '');
           wsData.push(rowArray);
         });
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, sheet.name.substring(0, 31));
       }
 
-      const fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'csv' });
+      const csvText = toCsv(wsData);
+      const fileBuffer = Buffer.from(csvText, 'utf8');
       const fileName = `${sheet.name.replace(/[^a-zA-Z0-9]/g, '_')}.csv`;
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

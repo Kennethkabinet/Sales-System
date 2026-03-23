@@ -12,6 +12,7 @@ import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../models/collaboration.dart';
 import '../config/constants.dart';
+import '../widgets/app_modal.dart';
 import 'inventory_template_seed.dart';
 
 /// Sheet model for spreadsheet data
@@ -20,6 +21,7 @@ class SheetModel {
   final String name;
   final List<String> columns;
   final List<Map<String, dynamic>> rows;
+  final Map<String, dynamic> gridMeta;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final bool shownToViewers;
@@ -35,6 +37,7 @@ class SheetModel {
     required this.name,
     this.columns = const [],
     this.rows = const [],
+    this.gridMeta = const <String, dynamic>{},
     this.createdAt,
     this.updatedAt,
     this.shownToViewers = false,
@@ -56,6 +59,9 @@ class SheetModel {
           ? List<Map<String, dynamic>>.from(
               (json['rows'] as List).map((r) => Map<String, dynamic>.from(r)))
           : [],
+      gridMeta: json['grid_meta'] is Map
+          ? Map<String, dynamic>.from(json['grid_meta'] as Map)
+          : const <String, dynamic>{},
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : null,
@@ -217,6 +223,19 @@ enum _InventorySortMode {
   nameAsc,
   codeAsc,
   lowStockFirst,
+  discrepancyFirst,
+}
+
+class _InventoryNoteSummary {
+  final int discrepancyCount;
+  final int commentCount;
+
+  const _InventoryNoteSummary({
+    required this.discrepancyCount,
+    required this.commentCount,
+  });
+
+  bool get hasAny => discrepancyCount > 0 || commentCount > 0;
 }
 
 class _SheetScreenState extends State<SheetScreen> {
@@ -288,6 +307,11 @@ class _SheetScreenState extends State<SheetScreen> {
   int? _hoveredFolderId;
   int? _hoveredRecentSheetId;
 
+  // Inventory Tracker note badges (Work Sheets landing + explorer)
+  // Shows discrepancy notes (orange) or comment notes (blue).
+  final Map<int, _InventoryNoteSummary> _inventoryNoteSummaryBySheetId = {};
+  final Set<int> _inventoryNoteSummaryLoadingSheetIds = {};
+
   // Column widths for resizable columns
   final Map<int, double> _columnWidths = {};
   static const double _defaultCellWidth = 120.0;
@@ -346,6 +370,8 @@ class _SheetScreenState extends State<SheetScreen> {
         return 'Code A–Z';
       case _InventorySortMode.lowStockFirst:
         return 'Low Stock';
+      case _InventorySortMode.discrepancyFirst:
+        return 'Discrepancy';
     }
   }
 
@@ -391,6 +417,243 @@ class _SheetScreenState extends State<SheetScreen> {
     28,
     32
   ];
+
+  void _clearGridMetaState() {
+    _cellFormats.clear();
+    _cellFontSizes.clear();
+    _cellAlignments.clear();
+    _cellTextColors.clear();
+    _cellBackgroundColors.clear();
+    _cellBorders.clear();
+    _mergedCellRanges.clear();
+  }
+
+  static String _normGridMetaKey(String k) {
+    return k.replaceAll('_', '').toLowerCase();
+  }
+
+  static Map<String, dynamic>? _readMetaMap(
+      Map<String, dynamic> meta, String key) {
+    final target = _normGridMetaKey(key);
+    for (final entry in meta.entries) {
+      if (_normGridMetaKey(entry.key) == target && entry.value is Map) {
+        return Map<String, dynamic>.from(entry.value as Map);
+      }
+    }
+    return null;
+  }
+
+  static List<dynamic>? _readMetaList(Map<String, dynamic> meta, String key) {
+    final target = _normGridMetaKey(key);
+    for (final entry in meta.entries) {
+      if (_normGridMetaKey(entry.key) == target && entry.value is List) {
+        return List<dynamic>.from(entry.value as List);
+      }
+    }
+    return null;
+  }
+
+  static TextAlign? _decodeTextAlign(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString().toLowerCase().trim();
+    if (s == 'left') return TextAlign.left;
+    if (s == 'center') return TextAlign.center;
+    if (s == 'right') return TextAlign.right;
+    return null;
+  }
+
+  static String _encodeTextAlign(TextAlign a) {
+    switch (a) {
+      case TextAlign.left:
+        return 'left';
+      case TextAlign.center:
+        return 'center';
+      case TextAlign.right:
+        return 'right';
+      default:
+        return 'left';
+    }
+  }
+
+  static Color? _decodeColor(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return Color(v);
+    if (v is num) return Color(v.toInt());
+    final s = v.toString().trim();
+    final hex = s.startsWith('0x') ? s.substring(2) : s;
+    final parsed = int.tryParse(hex, radix: 16);
+    if (parsed == null) return null;
+    return Color(parsed);
+  }
+
+  static int _encodeColor(Color c) => c.value;
+
+  void _applyGridMetaFromSheet(SheetModel sheet, {Map<int, int>? colIndexMap}) {
+    _clearGridMetaState();
+    final meta = sheet.gridMeta;
+    if (meta.isEmpty) return;
+
+    String? remapCellKey(String key) {
+      if (colIndexMap == null) return key;
+      final parts = key.split(',');
+      if (parts.length != 2) return null;
+      final r = int.tryParse(parts[0]);
+      final c = int.tryParse(parts[1]);
+      if (r == null || c == null) return null;
+      final mapped = colIndexMap[c];
+      if (mapped == null) return null;
+      return '$r,$mapped';
+    }
+
+    String? remapRangeKey(String rangeKey) {
+      if (colIndexMap == null) return rangeKey;
+      final parts = rangeKey.split(':');
+      if (parts.length != 2) return null;
+      final start = parts[0].split(',');
+      final end = parts[1].split(',');
+      if (start.length != 2 || end.length != 2) return null;
+      final minRow = int.tryParse(start[0]);
+      final minCol = int.tryParse(start[1]);
+      final maxRow = int.tryParse(end[0]);
+      final maxCol = int.tryParse(end[1]);
+      if (minRow == null ||
+          minCol == null ||
+          maxRow == null ||
+          maxCol == null) {
+        return null;
+      }
+      final mappedMin = colIndexMap[minCol];
+      final mappedMax = colIndexMap[maxCol];
+      if (mappedMin == null || mappedMax == null) return null;
+      final newMinCol = mappedMin < mappedMax ? mappedMin : mappedMax;
+      final newMaxCol = mappedMin < mappedMax ? mappedMax : mappedMin;
+      return '$minRow,$newMinCol:$maxRow,$newMaxCol';
+    }
+
+    try {
+      final fmts = _readMetaMap(meta, 'cellFormats');
+      if (fmts != null) {
+        for (final e in fmts.entries) {
+          if (e.value is List) {
+            final k = remapCellKey(e.key);
+            if (k == null) continue;
+            final list = (e.value as List)
+                .map((v) => v.toString().trim())
+                .where((v) => v.isNotEmpty)
+                .toList();
+            if (list.isNotEmpty) {
+              _cellFormats[k] = Set<String>.from(list);
+            }
+          }
+        }
+      }
+
+      final fontSizes = _readMetaMap(meta, 'cellFontSizes');
+      if (fontSizes != null) {
+        for (final e in fontSizes.entries) {
+          final k = remapCellKey(e.key);
+          if (k == null) continue;
+          final n = (e.value is num)
+              ? (e.value as num).toDouble()
+              : double.tryParse(e.value.toString());
+          if (n != null) _cellFontSizes[k] = n;
+        }
+      }
+
+      final aligns = _readMetaMap(meta, 'cellAlignments');
+      if (aligns != null) {
+        for (final e in aligns.entries) {
+          final k = remapCellKey(e.key);
+          if (k == null) continue;
+          final a = _decodeTextAlign(e.value);
+          if (a != null) _cellAlignments[k] = a;
+        }
+      }
+
+      final textColors = _readMetaMap(meta, 'cellTextColors');
+      if (textColors != null) {
+        for (final e in textColors.entries) {
+          final k = remapCellKey(e.key);
+          if (k == null) continue;
+          final c = _decodeColor(e.value);
+          if (c != null) _cellTextColors[k] = c;
+        }
+      }
+
+      final bgColors = _readMetaMap(meta, 'cellBackgroundColors');
+      if (bgColors != null) {
+        for (final e in bgColors.entries) {
+          final k = remapCellKey(e.key);
+          if (k == null) continue;
+          final c = _decodeColor(e.value);
+          if (c != null) _cellBackgroundColors[k] = c;
+        }
+      }
+
+      final borders = _readMetaMap(meta, 'cellBorders');
+      if (borders != null) {
+        for (final e in borders.entries) {
+          if (e.value is Map) {
+            final k = remapCellKey(e.key);
+            if (k == null) continue;
+            final m = Map<String, dynamic>.from(e.value as Map);
+            _cellBorders[k] = {
+              'top': m['top'] == true,
+              'right': m['right'] == true,
+              'bottom': m['bottom'] == true,
+              'left': m['left'] == true,
+            };
+          }
+        }
+      }
+
+      final merged = _readMetaList(meta, 'mergedCellRanges');
+      if (merged != null) {
+        for (final v in merged) {
+          final s = v.toString().trim();
+          if (s.isEmpty) continue;
+          final rk = remapRangeKey(s);
+          if (rk != null && rk.trim().isNotEmpty) {
+            _mergedCellRanges.add(rk);
+          }
+        }
+      }
+    } catch (_) {
+      // Ignore malformed meta; keep the sheet usable.
+    }
+  }
+
+  Map<String, dynamic> _buildGridMetaForSave() {
+    final meta = <String, dynamic>{};
+
+    if (_cellFormats.isNotEmpty) {
+      meta['cellFormats'] = _cellFormats.map((k, v) => MapEntry(k, v.toList()));
+    }
+    if (_cellFontSizes.isNotEmpty) {
+      meta['cellFontSizes'] = Map<String, double>.from(_cellFontSizes);
+    }
+    if (_cellAlignments.isNotEmpty) {
+      meta['cellAlignments'] =
+          _cellAlignments.map((k, v) => MapEntry(k, _encodeTextAlign(v)));
+    }
+    if (_cellTextColors.isNotEmpty) {
+      meta['cellTextColors'] =
+          _cellTextColors.map((k, v) => MapEntry(k, _encodeColor(v)));
+    }
+    if (_cellBackgroundColors.isNotEmpty) {
+      meta['cellBackgroundColors'] =
+          _cellBackgroundColors.map((k, v) => MapEntry(k, _encodeColor(v)));
+    }
+    if (_cellBorders.isNotEmpty) {
+      meta['cellBorders'] =
+          _cellBorders.map((k, v) => MapEntry(k, Map<String, bool>.from(v)));
+    }
+    if (_mergedCellRanges.isNotEmpty) {
+      meta['mergedCellRanges'] = _mergedCellRanges.toList();
+    }
+
+    return meta;
+  }
 
   // Timer for periodic status updates
   Timer? _statusTimer;
@@ -701,22 +964,20 @@ class _SheetScreenState extends State<SheetScreen> {
       await _refreshSheetStatus(); // Refresh current sheet status
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(showToViewers
-                ? 'Sheet is now visible to viewers'
-                : 'Sheet is now hidden from viewers'),
-            backgroundColor: Colors.green,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: showToViewers
+              ? 'Sheet is now visible to viewers'
+              : 'Sheet is now hidden from viewers',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update visibility: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to update visibility: $e',
         );
       }
     }
@@ -832,16 +1093,20 @@ class _SheetScreenState extends State<SheetScreen> {
       if (res['success'] == true) {
         await _loadSheets();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(newPw.isEmpty ? 'Password removed' : 'Password set'),
-            backgroundColor: Colors.green,
-          ));
+          AppModal.showText(
+            context,
+            title: 'Success',
+            message: newPw.isEmpty ? 'Password removed' : 'Password set',
+          );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed: $e',
+        );
       }
     }
   }
@@ -857,16 +1122,20 @@ class _SheetScreenState extends State<SheetScreen> {
       if (res['success'] == true) {
         await _loadSheets();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(newPw.isEmpty ? 'Password removed' : 'Password set'),
-            backgroundColor: Colors.green,
-          ));
+          AppModal.showText(
+            context,
+            title: 'Success',
+            message: newPw.isEmpty ? 'Password removed' : 'Password set',
+          );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed: $e',
+        );
       }
     }
   }
@@ -932,15 +1201,20 @@ class _SheetScreenState extends State<SheetScreen> {
         _navigateIntoSheetFolder(id, folder['name'] as String);
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Incorrect password'),
-              backgroundColor: Colors.red));
+          AppModal.showText(
+            context,
+            title: 'Error',
+            message: 'Incorrect password',
+          );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Incorrect password'), backgroundColor: Colors.red));
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Incorrect password',
+        );
       }
     }
   }
@@ -1026,15 +1300,20 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Incorrect password'),
-              backgroundColor: Colors.red));
+          AppModal.showText(
+            context,
+            title: 'Error',
+            message: 'Incorrect password',
+          );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Incorrect password'), backgroundColor: Colors.red));
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Incorrect password',
+        );
       }
     }
   }
@@ -1051,20 +1330,18 @@ class _SheetScreenState extends State<SheetScreen> {
       await _startEditSession();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Sheet locked for editing'),
-            backgroundColor: AppColors.primaryBlue,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Notice',
+          message: 'Sheet locked for editing',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to lock sheet: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to lock sheet: $e',
         );
       }
     } finally {
@@ -1085,20 +1362,18 @@ class _SheetScreenState extends State<SheetScreen> {
       if (mounted) setState(() => _isEditingSession = false);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Sheet unlocked'),
-            backgroundColor: Colors.green,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: 'Sheet unlocked',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to unlock sheet: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to unlock sheet: $e',
         );
       }
     } finally {
@@ -1152,19 +1427,17 @@ class _SheetScreenState extends State<SheetScreen> {
         _lockedByUser = status['locked_by'];
       });
 
-      // Show one-time snackbar when a different user locks the sheet
+      // Show one-time notice when a different user locks the sheet
       if (mounted && _isLocked && _lockedByUser != null) {
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
         final currentUsername = authProvider.user?.username ?? '';
         if (_lockedByUser != currentUsername &&
             _lastShownLockUser != _lockedByUser) {
           _lastShownLockUser = _lockedByUser;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('$_lockedByUser is currently editing this sheet'),
-              backgroundColor: Colors.orange[700],
-              duration: const Duration(seconds: 4),
-            ),
+          AppModal.showText(
+            context,
+            title: 'Notice',
+            message: '$_lockedByUser is currently editing this sheet',
           );
         }
       }
@@ -1216,6 +1489,9 @@ class _SheetScreenState extends State<SheetScreen> {
         _isLoading = false;
       });
 
+      // Prefetch discrepancy badges for visible Inventory Tracker sheets.
+      _prefetchInventoryNoteBadges(_sheets);
+
       if (_hasPendingDeepLink) {
         _scheduleDeepLinkProcessing();
       }
@@ -1224,6 +1500,168 @@ class _SheetScreenState extends State<SheetScreen> {
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  bool _isInventoryTrackerColumns(List<String> columns) {
+    bool hasInvId(String id) {
+      for (final c in columns) {
+        if (_invColumnId(c) == id) return true;
+      }
+      return false;
+    }
+
+    final hasProduct =
+        columns.contains('Product Name') || hasInvId('product_name');
+    final hasCode = columns.contains('QB Code') ||
+        columns.contains('QC Code') ||
+        hasInvId('code');
+    final hasStock = columns.contains('Stock') || hasInvId('stock');
+    final hasTotal =
+        columns.contains('Total Quantity') || hasInvId('total_qty');
+    return hasProduct && hasCode && (hasStock || hasTotal);
+  }
+
+  Widget _buildInventoryNoteBadge(
+    _InventoryNoteSummary summary, {
+    double fontSize = 10,
+    String? tooltipOverride,
+  }) {
+    final bool isDiscrepancy = summary.discrepancyCount > 0;
+    final bool isCommentOnly = !isDiscrepancy && summary.commentCount > 0;
+
+    final int shownCount =
+        isDiscrepancy ? summary.discrepancyCount : summary.commentCount;
+    final label = shownCount > 99 ? '99+' : '$shownCount';
+    final Color bg = isDiscrepancy
+        ? AppColors.primaryOrange
+        : (isCommentOnly ? AppColors.primaryBlue : AppColors.primaryOrange);
+
+    final tooltipLines = <String>[];
+    if (summary.discrepancyCount > 0) {
+      tooltipLines.add('Discrepancy notes: ${summary.discrepancyCount}');
+    }
+    if (summary.commentCount > 0) {
+      tooltipLines.add('Comments: ${summary.commentCount}');
+    }
+    final tooltip = tooltipOverride ??
+        (tooltipLines.isEmpty ? 'No notes' : tooltipLines.join('\n'));
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 300),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w800,
+            color: Colors.white,
+            height: 1.0,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _prefetchInventoryNoteBadges(List<SheetModel> sheets) {
+    for (final s in sheets) {
+      _ensureInventoryNoteSummaryLoaded(s);
+    }
+  }
+
+  void _ensureInventoryNoteSummaryLoaded(SheetModel sheet) {
+    if (_inventoryNoteSummaryBySheetId.containsKey(sheet.id)) return;
+    if (_inventoryNoteSummaryLoadingSheetIds.contains(sheet.id)) return;
+
+    // Only Inventory Tracker sheets can have discrepancy/comment notes.
+    if (!_isInventoryTrackerColumns(sheet.columns)) {
+      _inventoryNoteSummaryBySheetId[sheet.id] =
+          const _InventoryNoteSummary(discrepancyCount: 0, commentCount: 0);
+      return;
+    }
+
+    _inventoryNoteSummaryLoadingSheetIds.add(sheet.id);
+    unawaited(_loadInventoryNoteSummary(sheet.id));
+  }
+
+  Future<void> _loadInventoryNoteSummary(int sheetId) async {
+    try {
+      final resp = await ApiService.getSheetData(sheetId);
+      if (!mounted) return;
+
+      final sheet = SheetModel.fromJson(resp['sheet']);
+      if (!_isInventoryTrackerColumns(sheet.columns)) {
+        setState(() {
+          _inventoryNoteSummaryBySheetId[sheetId] =
+              const _InventoryNoteSummary(discrepancyCount: 0, commentCount: 0);
+        });
+        return;
+      }
+
+      final cols = sheet.columns;
+      final bool hasEncodedInventoryCols = cols.any(_isInvEncodedColumnKey);
+
+      String? findColById(String id) {
+        for (final c in cols) {
+          if (_invColumnId(c) == id) return c;
+        }
+        return null;
+      }
+
+      final commentKey = hasEncodedInventoryCols
+          ? (findColById('comment') ??
+              _invEncodeColKey('comment', _kInventoryCommentCol))
+          : _kInventoryCommentCol;
+      final typeKey = hasEncodedInventoryCols
+          ? (findColById('note_type') ??
+              _invEncodeColKey('note_type', _kInventoryNoteTypeCol))
+          : _kInventoryNoteTypeCol;
+      final titleKey = hasEncodedInventoryCols
+          ? (findColById('note_title') ??
+              _invEncodeColKey('note_title', _kInventoryNoteTitleCol))
+          : _kInventoryNoteTitleCol;
+
+      int discrepancyCount = 0;
+      int commentCount = 0;
+      for (final r in sheet.rows) {
+        final body = (r[commentKey] ?? '').toString().trim();
+        final title = (r[titleKey] ?? '').toString().trim();
+        final hasNote = body.isNotEmpty || title.isNotEmpty;
+        if (!hasNote) continue;
+
+        final rawType = (r[typeKey] ?? '').toString().trim();
+        final type = rawType.toLowerCase();
+
+        // Legacy notes (no type saved) are treated as discrepancy.
+        if (type.isEmpty || type == _kInventoryNoteTypeDiscrepancy) {
+          discrepancyCount += 1;
+        } else {
+          commentCount += 1;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _inventoryNoteSummaryBySheetId[sheetId] = _InventoryNoteSummary(
+          discrepancyCount: discrepancyCount,
+          commentCount: commentCount,
+        );
+      });
+    } catch (_) {
+      // Keep silent; no badge is better than breaking list rendering.
+      if (!mounted) return;
+      setState(() {
+        _inventoryNoteSummaryBySheetId[sheetId] =
+            const _InventoryNoteSummary(discrepancyCount: 0, commentCount: 0);
+      });
+    } finally {
+      _inventoryNoteSummaryLoadingSheetIds.remove(sheetId);
     }
   }
 
@@ -1251,14 +1689,13 @@ class _SheetScreenState extends State<SheetScreen> {
       final response = await ApiService.getSheetData(sheetId);
       if (!mounted) return;
       final sheet = SheetModel.fromJson(response['sheet']);
+      final serverColumns = sheet.columns.isNotEmpty
+          ? List<String>.from(sheet.columns)
+          : <String>['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
       setState(() {
         _currentSheet = sheet;
-        if (sheet.columns.isNotEmpty) {
-          _columns = List<String>.from(sheet.columns);
-        } else {
-          _columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-        }
+        _columns = List<String>.from(serverColumns);
 
         if (sheet.rows.isNotEmpty) {
           _data = sheet.rows.map((r) {
@@ -1288,9 +1725,33 @@ class _SheetScreenState extends State<SheetScreen> {
         }
 
         // Strip legacy Inventory Tracker columns that are no longer used.
-        if (_columns.contains('Product Name') &&
-            (_columns.contains('QB Code') || _columns.contains('QC Code')) &&
-            _columns.contains('Total Quantity')) {
+        if (_isInventoryTrackerSheet()) {
+          final bool hasEncodedInventoryCols =
+              _columns.any(_isInvEncodedColumnKey);
+
+          final commentCol = hasEncodedInventoryCols
+              ? (_findInvColKeyById('comment') ??
+                  _invEncodeColKey('comment', _kInventoryCommentCol))
+              : _kInventoryCommentCol;
+          final noteTypeCol = hasEncodedInventoryCols
+              ? (_findInvColKeyById('note_type') ??
+                  _invEncodeColKey('note_type', _kInventoryNoteTypeCol))
+              : _kInventoryNoteTypeCol;
+          final noteTitleCol = hasEncodedInventoryCols
+              ? (_findInvColKeyById('note_title') ??
+                  _invEncodeColKey('note_title', _kInventoryNoteTitleCol))
+              : _kInventoryNoteTitleCol;
+
+          // If a legacy Remarks column exists, preserve it by migrating its
+          // content into Comment before stripping.
+          for (final row in _data) {
+            final legacyRemarks = (row['Remarks'] ?? '').trim();
+            final existing = (row[commentCol] ?? '').trim();
+            if (legacyRemarks.isNotEmpty && existing.isEmpty) {
+              row[commentCol] = legacyRemarks;
+            }
+          }
+
           const legacy = ['Reference No.', 'Remarks', 'Date', 'IN', 'OUT'];
           for (final col in legacy) {
             _columns.remove(col);
@@ -1299,14 +1760,70 @@ class _SheetScreenState extends State<SheetScreen> {
             }
           }
 
+          // Load persisted grid metadata (formatting, borders, merged ranges, etc.).
+          // If we stripped legacy columns, remap server indices to the new indices.
+          final colIndexMap = <int, int>{};
+          for (int newIdx = 0; newIdx < _columns.length; newIdx++) {
+            final oldIdx = serverColumns.indexOf(_columns[newIdx]);
+            if (oldIdx >= 0) colIndexMap[oldIdx] = newIdx;
+          }
+          _applyGridMetaFromSheet(sheet,
+              colIndexMap: colIndexMap.isEmpty ? null : colIndexMap);
+          // Ensure Inventory Tracker has dedicated note columns.
+          if (!_columns.contains(commentCol) ||
+              !_columns.contains(noteTypeCol) ||
+              !_columns.contains(noteTitleCol)) {
+            final productKey = _inventoryProductNameKey();
+            final anchor =
+                productKey != null ? _columns.indexOf(productKey) : -1;
+            int insertAt = anchor >= 0 ? (anchor + 1) : 1;
+
+            if (!_columns.contains(commentCol)) {
+              _columns.insert(insertAt.clamp(0, _columns.length), commentCol);
+            }
+            final commentIdx = _columns.indexOf(commentCol);
+            insertAt = commentIdx >= 0 ? (commentIdx + 1) : insertAt;
+
+            if (!_columns.contains(noteTypeCol)) {
+              _columns.insert(insertAt.clamp(0, _columns.length), noteTypeCol);
+            }
+            final typeIdx = _columns.indexOf(noteTypeCol);
+            insertAt = typeIdx >= 0 ? (typeIdx + 1) : insertAt;
+
+            if (!_columns.contains(noteTitleCol)) {
+              _columns.insert(insertAt.clamp(0, _columns.length), noteTitleCol);
+            }
+          }
+
+          for (final row in _data) {
+            row.putIfAbsent(commentCol, () => '');
+            row.putIfAbsent(noteTypeCol, () => '');
+            row.putIfAbsent(noteTitleCol, () => '');
+
+            // Backfill type for legacy notes.
+            final body = (row[commentCol] ?? '').trim();
+            final title = (row[noteTitleCol] ?? '').trim();
+            final rawType = (row[noteTypeCol] ?? '').trim();
+            if ((body.isNotEmpty || title.isNotEmpty) && rawType.isEmpty) {
+              row[noteTypeCol] = _kInventoryNoteTypeDiscrepancy;
+            }
+          }
+
           // Ensure modern Inventory Tracker has a dedicated Stock column.
-          if (!_columns.contains('Stock')) {
+          final totalKey = _inventoryTotalQtyKey();
+          final existingStockKey = _inventoryStockKey();
+          if (existingStockKey == null) {
+            final stockCol = hasEncodedInventoryCols
+                ? (_findInvColKeyById('stock') ??
+                    _invEncodeColKey('stock', 'Stock'))
+                : 'Stock';
             final maintainingIdx = _columns.indexOf('Maintaining');
             final insertAt = maintainingIdx >= 0 ? maintainingIdx : 2;
-            _columns.insert(insertAt, 'Stock');
+            _columns.insert(insertAt, stockCol);
             for (final row in _data) {
-              final current = (row['Total Quantity'] ?? '').trim();
-              row['Stock'] = current.isEmpty ? '0' : current;
+              final current =
+                  (totalKey == null ? '' : (row[totalKey] ?? '')).trim();
+              row[stockCol] = current.isEmpty ? '0' : current;
             }
           }
 
@@ -1337,13 +1854,24 @@ class _SheetScreenState extends State<SheetScreen> {
             }
 
             bool did = false;
-            const qtyCol = 'Maintaining Qty';
-            const unitCol = 'Maintaining Unit';
+            final existingQtyKey = _inventoryMaintainingQtyKey();
+            final existingUnitKey = _inventoryMaintainingUnitKey();
+            final qtyCol = existingQtyKey ??
+                (hasEncodedInventoryCols
+                    ? _invEncodeColKey('maintaining_qty', 'Maintaining Qty')
+                    : 'Maintaining Qty');
+            final unitCol = existingUnitKey ??
+                (hasEncodedInventoryCols
+                    ? _invEncodeColKey('maintaining_unit', 'Maintaining Unit')
+                    : 'Maintaining Unit');
 
             // Add split columns if missing.
             if (!_columns.contains(qtyCol) || !_columns.contains(unitCol)) {
               // Insert after Stock if possible, else after code column.
-              final stockIdx = _columns.indexOf('Stock');
+              final resolvedStockKey = _inventoryStockKey();
+              final stockIdx = resolvedStockKey == null
+                  ? -1
+                  : _columns.indexOf(resolvedStockKey);
               final insertAt = stockIdx >= 0 ? stockIdx + 1 : 2;
               if (!_columns.contains(qtyCol)) {
                 _columns.insert(insertAt, qtyCol);
@@ -1407,18 +1935,29 @@ class _SheetScreenState extends State<SheetScreen> {
           if (mig.migrated) migratedInventoryMaintaining = true;
 
           // Ensure Inventory Tracker has a dedicated Critical threshold column.
-          if (!_columns.contains('Critical')) {
-            final unitIdx = _columns.indexOf('Maintaining Unit');
-            final qtyIdx = _columns.indexOf('Maintaining Qty');
+          final existingCriticalKey = _inventoryCriticalKey();
+          if (existingCriticalKey == null) {
+            final qtyKey = _inventoryMaintainingQtyKey();
+            final unitKey = _inventoryMaintainingUnitKey();
+            final criticalCol = hasEncodedInventoryCols
+                ? (_findInvColKeyById('critical') ??
+                    _invEncodeColKey('critical', 'Critical'))
+                : 'Critical';
+
+            final unitIdx = unitKey == null ? -1 : _columns.indexOf(unitKey);
+            final qtyIdx = qtyKey == null ? -1 : _columns.indexOf(qtyKey);
             final anchor = unitIdx >= 0 ? unitIdx : (qtyIdx >= 0 ? qtyIdx : 3);
-            _columns.insert(anchor + 1, 'Critical');
+            _columns.insert(anchor + 1, criticalCol);
             for (final row in _data) {
-              final qtyRaw =
-                  (row['Maintaining Qty'] ?? '').replaceAll(',', '').trim();
+              final qtyRaw = (qtyKey == null ? '' : (row[qtyKey] ?? ''))
+                  .replaceAll(',', '')
+                  .trim();
               final qty = double.tryParse(qtyRaw) ?? 0;
-              final unit = (row['Maintaining Unit'] ?? '').trim().toUpperCase();
+              final unit = (unitKey == null ? '' : (row[unitKey] ?? ''))
+                  .trim()
+                  .toUpperCase();
               final isPr = unit == 'PR' || qtyRaw == '-';
-              row['Critical'] =
+              row[criticalCol] =
                   (isPr || qty <= 0) ? '0' : qty.toStringAsFixed(0);
             }
             migratedInventoryMaintaining = true;
@@ -1538,11 +2077,10 @@ class _SheetScreenState extends State<SheetScreen> {
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('New sheet created'),
-            backgroundColor: Colors.green,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: 'New sheet created',
         );
       }
     } catch (e) {
@@ -1551,8 +2089,10 @@ class _SheetScreenState extends State<SheetScreen> {
         _isLoading = false;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create sheet: $e')),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to create sheet: $e',
         );
       }
     }
@@ -1573,6 +2113,9 @@ class _SheetScreenState extends State<SheetScreen> {
       'colorValue': 0xFF1E3A6E,
       'columns': [
         'Product Name',
+        'Comment',
+        'Note Type',
+        'Note Title',
         'QC Code',
         'Stock',
         'Maintaining Qty',
@@ -1695,12 +2238,6 @@ class _SheetScreenState extends State<SheetScreen> {
     setState(() => _isLoading = true);
     try {
       final cols = List<String>.from(template['columns'] as List);
-
-      bool isInventoryTrackerColumns(List<String> columns) {
-        return columns.contains('Product Name') &&
-            (columns.contains('QB Code') || columns.contains('QC Code')) &&
-            columns.contains('Total Quantity');
-      }
 
       Future<SheetModel?> pickInventorySeedSheet(
           List<SheetModel> candidates) async {
@@ -1849,11 +2386,16 @@ class _SheetScreenState extends State<SheetScreen> {
 
       // ── Inventory Tracker: inject today's date column automatically ──
       if (template['id'] == 'inventory_tracker') {
-        final todayStr = _inventoryDateStr(DateTime.now());
+        final now = DateTime.now();
+        final yesterdayStr =
+            _inventoryDateStr(now.subtract(const Duration(days: 1)));
+        final todayStr = _inventoryDateStr(now);
         final totalIdx = cols.indexOf('Total Quantity');
         final insertAt = totalIdx < 0 ? cols.length - 1 : totalIdx;
-        cols.insert(insertAt, 'DATE:$todayStr:IN');
-        cols.insert(insertAt + 1, 'DATE:$todayStr:OUT');
+        cols.insert(insertAt, 'DATE:$yesterdayStr:IN');
+        cols.insert(insertAt + 1, 'DATE:$yesterdayStr:OUT');
+        cols.insert(insertAt + 2, 'DATE:$todayStr:IN');
+        cols.insert(insertAt + 3, 'DATE:$todayStr:OUT');
 
         // Optional: seed starting Stock from a chosen previous Inventory Tracker.
         // IMPORTANT: pull from all accessible sheets (including those in folders),
@@ -1862,12 +2404,12 @@ class _SheetScreenState extends State<SheetScreen> {
         try {
           final allSheets = await fetchAllAccessibleSheetsForSeeding();
           candidates = allSheets
-              .where((s) => isInventoryTrackerColumns(s.columns))
+              .where((s) => _isInventoryTrackerColumns(s.columns))
               .where((s) => s.id != _currentSheet?.id)
               .toList();
         } catch (_) {
           candidates = _sheets
-              .where((s) => isInventoryTrackerColumns(s.columns))
+              .where((s) => _isInventoryTrackerColumns(s.columns))
               .where((s) => s.id != _currentSheet?.id)
               .toList();
         }
@@ -1882,6 +2424,42 @@ class _SheetScreenState extends State<SheetScreen> {
             final prevFull = SheetModel.fromJson(resp['sheet']);
             final prevRows = prevFull.rows;
 
+            String? findPrevColById(String id) {
+              for (final c in prevFull.columns) {
+                if (_invColumnId(c) == id) return c;
+              }
+              return null;
+            }
+
+            final prevProductCol = findPrevColById('product_name') ??
+                (prevFull.columns.contains('Product Name')
+                    ? 'Product Name'
+                    : null);
+            final prevCodeCol = findPrevColById('code') ??
+                (prevFull.columns.contains('QB Code')
+                    ? 'QB Code'
+                    : (prevFull.columns.contains('QC Code')
+                        ? 'QC Code'
+                        : null));
+            final prevStockCol = findPrevColById('stock') ??
+                (prevFull.columns.contains('Stock') ? 'Stock' : null);
+            final prevTotalCol = findPrevColById('total_qty') ??
+                (prevFull.columns.contains('Total Quantity')
+                    ? 'Total Quantity'
+                    : null);
+            final prevMaintQtyCol = findPrevColById('maintaining_qty') ??
+                (prevFull.columns.contains('Maintaining Qty')
+                    ? 'Maintaining Qty'
+                    : null);
+            final prevMaintUnitCol = findPrevColById('maintaining_unit') ??
+                (prevFull.columns.contains('Maintaining Unit')
+                    ? 'Maintaining Unit'
+                    : null);
+            final prevCriticalCol = findPrevColById('critical') ??
+                (prevFull.columns.contains('Critical') ? 'Critical' : null);
+            final prevMaintLegacyCol =
+                prevFull.columns.contains('Maintaining') ? 'Maintaining' : null;
+
             final newHasQB = cols.contains('QB Code');
             final newHasQC = cols.contains('QC Code');
             final newCodeCol =
@@ -1889,18 +2467,27 @@ class _SheetScreenState extends State<SheetScreen> {
 
             seededRows = [];
             for (final r in prevRows) {
-              final product = (r['Product Name'] ?? '').toString().trim();
-              final code =
-                  (r['QB Code'] ?? r['QC Code'] ?? '').toString().trim();
+              final product =
+                  (prevProductCol == null ? '' : (r[prevProductCol] ?? ''))
+                      .toString()
+                      .trim();
+              final code = (prevCodeCol == null
+                      ? (r['QB Code'] ?? r['QC Code'] ?? '')
+                      : (r[prevCodeCol] ?? ''))
+                  .toString()
+                  .trim();
               if (product.isEmpty && code.isEmpty) continue;
 
-              String readStr(String key) => (r[key] ?? '').toString();
+              String readStr(String? key) {
+                if (key == null) return '';
+                return (r[key] ?? '').toString();
+              }
 
               // Maintain fields (supports split or legacy).
-              var qty = readStr('Maintaining Qty').trim();
-              var unit = readStr('Maintaining Unit').trim();
+              var qty = readStr(prevMaintQtyCol).trim();
+              var unit = readStr(prevMaintUnitCol).trim();
               if (qty.isEmpty && unit.isEmpty) {
-                final legacy = readStr('Maintaining');
+                final legacy = readStr(prevMaintLegacyCol);
                 final parsed = parseMaintainingLegacy(legacy);
                 qty = parsed.qty;
                 unit = parsed.unit;
@@ -1913,8 +2500,8 @@ class _SheetScreenState extends State<SheetScreen> {
               }
 
               // Carry over ending Total Quantity as new Stock.
-              final endingTotal = readStr('Total Quantity');
-              final endingStock = readStr('Stock');
+              final endingTotal = readStr(prevTotalCol);
+              final endingStock = readStr(prevStockCol);
               final stock0 =
                   num0(endingTotal.isNotEmpty ? endingTotal : endingStock);
 
@@ -1933,7 +2520,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 row['Maintaining Unit'] = unit;
               }
               if (cols.contains('Critical')) {
-                row['Critical'] = readStr('Critical').trim();
+                row['Critical'] = readStr(prevCriticalCol).trim();
               }
               if (cols.contains('Total Quantity')) {
                 row['Total Quantity'] = stock0;
@@ -1970,8 +2557,20 @@ class _SheetScreenState extends State<SheetScreen> {
       }
 
       // Build row data from template sample rows, padded to 100 rows
-      final templateRows =
+      var templateRows =
           List<Map<String, dynamic>>.from(template['rows'] as List);
+
+      // Inventory Tracker: keep the product list, but don't seed quantities.
+      // Quantity should come from actual IN/OUT entries (or optional previous-sheet seed).
+      if (template['id'] == 'inventory_tracker' && seededRows == null) {
+        templateRows = templateRows
+            .map((r) => <String, dynamic>{
+                  ...r,
+                  if (r.containsKey('Stock')) 'Stock': '',
+                  if (r.containsKey('Total Quantity')) 'Total Quantity': '',
+                })
+            .toList(growable: false);
+      }
       final sourceRows = seededRows ?? templateRows;
       final initialRowCount = template['id'] == 'inventory_tracker'
           ? (sourceRows.length < 100 ? 100 : sourceRows.length)
@@ -2008,6 +2607,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _currentSheet = sheet;
         _columns = cols;
         _data = data;
+        _clearGridMetaState();
         _rowLabels = List.generate(initialRowCount, (i) => '${i + 1}');
         _selectedRow = null;
         _selectedCol = null;
@@ -2035,20 +2635,19 @@ class _SheetScreenState extends State<SheetScreen> {
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content:
-                Text('Sheet "$name" created from ${template['name']} template'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: 'Sheet "$name" created from ${template['name']} template',
         );
       }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create from template: $e')),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to create from template: $e',
         );
       }
     }
@@ -2319,47 +2918,19 @@ class _SheetScreenState extends State<SheetScreen> {
       final trimmedName = name.trim();
 
       if (trimmedName.length < 2) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.white),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text('Folder name must be at least 2 characters'),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Folder name must be at least 2 characters',
         );
         return;
       }
 
       if (trimmedName.length > 50) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.white),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text('Folder name must be less than 50 characters'),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Folder name must be less than 50 characters',
         );
         return;
       }
@@ -2367,24 +2938,10 @@ class _SheetScreenState extends State<SheetScreen> {
       // Check for invalid characters
       final invalidChars = RegExp(r'[<>:"/\\|?*]');
       if (invalidChars.hasMatch(trimmedName)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.white),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text('Folder name contains invalid characters'),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Folder name contains invalid characters',
         );
         return;
       }
@@ -2443,31 +3000,12 @@ class _SheetScreenState extends State<SheetScreen> {
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(
-                  success ? Icons.check_circle : Icons.error_outline,
-                  color: Colors.white,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    success
-                        ? 'Folder "$trimmedName" created successfully'
-                        : 'Failed to create folder',
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: success ? Colors.green : Colors.red,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
+        AppModal.showText(
+          context,
+          title: success ? 'Success' : 'Error',
+          message: success
+              ? 'Folder "$trimmedName" created successfully'
+              : 'Failed to create folder',
         );
       }
     }
@@ -2589,28 +3127,22 @@ class _SheetScreenState extends State<SheetScreen> {
     try {
       await ApiService.moveSheetToFolder(sheet.id, targetFolderId);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(targetFolderId == null
-                ? '"${sheet.name}" moved to root'
-                : '"${sheet.name}" moved to folder'),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: targetFolderId == null
+              ? '"${sheet.name}" moved to root'
+              : '"${sheet.name}" moved to folder',
         );
         await _loadSheets();
         await _refreshAllSheetsExplorerCache();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to move sheet: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to move sheet: $e',
         );
       }
     }
@@ -2624,12 +3156,25 @@ class _SheetScreenState extends State<SheetScreen> {
         _saveStatus = 'unsaved';
       });
     }
-    // Debounced auto-save: persist to DB 2 s after the last change so that
-    // users who reload the sheet always see up-to-date data even when the
-    // editor has not pressed the manual Save button.
+
+    _scheduleAutoSave();
+  }
+
+  void _scheduleAutoSave() {
+    // Debounced auto-save: persist to DB a moment after the last change.
+    // IMPORTANT: never auto-save while the user is actively editing a cell;
+    // that can persist partial text and make product names appear "cut".
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted && _hasUnsavedChanges) _saveSheet();
+      if (!mounted || !_hasUnsavedChanges) return;
+
+      // Defer until the user commits/cancels the current cell edit.
+      if (_editingRow != null) {
+        _scheduleAutoSave();
+        return;
+      }
+
+      _saveSheet();
     });
   }
 
@@ -2648,12 +3193,10 @@ class _SheetScreenState extends State<SheetScreen> {
         _lockedByUser != null &&
         _lockedByUser != authProvider.user?.username &&
         authProvider.user?.role != 'admin') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Cannot save: $_lockedByUser is currently editing this sheet'),
-          backgroundColor: Colors.orange[700],
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Cannot save: $_lockedByUser is currently editing this sheet',
       );
       return;
     }
@@ -2673,6 +3216,7 @@ class _SheetScreenState extends State<SheetScreen> {
         _currentSheet!.name,
         _columns,
         nonEmptyRows,
+        gridMeta: _buildGridMetaForSave(),
       );
 
       if (mounted) {
@@ -2684,8 +3228,10 @@ class _SheetScreenState extends State<SheetScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _saveStatus = 'unsaved');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save: $e')),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to save: $e',
         );
       }
     }
@@ -2766,7 +3312,26 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   Future<void> _renameColumn(int colIndex) async {
-    final currentName = _columns[colIndex];
+    if (!_canEditSheet()) {
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'You do not have permission to rename columns.',
+      );
+      return;
+    }
+
+    final oldStoredKey = _columns[colIndex];
+    if (_isInventoryTrackerSheet() && oldStoredKey.startsWith('DATE:')) {
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Date columns cannot be renamed in Inventory Tracker.',
+      );
+      return;
+    }
+
+    final currentName = _displayColumnName(oldStoredKey);
     final newName = await _showNameDialog(
       'Rename Column',
       'Enter new column name',
@@ -2775,38 +3340,83 @@ class _SheetScreenState extends State<SheetScreen> {
 
     if (!mounted) return;
 
-    if (newName == null || newName.isEmpty || newName == currentName) return;
+    final trimmed = newName?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == currentName) return;
 
-    // Check for duplicate names
-    if (_columns.contains(newName)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Column name already exists'),
-          backgroundColor: Colors.orange,
-        ),
+    final normalized = trimmed.toLowerCase();
+    final bool dupDisplay = _columns.asMap().entries.any((e) {
+      if (e.key == colIndex) return false;
+      return _displayColumnName(e.value).trim().toLowerCase() == normalized;
+    });
+
+    if (dupDisplay) {
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Column name already exists',
       );
       return;
     }
 
-    setState(() {
-      // Update column name
-      final oldName = _columns[colIndex];
-      _columns[colIndex] = newName;
+    // Inventory Tracker: preserve semantic ids for renamed headers.
+    String? invId = _invColumnId(oldStoredKey);
+    if (invId == null && _isInventoryTrackerSheet()) {
+      switch (oldStoredKey) {
+        case 'Product Name':
+          invId = 'product_name';
+          break;
+        case 'QB Code':
+        case 'QC Code':
+          invId = 'code';
+          break;
+        case 'Stock':
+          invId = 'stock';
+          break;
+        case 'Maintaining Qty':
+          invId = 'maintaining_qty';
+          break;
+        case 'Maintaining Unit':
+          invId = 'maintaining_unit';
+          break;
+        case 'Critical':
+          invId = 'critical';
+          break;
+        case 'Total Quantity':
+          invId = 'total_qty';
+          break;
+        case _kInventoryCommentCol:
+          invId = 'comment';
+          break;
+        case _kInventoryNoteTypeCol:
+          invId = 'note_type';
+          break;
+        case _kInventoryNoteTitleCol:
+          invId = 'note_title';
+          break;
+      }
+    }
 
-      // Update all row data with new column name
-      for (var row in _data) {
-        if (row.containsKey(oldName)) {
-          row[newName] = row[oldName]!;
-          row.remove(oldName);
+    final newStoredKey =
+        invId != null ? _invEncodeColKey(invId, trimmed) : trimmed;
+
+    _pushUndoSnapshot();
+    setState(() {
+      _columns[colIndex] = newStoredKey;
+      for (final row in _data) {
+        if (row.containsKey(oldStoredKey)) {
+          row[newStoredKey] = row[oldStoredKey] ?? '';
+          row.remove(oldStoredKey);
         }
       }
+      _updateFormulaBar();
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Column renamed to "$newName"'),
-        backgroundColor: Colors.green,
-      ),
+    _markDirty();
+
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Column renamed to "$trimmed"',
     );
   }
 
@@ -2828,11 +3438,10 @@ class _SheetScreenState extends State<SheetScreen> {
       _rowLabels[rowIndex] = newLabel;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Row renamed to "$newLabel"'),
-        backgroundColor: Colors.green,
-      ),
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Row renamed to "$newLabel"',
     );
   }
 
@@ -2842,11 +3451,10 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Check permissions - only admin and editor can rename
     if (userRole != 'admin' && userRole != 'editor') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You do not have permission to rename sheets'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'You do not have permission to rename sheets',
       );
       return;
     }
@@ -2897,20 +3505,19 @@ class _SheetScreenState extends State<SheetScreen> {
       setState(() => _isLoading = false);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Sheet renamed to "$newName"'),
-            backgroundColor: Colors.green,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: 'Sheet renamed to "$newName"',
         );
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Failed to rename sheet: $e'),
-              backgroundColor: Colors.red),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to rename sheet: $e',
         );
       }
     }
@@ -2922,11 +3529,10 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Check permissions - only admin can delete
     if (userRole != 'admin') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You do not have permission to delete sheets'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'You do not have permission to delete sheets',
       );
       return;
     }
@@ -3090,20 +3696,18 @@ class _SheetScreenState extends State<SheetScreen> {
       await _loadSheets();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Sheet deleted successfully'),
-            backgroundColor: Colors.green,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Success',
+          message: 'Sheet deleted successfully',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to delete sheet: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to delete sheet: $e',
         );
       }
     } finally {
@@ -3136,36 +3740,118 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   void _addRow() {
+    if (widget.readOnly) return;
+    if (_editingRow != null) {
+      _saveEdit();
+    }
+
+    // Inventory Tracker: if a search filter is active, a new blank row would be
+    // filtered out and the auto-scroll would appear to do nothing.
+    if (_isInventoryTrackerSheet() && _inventorySearchQuery.isNotEmpty) {
+      setState(() {
+        _inventorySearchQuery = '';
+        _inventorySearchController.clear();
+      });
+    }
+
+    final int baseRow = (_selectedRow == null)
+        ? (_data.isEmpty ? -1 : _data.length - 1)
+        : _selectedRow!.clamp(0, _data.isEmpty ? 0 : _data.length - 1);
+    final int insertIndex = (baseRow + 1).clamp(0, _data.length);
+
     _pushUndoSnapshot();
     setState(() {
       final row = <String, String>{};
       for (var col in _columns) {
         row[col] = '';
       }
-      _data.add(row);
-      // Add label for new row
-      _rowLabels.add('${_data.length}');
+      _data.insert(insertIndex, row);
+
+      // Insert a new label; keep custom labels but renumber purely-numeric ones.
+      _rowLabels.insert(insertIndex, '${insertIndex + 1}');
+      for (int i = 0; i < _rowLabels.length; i++) {
+        if (RegExp(r'^\\d+$').hasMatch(_rowLabels[i])) {
+          _rowLabels[i] = '${i + 1}';
+        }
+      }
+
+      _selectedRow = insertIndex;
+      _selectionEndRow = insertIndex;
+      _selectedCol = (_selectedCol ?? 0)
+          .clamp(0, _columns.isEmpty ? 0 : _columns.length - 1);
+      _selectionEndCol = _selectedCol;
+      _editingRow = null;
+      _editingCol = null;
+      _updateFormulaBar();
     });
+
     _markDirty();
+    _scrollToRowAfterFrame(insertIndex);
+  }
+
+  void _scrollToRowAfterFrame(int rowIndex) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_verticalScrollController.hasClients) return;
+
+      final double targetOffset = _scrollOffsetForRowInCurrentView(rowIndex);
+      final double max = _verticalScrollController.position.maxScrollExtent;
+      final double clamped = targetOffset.clamp(0.0, max);
+
+      _verticalScrollController.animateTo(
+        clamped,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  double _scrollOffsetForRowInCurrentView(int rowIndex) {
+    // Inventory grid has its own filtered/sorted order and includes header rows
+    // inside the scrollable content.
+    if (_isInventoryTrackerSheet()) {
+      final entries = _inventoryFilteredEntries();
+      final visibleIndex = entries.indexWhere((e) => e.key == rowIndex);
+      if (visibleIndex < 0) {
+        return _verticalScrollController.hasClients
+            ? _verticalScrollController.offset
+            : 0.0;
+      }
+
+      double accY = _invHeaderH1 + _invHeaderH2;
+      for (int i = 0; i < visibleIndex; i++) {
+        accY += _getRowHeight(entries[i].key);
+      }
+
+      // Scroll coordinates are in the zoom-scaled space.
+      return (accY * _zoomLevel);
+    }
+
+    // Regular spreadsheet: vertical scrollable area is data rows only.
+    double accY = 0;
+    for (int r = 0; r < _data.length; r++) {
+      if (_isRowHidden(r)) continue;
+      if (r == rowIndex) break;
+      accY += _getRowHeight(r);
+    }
+    return (accY * _zoomLevel);
   }
 
   void _deleteColumn() {
     if (_selectedCol == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select a column to delete'),
-          backgroundColor: Colors.orange,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select a column to delete',
       );
       return;
     }
 
     if (_columns.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot delete the last column'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'Cannot delete the last column',
       );
       return;
     }
@@ -3184,32 +3870,29 @@ class _SheetScreenState extends State<SheetScreen> {
     });
     _markDirty();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Column $colToDelete deleted'),
-        backgroundColor: Colors.green,
-      ),
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Column $colToDelete deleted',
     );
   }
 
   void _deleteRow() {
     if (_selectedRow == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select a row to delete'),
-          backgroundColor: Colors.orange,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select a row to delete',
       );
       return;
     }
 
     // Don't allow deleting if only a few rows left
     if (_data.length <= 10) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot delete row - minimum 10 rows required'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'Cannot delete row - minimum 10 rows required',
       );
       return;
     }
@@ -3225,21 +3908,19 @@ class _SheetScreenState extends State<SheetScreen> {
     });
     _markDirty();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Row $rowNum deleted'),
-        backgroundColor: Colors.green,
-      ),
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Row $rowNum deleted',
     );
   }
 
   Future<void> _exportSheet(String format) async {
     if (_currentSheet == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No sheet selected to export'),
-          backgroundColor: Colors.orange,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'No sheet selected to export',
       );
       return;
     }
@@ -3267,11 +3948,10 @@ class _SheetScreenState extends State<SheetScreen> {
           await file.writeAsBytes(fileBytes);
 
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Sheet exported successfully to $outputPath'),
-                backgroundColor: Colors.green,
-              ),
+            AppModal.showText(
+              context,
+              title: 'Success',
+              message: 'Sheet exported successfully to $outputPath',
             );
           }
         } catch (fileError) {
@@ -3289,23 +3969,20 @@ class _SheetScreenState extends State<SheetScreen> {
               errorMessage = 'Failed to save file: ${fileError.toString()}';
             }
 
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(errorMessage),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
-              ),
+            AppModal.showText(
+              context,
+              title: 'Error',
+              message: errorMessage,
             );
           }
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to export: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to export: $e',
         );
       }
     } finally {
@@ -3329,10 +4006,10 @@ class _SheetScreenState extends State<SheetScreen> {
 
       if (bytes == null || bytes.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Could not read file'),
-                backgroundColor: Colors.red),
+          AppModal.showText(
+            context,
+            title: 'Error',
+            message: 'Could not read file',
           );
         }
         return;
@@ -3351,30 +4028,25 @@ class _SheetScreenState extends State<SheetScreen> {
 
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Imported "${sheet.name}" — $rowCount rows, $colCount columns',
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            action: SnackBarAction(
-              label: 'Open',
-              textColor: Colors.white,
-              onPressed: () => _loadSheetData(sheet.id),
-            ),
+        AppModal.show(
+          context,
+          title: 'Imported',
+          content: Text(
+            'Imported "${sheet.name}" — $rowCount rows, $colCount columns',
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _loadSheetData(sheet.id);
+              },
+              child: const Text('Open'),
+            ),
+          ],
         );
         // Refresh the sheet list so the new sheet appears
         _loadSheets();
@@ -3382,11 +4054,10 @@ class _SheetScreenState extends State<SheetScreen> {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Import failed: $e'),
-            backgroundColor: Colors.red,
-          ),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Import failed: $e',
         );
       }
     }
@@ -3443,12 +4114,10 @@ class _SheetScreenState extends State<SheetScreen> {
     if (_isLocked &&
         _lockedByUser != null &&
         _lockedByUser != authProvider.user?.username) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$_lockedByUser is currently editing this sheet'),
-          backgroundColor: Colors.orange[700],
-          duration: const Duration(seconds: 2),
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: '$_lockedByUser is currently editing this sheet',
       );
       return;
     }
@@ -3462,12 +4131,10 @@ class _SheetScreenState extends State<SheetScreen> {
     if (occupants.isNotEmpty) {
       final name =
           _presenceInfoMap[occupants.first]?.username ?? 'Another user';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$name is currently editing this cell'),
-          backgroundColor: Colors.orange[700],
-          duration: const Duration(seconds: 3),
-        ),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: '$name is currently editing this cell',
       );
       return;
     }
@@ -3477,6 +4144,23 @@ class _SheetScreenState extends State<SheetScreen> {
       _editingCol = col;
       _originalCellValue = _data[row][_columns[col]] ?? '';
       _editController.text = _originalCellValue;
+
+      // Inventory Tracker: if Stock is blank but Total Quantity is present,
+      // prefill the editor with Total Quantity so the user can edit/save it.
+      if (_isInventoryTrackerSheet()) {
+        final stockKey = _inventoryStockKey();
+        final totalKey = _inventoryTotalQtyKey();
+        final colKey = _columns[col];
+        if (stockKey != null &&
+            totalKey != null &&
+            colKey == stockKey &&
+            _originalCellValue.trim().isEmpty) {
+          final derived = (_data[row][totalKey] ?? '').toString().trim();
+          if (derived.isNotEmpty) {
+            _editController.text = derived;
+          }
+        }
+      }
     });
     // Broadcast cell focus to other collaborators
     if (_currentSheet != null) {
@@ -3496,6 +4180,8 @@ class _SheetScreenState extends State<SheetScreen> {
       final colName = _columns[savedCol];
       const maintainingQtyCol = 'Maintaining Qty';
       const maintainingUnitCol = 'Maintaining Unit';
+      final inventoryStockKey = _inventoryStockKey();
+      final inventoryTotalKey = _inventoryTotalQtyKey();
 
       bool isPerRequestUnit(String v) {
         final lower = v.trim().toLowerCase();
@@ -3527,6 +4213,17 @@ class _SheetScreenState extends State<SheetScreen> {
 
       final updates = <String, String>{};
       updates[colName] = rawNewValue;
+
+      // Inventory Tracker: Stock is the editable baseline input.
+      // Keep Total Quantity immediately in sync with Stock edits (then recalc
+      // will apply IN/OUT math if any date entries exist).
+      if (_isInventoryTrackerSheet() &&
+          inventoryStockKey != null &&
+          inventoryTotalKey != null &&
+          colName == inventoryStockKey &&
+          inventoryTotalKey != inventoryStockKey) {
+        updates[inventoryTotalKey] = rawNewValue;
+      }
 
       // Inventory Tracker: enforce PR rule.
       // If unit is PR (per request) → qty must be '-'.
@@ -3609,6 +4306,13 @@ class _SheetScreenState extends State<SheetScreen> {
       }
       if (_isInventoryTrackerSheet() &&
           _isInventoryTotalsInputColumn(colName)) {
+        _recalcInventoryTotalsForRow(savedRow);
+      }
+
+      // Explicit: editing Stock should always recompute Total Quantity.
+      if (_isInventoryTrackerSheet() &&
+          inventoryStockKey != null &&
+          colName == inventoryStockKey) {
         _recalcInventoryTotalsForRow(savedRow);
       }
       if (changedAny) _markDirty();
@@ -4011,6 +4715,12 @@ class _SheetScreenState extends State<SheetScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final menuBg = isDark ? const Color(0xFF1E293B) : Colors.white;
     final menuItemColor = isDark ? const Color(0xFFE5E7EB) : Colors.black87;
+    final commentKey = _inventoryCommentKey();
+    final titleKey = _inventoryNoteTitleKey();
+    final typeKey = _inventoryNoteTypeKey();
+    final bool hasInventoryNote = _isInventoryTrackerSheet() &&
+        (((_data[row][commentKey] ?? '').trim().isNotEmpty) ||
+            ((_data[row][titleKey] ?? '').trim().isNotEmpty));
 
     final RenderBox? overlay =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
@@ -4027,6 +4737,29 @@ class _SheetScreenState extends State<SheetScreen> {
       color: menuBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       items: [
+        if (_isInventoryTrackerSheet())
+          PopupMenuItem(
+            value: 'row_note',
+            child: Row(
+              children: [
+                Icon(Icons.note_alt_outlined, size: 16, color: menuItemColor),
+                const SizedBox(width: 8),
+                Text('Row Note', style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (hasInventoryNote)
+          PopupMenuItem(
+            value: 'remove_row_note',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 16, color: menuItemColor),
+                const SizedBox(width: 8),
+                Text('Remove Note', style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (_isInventoryTrackerSheet()) const PopupMenuDivider(),
         PopupMenuItem(
           value: 'hide_row',
           child: Row(
@@ -4078,6 +4811,39 @@ class _SheetScreenState extends State<SheetScreen> {
     if (result == null) return;
 
     switch (result) {
+      case 'row_note':
+        await _showInventoryRowCommentDialog(row);
+        break;
+      case 'remove_row_note':
+        _ensureInventoryCommentColumn();
+        _pushUndoSnapshot();
+        setState(() {
+          _data[row][commentKey] = '';
+          _data[row][titleKey] = '';
+          _data[row][typeKey] = '';
+        });
+        if (_currentSheet != null) {
+          SocketService.instance.cellUpdate(
+            _currentSheet!.id,
+            row,
+            commentKey,
+            '',
+          );
+          SocketService.instance.cellUpdate(
+            _currentSheet!.id,
+            row,
+            titleKey,
+            '',
+          );
+          SocketService.instance.cellUpdate(
+            _currentSheet!.id,
+            row,
+            typeKey,
+            '',
+          );
+        }
+        _markDirty();
+        break;
       case 'hide_row':
         _pushUndoSnapshot();
         setState(() {
@@ -4129,6 +4895,19 @@ class _SheetScreenState extends State<SheetScreen> {
       color: menuBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       items: [
+        if (_canEditSheet())
+          PopupMenuItem(
+            value: 'rename',
+            child: Row(
+              children: [
+                Icon(Icons.drive_file_rename_outline,
+                    size: 16, color: menuItemColor),
+                const SizedBox(width: 8),
+                Text('Rename Column', style: TextStyle(color: menuItemColor)),
+              ],
+            ),
+          ),
+        if (_canEditSheet()) const PopupMenuDivider(),
         PopupMenuItem(
           value: 'hide',
           child: Row(
@@ -4182,6 +4961,9 @@ class _SheetScreenState extends State<SheetScreen> {
     if (result == null) return;
 
     switch (result) {
+      case 'rename':
+        await _renameColumn(colIndex);
+        break;
       case 'hide':
         _pushUndoSnapshot();
         setState(() {
@@ -5385,6 +6167,9 @@ class _SheetScreenState extends State<SheetScreen> {
           sheets: childSheets,
         );
       });
+
+      // Prefetch discrepancy badges for any Inventory Tracker sheets in this folder.
+      _prefetchInventoryNoteBadges(childSheets);
     } catch (_) {
       // Keep it silent; the folder just won't expand.
     } finally {
@@ -5422,6 +6207,9 @@ class _SheetScreenState extends State<SheetScreen> {
           sheets: childSheets,
         );
       });
+
+      // Prefetch discrepancy badges for any Inventory Tracker sheets in this folder.
+      _prefetchInventoryNoteBadges(childSheets);
     } catch (_) {
       // Keep it silent; the folder just won't show children.
     } finally {
@@ -5452,6 +6240,11 @@ class _SheetScreenState extends State<SheetScreen> {
   Widget _buildRecentCard(SheetModel sheet) {
     final timeAgo = _timeAgo(sheet.updatedAt ?? sheet.createdAt);
     final isHovered = _hoveredRecentSheetId == sheet.id;
+    final summary = _inventoryNoteSummaryBySheetId[sheet.id] ??
+        const _InventoryNoteSummary(discrepancyCount: 0, commentCount: 0);
+
+    // Ensure badge is fetched for Inventory Tracker sheets.
+    _ensureInventoryNoteSummaryLoaded(sheet);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hoveredRecentSheetId = sheet.id),
@@ -5484,15 +6277,29 @@ class _SheetScreenState extends State<SheetScreen> {
                 children: [
                   Row(
                     children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: _kGreen,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(Icons.description_outlined,
-                            color: Colors.white, size: 18),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: _kGreen,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.description_outlined,
+                                color: Colors.white, size: 18),
+                          ),
+                          if (summary.hasAny)
+                            Positioned(
+                              right: -6,
+                              top: -6,
+                              child: _buildInventoryNoteBadge(
+                                summary,
+                                fontSize: 9,
+                              ),
+                            ),
+                        ],
                       ),
                       const Spacer(),
                       PopupMenuButton<String>(
@@ -5731,6 +6538,19 @@ class _SheetScreenState extends State<SheetScreen> {
               required bool isLoading,
             }) {
               final folderName = folder['name']?.toString() ?? 'Folder';
+              final folderId = (folder['id'] is int)
+                  ? folder['id'] as int
+                  : int.tryParse(folder['id']?.toString() ?? '') ?? -1;
+              final cached = _explorerFolderCache[folderId];
+              final folderDiscrepantSheets = cached == null
+                  ? 0
+                  : cached.sheets
+                      .where((s) =>
+                          (_inventoryNoteSummaryBySheetId[s.id]
+                                  ?.discrepancyCount ??
+                              0) >
+                          0)
+                      .length;
 
               return InkWell(
                 onTap: () => _toggleExplorerFolder(folder),
@@ -5772,6 +6592,18 @@ class _SheetScreenState extends State<SheetScreen> {
                                 ),
                               ),
                             ),
+                            if (folderDiscrepantSheets > 0) ...[
+                              const SizedBox(width: 8),
+                              _buildInventoryNoteBadge(
+                                _InventoryNoteSummary(
+                                  discrepancyCount: folderDiscrepantSheets,
+                                  commentCount: 0,
+                                ),
+                                fontSize: 9,
+                                tooltipOverride:
+                                    'Sheets with discrepancies: $folderDiscrepantSheets',
+                              ),
+                            ],
                             if (isLoading) ...[
                               const SizedBox(width: 10),
                               SizedBox(
@@ -5797,6 +6629,13 @@ class _SheetScreenState extends State<SheetScreen> {
               required SheetModel sheet,
               required int depth,
             }) {
+              final summary = _inventoryNoteSummaryBySheetId[sheet.id] ??
+                  const _InventoryNoteSummary(
+                      discrepancyCount: 0, commentCount: 0);
+
+              // Ensure badge is fetched for Inventory Tracker sheets.
+              _ensureInventoryNoteSummaryLoaded(sheet);
+
               return InkWell(
                 onTap: () => _openSheetWithPasswordCheck(sheet),
                 child: Padding(
@@ -5834,6 +6673,10 @@ class _SheetScreenState extends State<SheetScreen> {
                                 ),
                               ),
                             ),
+                            if (summary.hasAny) ...[
+                              const SizedBox(width: 8),
+                              _buildInventoryNoteBadge(summary),
+                            ],
                             if (sheet.hasPassword) ...[
                               const SizedBox(width: 6),
                               Icon(Icons.lock,
@@ -6492,6 +7335,9 @@ class _SheetScreenState extends State<SheetScreen> {
     final isLockedByOther =
         _isLocked && _lockedByUser != null && _lockedByUser != currentUsername;
 
+    final int discrepancyCount =
+        _isInventoryTrackerSheet() ? _inventoryDiscrepancyNoteCount() : 0;
+
     // ── Inline save-status chip ──────────────────────────────────────────────
     Widget saveChip() {
       switch (_saveStatus) {
@@ -6604,6 +7450,14 @@ class _SheetScreenState extends State<SheetScreen> {
     }
 
     Widget activeUsersPanel() {
+      final theme = Theme.of(context);
+      final scheme = theme.colorScheme;
+      final isDark = theme.brightness == Brightness.dark;
+      final panelBg = isDark ? scheme.surfaceContainer : scheme.surface;
+      final panelBorder = scheme.outlineVariant;
+      final panelText = scheme.onSurface;
+      final panelMutedText = scheme.onSurfaceVariant;
+
       final authUser = authProv.user;
       final users = _activeSheetUsers.isNotEmpty
           ? _activeSheetUsers
@@ -6686,19 +7540,21 @@ class _SheetScreenState extends State<SheetScreen> {
           width: panelWidth,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
+            color: panelBg,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
+            border: Border.all(color: panelBorder, width: 1),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Icon(Icons.group, size: 14, color: panelMutedText),
+              const SizedBox(width: 6),
               Text(
-                '👥 ${enriched.length} Active',
-                style: const TextStyle(
+                '${enriched.length} Active',
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF334155),
+                  color: panelText,
                 ),
               ),
               const SizedBox(width: 8),
@@ -6736,15 +7592,15 @@ class _SheetScreenState extends State<SheetScreen> {
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: const Color(0xFFE2E8F0),
-                            border: Border.all(color: Colors.white, width: 1.8),
+                            color: scheme.surfaceContainerHigh,
+                            border: Border.all(color: panelBg, width: 1.8),
                           ),
                           child: Text(
                             '+$overflow',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: Color(0xFF334155),
+                              color: overflow > 0 ? panelMutedText : panelText,
                             ),
                           ),
                         ),
@@ -6851,6 +7707,49 @@ class _SheetScreenState extends State<SheetScreen> {
                 ]),
             ],
           ),
+          if (_isInventoryTrackerSheet() && discrepancyCount > 0) ...[
+            const SizedBox(width: 10),
+            Tooltip(
+              message:
+                  'This Inventory Tracker has $discrepancyCount discrepancy note(s).\nClick to sort discrepancy rows to the top.\nHover the highlighted row to view details.\nRight-click a cell in the row → Row Note to edit/remove.',
+              child: InkWell(
+                onTap: () {
+                  if (_editingRow != null) {
+                    _saveEdit();
+                  }
+                  setState(() {
+                    _inventorySortMode = _InventorySortMode.discrepancyFirst;
+                    _inventorySearchQuery = '';
+                    _inventorySearchController.clear();
+                  });
+                },
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  height: 22,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryOrange
+                        .withValues(alpha: _isDark ? 0.22 : 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: AppColors.primaryOrange
+                          .withValues(alpha: _isDark ? 0.55 : 0.35),
+                      width: 1,
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Discrepancy: $discrepancyCount',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(width: 10),
           // ─ Save chip ─
           if (!widget.readOnly && !isViewer) saveChip(),
@@ -7075,6 +7974,7 @@ class _SheetScreenState extends State<SheetScreen> {
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
     final isAdminOrEditor = role == 'admin' || role == 'editor';
     final canEdit = !isViewer && !widget.readOnly && _canEditSheet();
+    final scheme = Theme.of(context).colorScheme;
 
     // Builds a labeled bordered group container around a row of buttons.
     Widget group(String label, List<Widget> children) {
@@ -7102,7 +8002,7 @@ class _SheetScreenState extends State<SheetScreen> {
             ),
             Container(
               decoration: BoxDecoration(
-                color: _isDark ? const Color(0xFF0F172A) : Colors.grey[100],
+                color: scheme.surfaceContainerHighest,
                 border: Border(
                   top: BorderSide(color: _borderColor),
                 ),
@@ -7114,7 +8014,10 @@ class _SheetScreenState extends State<SheetScreen> {
               padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 10),
               child: Text(
                 label,
-                style: TextStyle(fontSize: 9, color: _textSecondary),
+                style: TextStyle(
+                  fontSize: 9,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -7325,11 +8228,10 @@ class _SheetScreenState extends State<SheetScreen> {
     final role =
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
     if (role != 'admin') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only admins can change alert settings.'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'Only admins can change alert settings.',
       );
       return;
     }
@@ -7452,18 +8354,21 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // ── Inventory: critical alerts modal ──
   double? _criticalDeficitPctForRow(Map<String, String> row) {
-    final productName = (row['Product Name'] ?? '').trim();
-    final code = (row['QB Code'] ?? row['QC Code'] ?? '').trim();
+    final productKey = _inventoryProductNameKey();
+    final productName =
+        (productKey == null ? '' : (row[productKey] ?? '')).trim();
+    final code = _inventoryRowCode(row).trim();
     if (productName.isEmpty && code.isEmpty) return null;
 
-    double? numVal(String key) {
+    double? numVal(String? key) {
+      if (key == null) return null;
       final raw = (row[key] ?? '').replaceAll(',', '').trim();
       if (raw.isEmpty) return null;
       return double.tryParse(raw);
     }
 
-    final critical = numVal('Critical');
-    final totalQty = numVal('Total Quantity');
+    final critical = numVal(_inventoryCriticalKey());
+    final totalQty = numVal(_inventoryTotalQtyKey());
 
     // Critical rule: item is critical when Total Quantity is at or below Critical.
     if (critical == null || totalQty == null || critical <= 0) return null;
@@ -7473,24 +8378,86 @@ class _SheetScreenState extends State<SheetScreen> {
     return pct.clamp(0.0, 1.0);
   }
 
+  double? _maintainingDeficitPctForRow(Map<String, String> row) {
+    final productKey = _inventoryProductNameKey();
+    final productName =
+        (productKey == null ? '' : (row[productKey] ?? '')).trim();
+    final code = _inventoryRowCode(row).trim();
+    if (productName.isEmpty && code.isEmpty) return null;
+
+    double? numVal(String? key) {
+      if (key == null) return null;
+      final raw = (row[key] ?? '').replaceAll(',', '').trim();
+      if (raw.isEmpty || raw == '-') return null;
+      return double.tryParse(raw);
+    }
+
+    final totalQty = numVal(_inventoryTotalQtyKey());
+    if (totalQty == null) return null;
+
+    // PR / per-request items have no maintaining threshold.
+    final unitKey = _inventoryMaintainingUnitKey();
+    final unit = (unitKey == null ? '' : (row[unitKey] ?? ''))
+        .toString()
+        .trim()
+        .toUpperCase();
+    if (unit == 'PR') return null;
+
+    final maintainingQtyKey = _inventoryMaintainingQtyKey();
+    final maintainingQty = numVal(maintainingQtyKey) ??
+        double.tryParse(
+          (row['Maintaining'] ?? '').toString().replaceAll(',', '').trim(),
+        );
+    if (maintainingQty == null || maintainingQty <= 0) return null;
+    if (totalQty > maintainingQty) return null;
+
+    final pct = (maintainingQty - totalQty) / maintainingQty;
+    return pct.clamp(0.0, 1.0);
+  }
+
+  double _inventoryLowStockScoreForRow(Map<String, String> row) {
+    final criticalPct = _criticalDeficitPctForRow(row);
+    if (criticalPct != null) return 2.0 + criticalPct;
+    final maintainingPct = _maintainingDeficitPctForRow(row);
+    if (maintainingPct != null) return 1.0 + maintainingPct;
+    return 0.0;
+  }
+
   List<Map<String, String>> _buildCriticalRows() {
     final criticalRows = <Map<String, String>>[];
     for (final row in _data) {
       final deficitPct = _criticalDeficitPctForRow(row);
       if (deficitPct == null) continue;
 
-      final total = double.tryParse(row['Total Quantity'] ?? '') ?? 0;
-      final stock = double.tryParse(row['Stock'] ?? '') ?? 0;
+      final productKey = _inventoryProductNameKey();
+      final stockKey = _inventoryStockKey();
+      final totalKey = _inventoryTotalQtyKey();
+      final maintainingQtyKey = _inventoryMaintainingQtyKey();
+      final criticalKey = _inventoryCriticalKey();
+
+      final total =
+          double.tryParse(totalKey == null ? '' : (row[totalKey] ?? '')) ?? 0;
+      final stock =
+          double.tryParse(stockKey == null ? '' : (row[stockKey] ?? '')) ?? 0;
+      final maintainingQtyRaw =
+          (maintainingQtyKey == null ? '' : (row[maintainingQtyKey] ?? ''))
+              .trim();
+      final maintainingLegacyRaw = (row['Maintaining'] ?? '').toString();
       final maintaining = double.tryParse(
-            (row['Maintaining Qty'] ?? row['Maintaining'] ?? '')
+            (maintainingQtyRaw.isNotEmpty
+                    ? maintainingQtyRaw
+                    : maintainingLegacyRaw)
                 .replaceAll(',', ''),
           ) ??
           0;
-      final critical = double.tryParse(row['Critical'] ?? '') ?? 0;
+      final critical = double.tryParse(
+              criticalKey == null ? '' : (row[criticalKey] ?? '')) ??
+          0;
       final deficit = (critical - total).clamp(0, double.infinity);
       criticalRows.add({
-        'Product Name': row['Product Name'] ?? '',
-        'QB Code': row['QB Code'] ?? row['QC Code'] ?? '',
+        'Product Name':
+            productKey == null ? '' : (row[productKey] ?? '').toString(),
+        'QB Code': _inventoryRowCode(row),
         'Maintaining': maintaining.toStringAsFixed(0),
         'Critical': critical.toStringAsFixed(0),
         'Stock': stock.toStringAsFixed(0),
@@ -7506,11 +8473,10 @@ class _SheetScreenState extends State<SheetScreen> {
     final role =
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
     if (role != 'admin') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only admins can open critical alerts.'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'Only admins can open critical alerts.',
       );
       return;
     }
@@ -7847,6 +8813,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _setFontSize(double size) {
@@ -7860,6 +8827,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _setAlignment(TextAlign align) {
@@ -7872,6 +8840,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _setTextColor(Color color) {
@@ -7885,6 +8854,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _setBackgroundColor(Color color) {
@@ -7898,6 +8868,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   // ── Merged Cells Helper Methods ──
@@ -7949,6 +8920,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _setOutsideBorders() {
@@ -7976,6 +8948,7 @@ class _SheetScreenState extends State<SheetScreen> {
         }
       }
     });
+    _markDirty();
   }
 
   void _mergeCells() {
@@ -7983,9 +8956,10 @@ class _SheetScreenState extends State<SheetScreen> {
         _selectedCol == null ||
         _selectionEndRow == null ||
         _selectionEndCol == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please select a range of cells to merge')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select a range of cells to merge',
       );
       return;
     }
@@ -7997,9 +8971,10 @@ class _SheetScreenState extends State<SheetScreen> {
     final maxCol = bounds['maxCol']!;
 
     if (minRow == maxRow && minCol == maxCol) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please select more than one cell to merge')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select more than one cell to merge',
       );
       return;
     }
@@ -8008,15 +8983,20 @@ class _SheetScreenState extends State<SheetScreen> {
     setState(() {
       _mergedCellRanges.add(rangeKey);
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Cells merged')),
+    _markDirty();
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Cells merged',
     );
   }
 
   void _unmergeCells() {
     if (_selectedRow == null || _selectedCol == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a merged cell to unmerge')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select a merged cell to unmerge',
       );
       return;
     }
@@ -8047,20 +9027,27 @@ class _SheetScreenState extends State<SheetScreen> {
       setState(() {
         _mergedCellRanges.remove(rangeToRemove);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cells unmerged')),
+      _markDirty();
+      AppModal.showText(
+        context,
+        title: 'Success',
+        message: 'Cells unmerged',
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No merged cells found at selection')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'No merged cells found at selection',
       );
     }
   }
 
   void _showBorderMenu() {
     if (_selectedRow == null || _selectedCol == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select cells first')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Please select cells first',
       );
       return;
     }
@@ -8079,8 +9066,10 @@ class _SheetScreenState extends State<SheetScreen> {
                 _setBorders(
                     {'top': true, 'right': true, 'bottom': true, 'left': true});
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('All borders applied')),
+                AppModal.showText(
+                  this.context,
+                  title: 'Success',
+                  message: 'All borders applied',
                 );
               },
             ),
@@ -8090,8 +9079,10 @@ class _SheetScreenState extends State<SheetScreen> {
               onTap: () {
                 _setOutsideBorders();
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Outside borders applied')),
+                AppModal.showText(
+                  this.context,
+                  title: 'Success',
+                  message: 'Outside borders applied',
                 );
               },
             ),
@@ -8106,8 +9097,10 @@ class _SheetScreenState extends State<SheetScreen> {
                   'left': false
                 });
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Top border applied')),
+                AppModal.showText(
+                  this.context,
+                  title: 'Success',
+                  message: 'Top border applied',
                 );
               },
             ),
@@ -8122,8 +9115,10 @@ class _SheetScreenState extends State<SheetScreen> {
                   'left': false
                 });
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Bottom border applied')),
+                AppModal.showText(
+                  this.context,
+                  title: 'Success',
+                  message: 'Bottom border applied',
                 );
               },
             ),
@@ -8138,8 +9133,10 @@ class _SheetScreenState extends State<SheetScreen> {
                   'left': false
                 });
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Borders removed')),
+                AppModal.showText(
+                  this.context,
+                  title: 'Success',
+                  message: 'Borders removed',
                 );
               },
             ),
@@ -8158,8 +9155,10 @@ class _SheetScreenState extends State<SheetScreen> {
   // ignore: unused_element
   void _showFormulaDialog() {
     // Formula dialog is not implemented yet.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Formula dialog coming soon')),
+    AppModal.showText(
+      context,
+      title: 'Notice',
+      message: 'Formula dialog coming soon',
     );
   }
 
@@ -8168,9 +9167,10 @@ class _SheetScreenState extends State<SheetScreen> {
     if (_selectedRow == null || _selectedCol == null) return;
     // Insert a simple SUM formula
     _editController.text = '=SUM()';
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Auto sum added - specify range in formula bar')),
+    AppModal.showText(
+      context,
+      title: 'Notice',
+      message: 'Auto sum added - specify range in formula bar',
     );
   }
 
@@ -8891,11 +9891,10 @@ class _SheetScreenState extends State<SheetScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final userRole = authProvider.user?.role ?? '';
     if (userRole != 'admin' && userRole != 'manager') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You do not have permission to delete folders'),
-          backgroundColor: Colors.red,
-        ),
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'You do not have permission to delete folders',
       );
       return;
     }
@@ -8929,20 +9928,18 @@ class _SheetScreenState extends State<SheetScreen> {
         await ApiService.deleteSheetFolder(folder['id'] as int);
         await _loadSheets();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Folder deleted successfully'),
-              backgroundColor: Colors.green,
-            ),
+          AppModal.showText(
+            context,
+            title: 'Success',
+            message: 'Folder deleted successfully',
           );
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete folder: $e'),
-              backgroundColor: Colors.red,
-            ),
+          AppModal.showText(
+            context,
+            title: 'Error',
+            message: 'Failed to delete folder: $e',
           );
         }
       }
@@ -9006,8 +10003,11 @@ class _SheetScreenState extends State<SheetScreen> {
     setState(() {});
     final err = _applyFormulaEntry(entry);
     if (err != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Formula ${index + 1}: $err')));
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: 'Formula ${index + 1}: $err',
+      );
       return;
     }
     setState(() {});
@@ -9015,10 +10015,11 @@ class _SheetScreenState extends State<SheetScreen> {
     final expr = isAssign
         ? '${entry.operandCols.first}'
         : entry.operandCols.join(' ${entry.op} ');
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Formula ${index + 1}: ${entry.resultCol} = $expr applied'),
-      backgroundColor: const Color(0xFF2D6A4F),
-    ));
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: 'Formula ${index + 1}: ${entry.resultCol} = $expr applied',
+    );
     _markDirty();
     _saveSheet();
   }
@@ -9032,14 +10033,18 @@ class _SheetScreenState extends State<SheetScreen> {
       }
     });
     if (errors.isNotEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(errors.join('\n'))));
+      AppModal.showText(
+        context,
+        title: 'Error',
+        message: errors.join('\n'),
+      );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('${_cfFormulas.length} formula(s) applied'),
-      backgroundColor: const Color(0xFF2D6A4F),
-    ));
+    AppModal.showText(
+      context,
+      title: 'Success',
+      message: '${_cfFormulas.length} formula(s) applied',
+    );
     _markDirty();
     _saveSheet();
   }
@@ -9051,11 +10056,12 @@ class _SheetScreenState extends State<SheetScreen> {
   // ── Ribbon sub-widgets ──
   Widget _buildRibbonButton(
       IconData icon, String label, VoidCallback? onPressed) {
+    final scheme = Theme.of(context).colorScheme;
     final enabled = onPressed != null;
     final fg = enabled
-        ? (_isDark ? const Color(0xFFE2E8F0) : const Color(0xFF3C4043))
-        : (_isDark ? const Color(0xFF94A3B8) : const Color(0xFFBDC1C6));
-    final hover = _isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F3F4);
+        ? scheme.onSurface
+        : scheme.onSurfaceVariant.withValues(alpha: _isDark ? 0.55 : 0.65);
+    final hover = scheme.surfaceContainerHighest;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -9290,12 +10296,12 @@ class _SheetScreenState extends State<SheetScreen> {
       final cellRef = data['cell_ref'] as String? ?? '';
       // The proposed value has already been applied server-side and broadcast
       // via cell_updated. Show a confirmation so the editor knows it went through.
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Admin approved your edit request for cell $cellRef. '
-            'The value has been applied.'),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 6),
-      ));
+      AppModal.showText(
+        context,
+        title: 'Success',
+        message: 'Admin approved your edit request for cell $cellRef. '
+            'The value has been applied.',
+      );
     };
 
     socket.onEditRequestNotification = (data) {
@@ -9312,10 +10318,11 @@ class _SheetScreenState extends State<SheetScreen> {
 
     socket.onEditRequestSubmitted = (data) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Edit request submitted. Waiting for admin approval.'),
-        backgroundColor: Colors.blue,
-      ));
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Edit request submitted. Waiting for admin approval.',
+      );
     };
 
     // ── Real-time cell sync: apply a remote user’s cell edit instantly ──
@@ -9612,11 +10619,11 @@ class _SheetScreenState extends State<SheetScreen> {
     if (submitted == true && mounted && _currentSheet != null) {
       final proposedValue = proposedCtrl.text;
       // Show immediate feedback so the user knows the request was sent.
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Sending edit request…'),
-        duration: Duration(seconds: 2),
-        backgroundColor: Colors.blueGrey,
-      ));
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'Sending edit request…',
+      );
       try {
         // HTTP is the reliable path — saves to DB and notifies admins via
         // socket even if the editor's own socket is momentarily reconnecting.
@@ -9638,20 +10645,19 @@ class _SheetScreenState extends State<SheetScreen> {
           proposedValue: proposedValue,
         );
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Edit request submitted. Waiting for admin approval.'),
-            backgroundColor: Colors.blue,
-            duration: Duration(seconds: 5),
-          ));
+          AppModal.showText(
+            context,
+            title: 'Notice',
+            message: 'Edit request submitted. Waiting for admin approval.',
+          );
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Failed to submit request: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ));
+          AppModal.showText(
+            context,
+            title: 'Error',
+            message: 'Failed to submit request: $e',
+          );
         }
       }
     }
@@ -9713,10 +10719,10 @@ class _SheetScreenState extends State<SheetScreen> {
                                       _pendingEditRequestCount--;
                                     }
                                   });
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('Request approved.'),
-                                        backgroundColor: Colors.green),
+                                  AppModal.showText(
+                                    context,
+                                    title: 'Success',
+                                    message: 'Request approved.',
                                   );
                                 }
                               },
@@ -9737,10 +10743,10 @@ class _SheetScreenState extends State<SheetScreen> {
                                       _pendingEditRequestCount--;
                                     }
                                   });
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('Request rejected.'),
-                                        backgroundColor: Colors.red),
+                                  AppModal.showText(
+                                    context,
+                                    title: 'Notice',
+                                    message: 'Request rejected.',
                                   );
                                 }
                               },
@@ -9760,10 +10766,10 @@ class _SheetScreenState extends State<SheetScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Failed to load requests: $e'),
-              backgroundColor: Colors.red),
+        AppModal.showText(
+          context,
+          title: 'Error',
+          message: 'Failed to load requests: $e',
         );
       }
     }
@@ -9778,49 +10784,521 @@ class _SheetScreenState extends State<SheetScreen> {
   static const double _invHeaderH1 = 32.0; // height of date-group header
   static const double _invHeaderH2 = 26.0; // height of IN/OUT sub-header
 
-  String? _inventoryCodeColumn() {
+  // Inventory column key encoding:
+  // Persist a stable semantic column id while allowing the display header
+  // text to be renamed.
+  // Stored key format: INV:<id>|<display>
+  static const String _kInvColPrefix = 'INV:';
+  static const String _kInvColSep = '|';
+
+  bool _isInvEncodedColumnKey(String key) {
+    return key.startsWith(_kInvColPrefix) && key.contains(_kInvColSep);
+  }
+
+  String? _invColumnId(String key) {
+    if (!_isInvEncodedColumnKey(key)) return null;
+    final start = _kInvColPrefix.length;
+    final sep = key.indexOf(_kInvColSep, start);
+    if (sep <= start) return null;
+    return key.substring(start, sep);
+  }
+
+  String _invColumnDisplay(String key) {
+    if (!_isInvEncodedColumnKey(key)) return key;
+    final sep = key.indexOf(_kInvColSep);
+    if (sep < 0 || sep + 1 >= key.length) return key;
+    return key.substring(sep + 1);
+  }
+
+  String _invEncodeColKey(String id, String display) {
+    return '$_kInvColPrefix$id$_kInvColSep$display';
+  }
+
+  /// Returns the display/header label for a stored column key.
+  String _displayColumnName(String storedKey) {
+    return _isInvEncodedColumnKey(storedKey)
+        ? _invColumnDisplay(storedKey)
+        : storedKey;
+  }
+
+  String? _findInvColKeyById(String id) {
+    for (final c in _columns) {
+      if (_invColumnId(c) == id) return c;
+    }
+    return null;
+  }
+
+  String? _inventoryProductNameKey() {
+    return _findInvColKeyById('product_name') ??
+        (_columns.contains('Product Name') ? 'Product Name' : null);
+  }
+
+  String? _inventoryCodeKey() {
+    final encoded = _findInvColKeyById('code');
+    if (encoded != null) return encoded;
     if (_columns.contains('QB Code')) return 'QB Code';
     if (_columns.contains('QC Code')) return 'QC Code';
     return null;
   }
 
-  String _inventoryRowCode(Map<String, String> row) =>
-      (row['QB Code'] ?? row['QC Code'] ?? '').toString();
+  String? _inventoryTotalQtyKey() {
+    return _findInvColKeyById('total_qty') ??
+        (_columns.contains('Total Quantity') ? 'Total Quantity' : null);
+  }
+
+  String? _inventoryStockKey() {
+    return _findInvColKeyById('stock') ??
+        (_columns.contains('Stock') ? 'Stock' : null);
+  }
+
+  String? _inventoryMaintainingQtyKey() {
+    return _findInvColKeyById('maintaining_qty') ??
+        (_columns.contains('Maintaining Qty') ? 'Maintaining Qty' : null);
+  }
+
+  String? _inventoryMaintainingUnitKey() {
+    return _findInvColKeyById('maintaining_unit') ??
+        (_columns.contains('Maintaining Unit') ? 'Maintaining Unit' : null);
+  }
+
+  String? _inventoryCriticalKey() {
+    return _findInvColKeyById('critical') ??
+        (_columns.contains('Critical') ? 'Critical' : null);
+  }
+
+  String _inventoryCommentKey() {
+    return _findInvColKeyById('comment') ?? _kInventoryCommentCol;
+  }
+
+  String _inventoryNoteTypeKey() {
+    return _findInvColKeyById('note_type') ?? _kInventoryNoteTypeCol;
+  }
+
+  String _inventoryNoteTitleKey() {
+    return _findInvColKeyById('note_title') ?? _kInventoryNoteTitleCol;
+  }
+
+  /// Migrates legacy Inventory Tracker column keys to encoded keys (INV:id|Label)
+  /// so headers can be renamed without breaking Inventory Tracker features.
+  /// Returns true if any changes were applied.
+  // ignore: unused_element
+  bool _migrateInventoryColumnsToEncodedIfNeeded() {
+    // If any inventory columns are already encoded, assume migration completed.
+    if (_columns.any(_isInvEncodedColumnKey)) return false;
+
+    final productKey =
+        _columns.contains('Product Name') ? 'Product Name' : null;
+    final codeKey = _columns.contains('QB Code')
+        ? 'QB Code'
+        : (_columns.contains('QC Code') ? 'QC Code' : null);
+    final totalKey =
+        _columns.contains('Total Quantity') ? 'Total Quantity' : null;
+
+    // Not an Inventory Tracker sheet by legacy signature.
+    if (productKey == null || codeKey == null || totalKey == null) {
+      return false;
+    }
+
+    final renameMap = <String, String>{
+      'Product Name': _invEncodeColKey('product_name', 'Product Name'),
+      codeKey: _invEncodeColKey('code', codeKey),
+      'Stock': _invEncodeColKey('stock', 'Stock'),
+      'Maintaining Qty': _invEncodeColKey('maintaining_qty', 'Maintaining Qty'),
+      'Maintaining Unit':
+          _invEncodeColKey('maintaining_unit', 'Maintaining Unit'),
+      'Critical': _invEncodeColKey('critical', 'Critical'),
+      'Total Quantity': _invEncodeColKey('total_qty', 'Total Quantity'),
+      _kInventoryCommentCol: _invEncodeColKey('comment', 'Comment'),
+      _kInventoryNoteTypeCol: _invEncodeColKey('note_type', 'Note Type'),
+      _kInventoryNoteTitleCol: _invEncodeColKey('note_title', 'Note Title'),
+    };
+
+    bool changed = false;
+
+    // Update column list.
+    for (int i = 0; i < _columns.length; i++) {
+      final oldKey = _columns[i];
+      final newKey = renameMap[oldKey];
+      if (newKey == null) continue;
+      if (newKey == oldKey) continue;
+      _columns[i] = newKey;
+      changed = true;
+    }
+
+    if (!changed) return false;
+
+    // Update row maps.
+    for (final row in _data) {
+      for (final entry in renameMap.entries) {
+        final oldKey = entry.key;
+        final newKey = entry.value;
+        if (!row.containsKey(oldKey) || row.containsKey(newKey)) continue;
+        row[newKey] = row[oldKey] ?? '';
+        row.remove(oldKey);
+      }
+    }
+
+    return true;
+  }
+
+  String _inventoryRowCode(Map<String, String> row) {
+    final codeKey = _inventoryCodeKey();
+    return codeKey == null ? '' : (row[codeKey] ?? '').toString();
+  }
 
   /// Returns true when the open sheet is an Inventory Tracker sheet.
   bool _isInventoryTrackerSheet() {
-    return _columns.contains('Product Name') &&
-        _inventoryCodeColumn() != null &&
-        _columns.contains('Total Quantity');
+    final hasProduct = _inventoryProductNameKey() != null;
+    final hasCode = _inventoryCodeKey() != null;
+    final hasQty =
+        _inventoryStockKey() != null || _inventoryTotalQtyKey() != null;
+    return hasProduct && hasCode && hasQty;
   }
 
   List<String> _inventoryFrozenLeft() {
-    final codeCol = _inventoryCodeColumn();
+    final productKey = _inventoryProductNameKey();
+    final codeCol = _inventoryCodeKey();
+    final stockKey = _findInvColKeyById('stock') ??
+        (_columns.contains('Stock') ? 'Stock' : null);
+    final qtyKey = _findInvColKeyById('maintaining_qty') ??
+        (_columns.contains('Maintaining Qty') ? 'Maintaining Qty' : null);
+    final unitKey = _findInvColKeyById('maintaining_unit') ??
+        (_columns.contains('Maintaining Unit') ? 'Maintaining Unit' : null);
+    final criticalKey = _findInvColKeyById('critical') ??
+        (_columns.contains('Critical') ? 'Critical' : null);
     return [
-      'Product Name',
+      if (productKey != null) productKey,
       if (codeCol != null) codeCol,
-      'Stock',
-      'Maintaining Qty',
-      'Maintaining Unit',
-      'Critical',
-    ].where(_columns.contains).toList();
+      if (stockKey != null) stockKey,
+      if (qtyKey != null) qtyKey,
+      if (unitKey != null) unitKey,
+      if (criticalKey != null) criticalKey,
+    ];
   }
 
-  List<String> _inventoryFrozenRight() =>
-      ['Total Quantity'].where(_columns.contains).toList();
+  List<String> _inventoryFrozenRight() {
+    final totalKey = _inventoryTotalQtyKey();
+    return [if (totalKey != null) totalKey];
+  }
 
   /// Columns that are neither frozen nor date columns.
   static const _kLegacyInventoryCols = {'Reference No.', 'Remarks'};
+  static const String _kInventoryCommentCol = 'Comment';
+  static const String _kInventoryNoteTypeCol = 'Note Type';
+  static const String _kInventoryNoteTitleCol = 'Note Title';
+
+  static const String _kInventoryNoteTypeDiscrepancy = 'discrepancy';
+  static const String _kInventoryNoteTypeComment = 'comment';
+
+  bool _inventoryRowHasDiscrepancy(Map<String, String> row) {
+    final commentKey = _inventoryCommentKey();
+    final titleKey = _inventoryNoteTitleKey();
+    final typeKey = _inventoryNoteTypeKey();
+    final body = (row[commentKey] ?? '').toString().trim();
+    final title = (row[titleKey] ?? '').toString().trim();
+    final hasNote = body.isNotEmpty || title.isNotEmpty;
+    if (!hasNote) return false;
+
+    final rawType = (row[typeKey] ?? '').toString().trim();
+    final type = rawType.toLowerCase();
+
+    // Legacy notes (no type saved) are treated as discrepancy.
+    return type.isEmpty || type == _kInventoryNoteTypeDiscrepancy;
+  }
+
+  int _inventoryDiscrepancyNoteCount() {
+    if (!_isInventoryTrackerSheet()) return 0;
+
+    int count = 0;
+    for (final row in _data) {
+      if (_inventoryRowHasDiscrepancy(row)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  void _ensureInventoryCommentColumn() {
+    if (!_isInventoryTrackerSheet()) return;
+
+    final bool hasEncodedInventoryCols = _columns.any(_isInvEncodedColumnKey);
+    final desiredCommentKey = hasEncodedInventoryCols
+        ? (_findInvColKeyById('comment') ??
+            _invEncodeColKey('comment', _kInventoryCommentCol))
+        : _kInventoryCommentCol;
+    final desiredTypeKey = hasEncodedInventoryCols
+        ? (_findInvColKeyById('note_type') ??
+            _invEncodeColKey('note_type', _kInventoryNoteTypeCol))
+        : _kInventoryNoteTypeCol;
+    final desiredTitleKey = hasEncodedInventoryCols
+        ? (_findInvColKeyById('note_title') ??
+            _invEncodeColKey('note_title', _kInventoryNoteTitleCol))
+        : _kInventoryNoteTitleCol;
+
+    final needsComment = !_columns.contains(desiredCommentKey);
+    final needsType = !_columns.contains(desiredTypeKey);
+    final needsTitle = !_columns.contains(desiredTitleKey);
+    if (!needsComment && !needsType && !needsTitle) return;
+
+    setState(() {
+      // Ensure the note columns exist and stay grouped near Product Name.
+      final productKey = _inventoryProductNameKey();
+      final anchor = productKey != null ? _columns.indexOf(productKey) : -1;
+      int insertAt = anchor >= 0 ? (anchor + 1) : 1;
+
+      if (!_columns.contains(desiredCommentKey)) {
+        _columns.insert(insertAt.clamp(0, _columns.length), desiredCommentKey);
+      }
+      final commentIdx = _columns.indexOf(desiredCommentKey);
+      insertAt = commentIdx >= 0 ? (commentIdx + 1) : insertAt;
+
+      if (!_columns.contains(desiredTypeKey)) {
+        _columns.insert(insertAt.clamp(0, _columns.length), desiredTypeKey);
+      }
+      final typeIdx = _columns.indexOf(desiredTypeKey);
+      insertAt = typeIdx >= 0 ? (typeIdx + 1) : insertAt;
+
+      if (!_columns.contains(desiredTitleKey)) {
+        _columns.insert(insertAt.clamp(0, _columns.length), desiredTitleKey);
+      }
+
+      for (final row in _data) {
+        row.putIfAbsent(desiredCommentKey, () => '');
+        row.putIfAbsent(desiredTypeKey, () => '');
+        row.putIfAbsent(desiredTitleKey, () => '');
+      }
+    });
+
+    _markDirty();
+  }
+
+  Future<void> _showInventoryRowCommentDialog(int rowIndex) async {
+    if (!_isInventoryTrackerSheet()) return;
+    _ensureInventoryCommentColumn();
+
+    final role =
+        Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
+    final canEdit = (role == 'admin' || role == 'editor') && !widget.readOnly;
+
+    final row = _data[rowIndex];
+    final productKey = _inventoryProductNameKey();
+    final commentKey = _inventoryCommentKey();
+    final titleKey = _inventoryNoteTitleKey();
+    final typeKey = _inventoryNoteTypeKey();
+
+    final productName =
+        (productKey == null ? '' : (row[productKey] ?? '')).trim();
+    final existingBody = (row[commentKey] ?? '').trim();
+    final existingTitle = (row[titleKey] ?? '').trim();
+    final existingTypeRaw = (row[typeKey] ?? '').trim();
+
+    final existingTypeNorm = existingTypeRaw.toLowerCase();
+    final bool existingHasNote =
+        existingBody.isNotEmpty || existingTitle.isNotEmpty;
+    final String existingType = existingTypeNorm.isNotEmpty
+        ? existingTypeNorm
+        : (existingHasNote
+            ? _kInventoryNoteTypeDiscrepancy
+            : _kInventoryNoteTypeDiscrepancy);
+    final bool isCommentNote = existingType == _kInventoryNoteTypeComment;
+    final String typeLabel = isCommentNote ? 'Comment' : 'Discrepancy';
+
+    if (!canEdit) {
+      final titleLine = existingTitle.isNotEmpty
+          ? 'Note — $existingTitle'
+          : (productName.isEmpty ? 'Row Note' : 'Row Note — $productName');
+      AppModal.show(
+        context,
+        title: titleLine,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Type: $typeLabel'),
+            if (productName.isNotEmpty) Text('Product: $productName'),
+            if (existingTitle.isNotEmpty) Text('Title: $existingTitle'),
+            const SizedBox(height: 12),
+            SelectableText(
+              existingBody.isEmpty ? 'No notes for this row.' : existingBody,
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final titleController = TextEditingController(text: existingTitle);
+    final notesController = TextEditingController(text: existingBody);
+    String selectedType = existingType;
+
+    final Map<String, String>? result = await showDialog<Map<String, String>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final bool isComment = selectedType == _kInventoryNoteTypeComment;
+            final String dialogTitle = productName.isEmpty
+                ? (isComment ? 'Row Comment' : 'Discrepancy Note')
+                : (isComment
+                    ? 'Row Comment — $productName'
+                    : 'Discrepancy Note — $productName');
+
+            InputDecoration deco({required String hint}) => InputDecoration(
+                  hintText: hint,
+                  hintStyle: TextStyle(color: _textSecondary),
+                  filled: true,
+                  fillColor: _surfaceAltColor,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _borderColor),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _borderColor),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                        color: AppColors.primaryBlue, width: 1.5),
+                  ),
+                );
+
+            return AlertDialog(
+              backgroundColor: _surfaceColor,
+              title: Text(
+                dialogTitle,
+                style:
+                    TextStyle(color: _textPrimary, fontWeight: FontWeight.w800),
+              ),
+              content: SizedBox(
+                width: 560,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      key: ValueKey(selectedType),
+                      initialValue: selectedType,
+                      items: const [
+                        DropdownMenuItem(
+                          value: _kInventoryNoteTypeDiscrepancy,
+                          child: Text('Discrepancy'),
+                        ),
+                        DropdownMenuItem(
+                          value: _kInventoryNoteTypeComment,
+                          child: Text('Comment'),
+                        ),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setDialogState(() => selectedType = v);
+                      },
+                      decoration: deco(hint: 'Type'),
+                      dropdownColor: _surfaceColor,
+                      style: TextStyle(color: _textPrimary),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: titleController,
+                      maxLines: 1,
+                      decoration: deco(hint: 'Title (optional)'),
+                      style: TextStyle(color: _textPrimary),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: notesController,
+                      maxLines: 6,
+                      decoration: deco(
+                        hint: isComment
+                            ? 'Add a quick comment for this row'
+                            : 'Describe the discrepancy (actual count, reason, action taken)',
+                      ),
+                      style: TextStyle(color: _textPrimary),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final title = titleController.text.trim();
+                    final body = notesController.text.trim();
+                    final type =
+                        (title.isEmpty && body.isEmpty) ? '' : selectedType;
+                    Navigator.of(ctx).pop({
+                      typeKey: type,
+                      titleKey: title,
+                      commentKey: body,
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryBlue,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result == null) return;
+
+    final newBody = (result[commentKey] ?? '').trim();
+    final newTitle = (result[titleKey] ?? '').trim();
+    final newType = (result[typeKey] ?? '').trim();
+
+    final changed = newBody != existingBody ||
+        newTitle != existingTitle ||
+        newType != existingTypeRaw;
+    if (!changed) return;
+
+    _pushUndoSnapshot();
+    setState(() {
+      _data[rowIndex][commentKey] = newBody;
+      _data[rowIndex][titleKey] = newTitle;
+      _data[rowIndex][typeKey] = newType;
+    });
+    if (_currentSheet != null) {
+      SocketService.instance.cellUpdate(
+        _currentSheet!.id,
+        rowIndex,
+        commentKey,
+        newBody,
+      );
+      SocketService.instance.cellUpdate(
+        _currentSheet!.id,
+        rowIndex,
+        titleKey,
+        newTitle,
+      );
+      SocketService.instance.cellUpdate(
+        _currentSheet!.id,
+        rowIndex,
+        typeKey,
+        newType,
+      );
+    }
+    _markDirty();
+  }
 
   List<String> _inventoryMiscCols() => _columns
       .where((c) =>
+          c != _inventoryCommentKey() &&
+          c != _inventoryNoteTypeKey() &&
+          c != _inventoryNoteTitleKey() &&
           !_inventoryFrozenLeft().contains(c) &&
           !_inventoryFrozenRight().contains(c) &&
           !c.startsWith('DATE:') &&
           !_kLegacyInventoryCols.contains(c))
       .toList();
 
-  /// Returns visible dates (all, only this week, or only today).
+  /// Returns visible dates (all, only this week, or only today + yesterday).
   List<String> _inventoryVisibleDates() {
     final keys = _columns.where((c) => c.startsWith('DATE:')).toList()..sort();
     final dates = <String>{};
@@ -9830,8 +11308,16 @@ class _SheetScreenState extends State<SheetScreen> {
     }
     final sorted = dates.toList()..sort();
     if (_inventoryFilterToday) {
-      final todayStr = _inventoryDateStr(DateTime.now());
-      return sorted.where((d) => d == todayStr).toList();
+      final now = DateTime.now();
+      final yesterdayStr =
+          _inventoryDateStr(now.subtract(const Duration(days: 1)));
+      final todayStr = _inventoryDateStr(now);
+
+      // Keep stable ordering: yesterday then today.
+      return [
+        if (sorted.contains(yesterdayStr)) yesterdayStr,
+        if (sorted.contains(todayStr)) todayStr,
+      ];
     }
     return _inventoryFilterWeek ? _inventoryCurrentWeekDates(sorted) : sorted;
   }
@@ -9880,7 +11366,26 @@ class _SheetScreenState extends State<SheetScreen> {
 
   // ── Actions ──────────────────────────────────────────
 
-  /// Silently injects today's date column if it doesn't already exist.
+  int _inventoryInsertIndexForDate(String dateStr) {
+    // Insert before the first later date group (IN column), if any.
+    for (int i = 0; i < _columns.length; i++) {
+      final c = _columns[i];
+      if (c.startsWith('DATE:') && c.endsWith(':IN')) {
+        final parts = c.split(':');
+        if (parts.length == 3) {
+          final d = parts[1];
+          if (d.compareTo(dateStr) > 0) return i;
+        }
+      }
+    }
+
+    // Otherwise insert just before Total Quantity, or at the end.
+    final totalKey = _inventoryTotalQtyKey();
+    final totalIdx = totalKey == null ? -1 : _columns.indexOf(totalKey);
+    return totalIdx >= 0 ? totalIdx : _columns.length;
+  }
+
+  /// Silently injects today's and yesterday's date columns if missing.
   /// Called automatically on sheet open (admin / editor only).
   void _autoInjectTodayColumnIfNeeded() {
     if (!_isInventoryTrackerSheet()) return;
@@ -9888,10 +11393,19 @@ class _SheetScreenState extends State<SheetScreen> {
         Provider.of<AuthProvider>(context, listen: false).user?.role ?? '';
     if (role != 'admin' && role != 'editor') return;
 
-    final todayStr = _inventoryDateStr(DateTime.now());
-    final inKey = 'DATE:$todayStr:IN';
-    final outKey = 'DATE:$todayStr:OUT';
-    if (_columns.contains(inKey)) return; // already there
+    final now = DateTime.now();
+    final yesterdayStr =
+        _inventoryDateStr(now.subtract(const Duration(days: 1)));
+    final todayStr = _inventoryDateStr(now);
+    final yesterdayInKey = 'DATE:$yesterdayStr:IN';
+    final todayInKey = 'DATE:$todayStr:IN';
+
+    final hasLegacyStatic = _columns.contains('Date') ||
+        _columns.contains('IN') ||
+        _columns.contains('OUT');
+    final needsYesterday = !_columns.contains(yesterdayInKey);
+    final needsToday = !_columns.contains(todayInKey);
+    if (!hasLegacyStatic && !needsYesterday && !needsToday) return;
 
     setState(() {
       for (final old in ['Date', 'IN', 'OUT']) {
@@ -9900,18 +11414,26 @@ class _SheetScreenState extends State<SheetScreen> {
           row.remove(old);
         }
       }
-      final totalIdx = _columns.indexOf('Total Quantity');
-      if (totalIdx >= 0) {
-        _columns.insert(totalIdx, inKey);
-        _columns.insert(totalIdx + 1, outKey);
-      } else {
-        _columns.add(inKey);
-        _columns.add(outKey);
+
+      void insertPair(String dateStr) {
+        final inKey = 'DATE:$dateStr:IN';
+        final outKey = 'DATE:$dateStr:OUT';
+        if (_columns.contains(inKey)) return;
+
+        final insertAt = _inventoryInsertIndexForDate(dateStr);
+        _columns.insert(insertAt, inKey);
+        _columns.insert(insertAt + 1, outKey);
+
+        for (final row in _data) {
+          row.putIfAbsent(inKey, () => '');
+          row.putIfAbsent(outKey, () => '');
+        }
       }
-      for (final row in _data) {
-        row.putIfAbsent(inKey, () => '');
-        row.putIfAbsent(outKey, () => '');
-      }
+
+      // Keep ordering: yesterday then today.
+      insertPair(yesterdayStr);
+      insertPair(todayStr);
+
       _hasUnsavedChanges = true;
       _saveStatus = 'unsaved';
     });
@@ -9934,8 +11456,10 @@ class _SheetScreenState extends State<SheetScreen> {
     final outKey = 'DATE:$dateStr:OUT';
 
     if (_columns.contains(inKey)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('A column for $dateStr already exists.')),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message: 'A column for $dateStr already exists.',
       );
       return;
     }
@@ -9948,15 +11472,10 @@ class _SheetScreenState extends State<SheetScreen> {
           row.remove(old);
         }
       }
-      // Insert the new date pair just before Total Quantity.
-      final totalIdx = _columns.indexOf('Total Quantity');
-      if (totalIdx >= 0) {
-        _columns.insert(totalIdx, inKey);
-        _columns.insert(totalIdx + 1, outKey);
-      } else {
-        _columns.add(inKey);
-        _columns.add(outKey);
-      }
+      // Insert the new date pair in chronological order (or before Total Quantity).
+      final insertAt = _inventoryInsertIndexForDate(dateStr);
+      _columns.insert(insertAt, inKey);
+      _columns.insert(insertAt + 1, outKey);
       for (final row in _data) {
         row.putIfAbsent(inKey, () => '');
         row.putIfAbsent(outKey, () => '');
@@ -9970,14 +11489,18 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   void _scrollToInventoryToday() {
-    final todayStr = _inventoryDateStr(DateTime.now());
+    final now = DateTime.now();
+    final yesterdayStr =
+        _inventoryDateStr(now.subtract(const Duration(days: 1)));
+    final todayStr = _inventoryDateStr(now);
     final inKey = 'DATE:$todayStr:IN';
 
     if (!_columns.contains(inKey)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(
-                "No column for today ($todayStr). Use \"Add Date Column\" first.")),
+      AppModal.showText(
+        context,
+        title: 'Notice',
+        message:
+            'No column for today ($todayStr). Use "Add Date Column" first.',
       );
       return;
     }
@@ -9990,7 +11513,7 @@ class _SheetScreenState extends State<SheetScreen> {
       return;
     }
 
-    // Filter to today only and turn off week filter.
+    // Filter to today + yesterday and turn off week filter.
     setState(() {
       _inventoryFilterToday = true;
       _inventoryFilterWeek = false;
@@ -9998,11 +11521,35 @@ class _SheetScreenState extends State<SheetScreen> {
 
     // Scroll to today's column after layout settles.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      double offset = _rowNumWidth;
-      for (final _ in _inventoryFrozenLeft()) {
-        offset += _invFixedColW;
+      double colWidthForKey(String colKey) {
+        final colIdx = _columns.indexOf(colKey);
+        final base = colKey.startsWith('DATE:') ? _invSubColW : _invFixedColW;
+        if (colIdx < 0) return base;
+        return _columnWidths[colIdx] ?? base;
       }
-      // Today is the only visible date, so offset lands right there.
+
+      double offset = _rowNumWidth;
+      for (final k in _inventoryFrozenLeft()) {
+        final idx = _columns.indexOf(k);
+        if (idx >= 0 && !_isColumnHidden(idx)) {
+          offset += colWidthForKey(k);
+        }
+      }
+
+      // In the Today filter, yesterday may be visible before today.
+      for (final d in [yesterdayStr]) {
+        final yIn = 'DATE:$d:IN';
+        final yOut = 'DATE:$d:OUT';
+        final inIdx = _columns.indexOf(yIn);
+        final outIdx = _columns.indexOf(yOut);
+        if (inIdx >= 0 && !_isColumnHidden(inIdx)) {
+          offset += colWidthForKey(yIn);
+        }
+        if (outIdx >= 0 && !_isColumnHidden(outIdx)) {
+          offset += colWidthForKey(yOut);
+        }
+      }
+
       if (_horizontalScrollController.hasClients) {
         _horizontalScrollController.animateTo(
           offset,
@@ -10016,29 +11563,68 @@ class _SheetScreenState extends State<SheetScreen> {
   void _recalcInventoryTotals() {
     setState(() {
       for (final row in _data) {
-        final productName = (row['Product Name'] ?? '').trim();
+        final productKey = _inventoryProductNameKey();
+        final stockKey = _inventoryStockKey();
+        final totalKey = _inventoryTotalQtyKey();
+
+        final productName =
+            (productKey == null ? '' : (row[productKey] ?? '')).trim();
         final code = _inventoryRowCode(row).trim();
         if (productName.isEmpty && code.isEmpty) {
-          if (row.containsKey('Stock')) row['Stock'] = '';
-          if (row.containsKey('Total Quantity')) row['Total Quantity'] = '';
+          if (stockKey != null && row.containsKey(stockKey)) row[stockKey] = '';
+          if (totalKey != null && row.containsKey(totalKey)) row[totalKey] = '';
           continue;
         }
 
-        int totalIn = 0, totalOut = 0;
+        String readCell(String? k) {
+          if (k == null) return '';
+          return (row[k] ?? '').toString().trim();
+        }
+
+        var totalIn = 0;
+        var totalOut = 0;
+        var hasAnyDateEntry = false;
         for (final col in _columns) {
-          if (col.startsWith('DATE:') && col.endsWith(':IN')) {
-            totalIn += int.tryParse(row[col] ?? '0') ?? 0;
-          } else if (col.startsWith('DATE:') && col.endsWith(':OUT')) {
-            totalOut += int.tryParse(row[col] ?? '0') ?? 0;
+          if (!col.startsWith('DATE:')) continue;
+          final v = (row[col] ?? '').toString().trim();
+          if (v.isNotEmpty) hasAnyDateEntry = true;
+
+          if (col.endsWith(':IN')) {
+            totalIn += int.tryParse(v.isEmpty ? '0' : v) ?? 0;
+          } else if (col.endsWith(':OUT')) {
+            totalOut += int.tryParse(v.isEmpty ? '0' : v) ?? 0;
           }
         }
-        final currentStock = totalIn - totalOut;
 
-        if (row.containsKey('Stock')) {
-          row['Stock'] = currentStock.toString();
+        // Base stock should come from the Stock column.
+        // Never use Total Quantity as the base when date entries exist,
+        // otherwise totals will compound on every recalculation.
+        final stockRaw = readCell(stockKey);
+        final totalRaw = readCell(totalKey);
+        final baseRaw =
+            stockRaw.isNotEmpty ? stockRaw : (!hasAnyDateEntry ? totalRaw : '');
+        final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
+
+        // If there's no base stock and no date entries, treat as "no data".
+        if (baseRaw.isEmpty && !hasAnyDateEntry) {
+          if (stockKey != null && row.containsKey(stockKey)) row[stockKey] = '';
+          if (totalKey != null && row.containsKey(totalKey)) row[totalKey] = '';
+          continue;
         }
-        if (row.containsKey('Total Quantity')) {
-          row['Total Quantity'] = currentStock.toString();
+
+        // Legacy convenience: if Total Quantity has a value but Stock is blank
+        // and there are no date entries, seed Stock from Total Quantity.
+        if (!hasAnyDateEntry &&
+            stockKey != null &&
+            row.containsKey(stockKey) &&
+            stockRaw.isEmpty &&
+            baseRaw.isNotEmpty) {
+          row[stockKey] = baseRaw;
+        }
+
+        final currentStock = base + totalIn - totalOut;
+        if (totalKey != null && row.containsKey(totalKey)) {
+          row[totalKey] = currentStock.toString();
         }
       }
     });
@@ -10046,42 +11632,82 @@ class _SheetScreenState extends State<SheetScreen> {
 
   bool _isInventoryTotalsInputColumn(String colName) {
     if (colName.startsWith('DATE:')) return true;
-    return colName == 'Product Name' ||
-        colName == 'QB Code' ||
-        colName == 'QC Code' ||
-        colName == 'Stock' ||
-        colName == 'Total Quantity';
+
+    final productKey = _inventoryProductNameKey();
+    final codeKey = _inventoryCodeKey();
+    final stockKey = _inventoryStockKey();
+    final totalKey = _inventoryTotalQtyKey();
+    return colName == productKey ||
+        colName == codeKey ||
+        colName == stockKey ||
+        colName == totalKey;
   }
 
   void _recalcInventoryTotalsForRow(int rowIndex) {
     if (rowIndex < 0 || rowIndex >= _data.length) return;
     final row = _data[rowIndex];
-    final productName = (row['Product Name'] ?? '').trim();
+    final productKey = _inventoryProductNameKey();
+    final stockKey = _inventoryStockKey();
+    final totalKey = _inventoryTotalQtyKey();
+    final productName =
+        (productKey == null ? '' : (row[productKey] ?? '')).trim();
     final code = _inventoryRowCode(row).trim();
     if (productName.isEmpty && code.isEmpty) {
       setState(() {
-        if (row.containsKey('Stock')) row['Stock'] = '';
-        if (row.containsKey('Total Quantity')) row['Total Quantity'] = '';
+        if (stockKey != null && row.containsKey(stockKey)) row[stockKey] = '';
+        if (totalKey != null && row.containsKey(totalKey)) row[totalKey] = '';
       });
       return;
     }
 
-    int totalIn = 0, totalOut = 0;
+    String readCell(String? k) {
+      if (k == null) return '';
+      return (row[k] ?? '').toString().trim();
+    }
+
+    var totalIn = 0;
+    var totalOut = 0;
+    var hasAnyDateEntry = false;
     for (final col in _columns) {
-      if (col.startsWith('DATE:') && col.endsWith(':IN')) {
-        totalIn += int.tryParse(row[col] ?? '0') ?? 0;
-      } else if (col.startsWith('DATE:') && col.endsWith(':OUT')) {
-        totalOut += int.tryParse(row[col] ?? '0') ?? 0;
+      if (!col.startsWith('DATE:')) continue;
+      final v = (row[col] ?? '').toString().trim();
+      if (v.isNotEmpty) hasAnyDateEntry = true;
+
+      if (col.endsWith(':IN')) {
+        totalIn += int.tryParse(v.isEmpty ? '0' : v) ?? 0;
+      } else if (col.endsWith(':OUT')) {
+        totalOut += int.tryParse(v.isEmpty ? '0' : v) ?? 0;
       }
     }
-    final currentStock = totalIn - totalOut;
 
+    final stockRaw = readCell(stockKey);
+    final totalRaw = readCell(totalKey);
+    final baseRaw =
+        stockRaw.isNotEmpty ? stockRaw : (!hasAnyDateEntry ? totalRaw : '');
+    final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
+
+    if (baseRaw.isEmpty && !hasAnyDateEntry) {
+      setState(() {
+        if (stockKey != null && row.containsKey(stockKey)) row[stockKey] = '';
+        if (totalKey != null && row.containsKey(totalKey)) row[totalKey] = '';
+      });
+      return;
+    }
+
+    if (!hasAnyDateEntry &&
+        stockKey != null &&
+        row.containsKey(stockKey) &&
+        stockRaw.isEmpty &&
+        baseRaw.isNotEmpty) {
+      setState(() {
+        row[stockKey] = baseRaw;
+      });
+    }
+
+    final currentStock = base + totalIn - totalOut;
     setState(() {
-      if (row.containsKey('Stock')) {
-        row['Stock'] = currentStock.toString();
-      }
-      if (row.containsKey('Total Quantity')) {
-        row['Total Quantity'] = currentStock.toString();
+      if (totalKey != null && row.containsKey(totalKey)) {
+        row[totalKey] = currentStock.toString();
       }
     });
   }
@@ -10134,7 +11760,9 @@ class _SheetScreenState extends State<SheetScreen> {
   }
 
   bool _isInventoryRowIdentityEmpty(Map<String, String> row) {
-    final productName = (row['Product Name'] ?? '').trim();
+    final productKey = _inventoryProductNameKey();
+    final productName =
+        (productKey == null ? '' : (row[productKey] ?? '')).trim();
     final code = _inventoryRowCode(row).trim();
     return productName.isEmpty && code.isEmpty;
   }
@@ -10290,9 +11918,6 @@ class _SheetScreenState extends State<SheetScreen> {
     );
   }
 
-  // ── Grid rendering ────────────────────────────────────
-
-  // ── Inventory search bar ──
   // ignore: unused_element
   Widget _buildInventorySearchBar() {
     return Container(
@@ -10356,7 +11981,8 @@ class _SheetScreenState extends State<SheetScreen> {
               Builder(builder: (ctx) {
                 final hits = _data.where((row) {
                   final q = _inventorySearchQuery.toLowerCase();
-                  return (row['Product Name'] ?? '')
+                  final productKey = _inventoryProductNameKey();
+                  return (productKey == null ? '' : (row[productKey] ?? ''))
                           .toString()
                           .toLowerCase()
                           .contains(q) ||
@@ -10445,54 +12071,8 @@ class _SheetScreenState extends State<SheetScreen> {
     final isViewer = role == 'viewer';
     final todayStr = _inventoryDateStr(DateTime.now());
 
-    final q = _inventorySearchQuery.toLowerCase();
-    final List<MapEntry<int, Map<String, String>>> filteredEntries = (q.isEmpty
-            ? _data.asMap().entries
-            : _data.asMap().entries.where((e) {
-                final row = e.value;
-                return (row['Product Name'] ?? '')
-                        .toString()
-                        .toLowerCase()
-                        .contains(q) ||
-                    _inventoryRowCode(row).toString().toLowerCase().contains(q);
-              }))
-        .where((e) => !_isRowHidden(e.key))
-        .toList();
-
-    String norm(String v) => v.trim().toLowerCase();
-    String nameKey(Map<String, String> row) {
-      final n = norm((row['Product Name'] ?? '').toString());
-      return n.isEmpty ? '\u{10FFFF}' : n;
-    }
-
-    String codeKey(Map<String, String> row) {
-      final c = norm(_inventoryRowCode(row).toString());
-      return c.isEmpty ? '\u{10FFFF}' : c;
-    }
-
-    filteredEntries.sort((a, b) {
-      final ra = a.value;
-      final rb = b.value;
-
-      switch (_inventorySortMode) {
-        case _InventorySortMode.nameAsc:
-          final c1 = nameKey(ra).compareTo(nameKey(rb));
-          if (c1 != 0) return c1;
-          return codeKey(ra).compareTo(codeKey(rb));
-        case _InventorySortMode.codeAsc:
-          final c1 = codeKey(ra).compareTo(codeKey(rb));
-          if (c1 != 0) return c1;
-          return nameKey(ra).compareTo(nameKey(rb));
-        case _InventorySortMode.lowStockFirst:
-          final da = _criticalDeficitPctForRow(ra) ?? -1.0;
-          final db = _criticalDeficitPctForRow(rb) ?? -1.0;
-          final c1 = db.compareTo(da); // bigger deficit first
-          if (c1 != 0) return c1;
-          final c2 = nameKey(ra).compareTo(nameKey(rb));
-          if (c2 != 0) return c2;
-          return codeKey(ra).compareTo(codeKey(rb));
-      }
-    });
+    final List<MapEntry<int, Map<String, String>>> filteredEntries =
+        _inventoryFilteredEntries();
 
     double colWidthForKey(String colKey) {
       final colIdx = _columns.indexOf(colKey);
@@ -10641,6 +12221,70 @@ class _SheetScreenState extends State<SheetScreen> {
     );
   }
 
+  List<MapEntry<int, Map<String, String>>> _inventoryFilteredEntries() {
+    final productKey = _inventoryProductNameKey();
+    final q = _inventorySearchQuery.toLowerCase();
+
+    final List<MapEntry<int, Map<String, String>>> filteredEntries = (q.isEmpty
+            ? _data.asMap().entries
+            : _data.asMap().entries.where((e) {
+                final row = e.value;
+                return (productKey == null ? '' : (row[productKey] ?? ''))
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    _inventoryRowCode(row).toString().toLowerCase().contains(q);
+              }))
+        .where((e) => !_isRowHidden(e.key))
+        .toList();
+
+    String norm(String v) => v.trim().toLowerCase();
+    String nameKey(Map<String, String> row) {
+      final n =
+          norm((productKey == null ? '' : (row[productKey] ?? '')).toString());
+      return n.isEmpty ? '\u{10FFFF}' : n;
+    }
+
+    String codeKey(Map<String, String> row) {
+      final c = norm(_inventoryRowCode(row).toString());
+      return c.isEmpty ? '\u{10FFFF}' : c;
+    }
+
+    filteredEntries.sort((a, b) {
+      final ra = a.value;
+      final rb = b.value;
+
+      switch (_inventorySortMode) {
+        case _InventorySortMode.nameAsc:
+          final c1 = nameKey(ra).compareTo(nameKey(rb));
+          if (c1 != 0) return c1;
+          return codeKey(ra).compareTo(codeKey(rb));
+        case _InventorySortMode.codeAsc:
+          final c1 = codeKey(ra).compareTo(codeKey(rb));
+          if (c1 != 0) return c1;
+          return nameKey(ra).compareTo(nameKey(rb));
+        case _InventorySortMode.lowStockFirst:
+          final da = _inventoryLowStockScoreForRow(ra);
+          final db = _inventoryLowStockScoreForRow(rb);
+          final c1 = db.compareTo(da); // higher severity first
+          if (c1 != 0) return c1;
+          final c2 = nameKey(ra).compareTo(nameKey(rb));
+          if (c2 != 0) return c2;
+          return codeKey(ra).compareTo(codeKey(rb));
+        case _InventorySortMode.discrepancyFirst:
+          final aDisc = _inventoryRowHasDiscrepancy(ra) ? 0 : 1;
+          final bDisc = _inventoryRowHasDiscrepancy(rb) ? 0 : 1;
+          final c0 = aDisc.compareTo(bDisc);
+          if (c0 != 0) return c0;
+          final c1 = nameKey(ra).compareTo(nameKey(rb));
+          if (c1 != 0) return c1;
+          return codeKey(ra).compareTo(codeKey(rb));
+      }
+    });
+
+    return filteredEntries;
+  }
+
   Widget _buildInventoryHeaderRows(
     List<String> frozenLeft,
     List<String> frozenRight,
@@ -10700,6 +12344,8 @@ class _SheetScreenState extends State<SheetScreen> {
         child: Stack(
           children: [
             GestureDetector(
+              onDoubleTap:
+                  _canEditSheet() ? () => _renameColumn(colIndex) : null,
               onSecondaryTapDown: (details) {
                 _showColumnHeaderContextMenu(
                     context, details.globalPosition, colIndex);
@@ -10719,7 +12365,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   ),
                 ),
                 child: Text(
-                  label,
+                  colKey == _inventoryCommentKey() ? 'Notes' : label,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: bold ? FontWeight.bold : FontWeight.w500,
@@ -10901,7 +12547,7 @@ class _SheetScreenState extends State<SheetScreen> {
         for (final col in frozenLeft)
           resizableHeaderCell(
               colKey: col,
-              label: col,
+              label: _displayColumnName(col),
               height: fullHeaderH,
               bg: navy,
               bold: true),
@@ -10917,14 +12563,14 @@ class _SheetScreenState extends State<SheetScreen> {
         for (final col in miscCols)
           resizableHeaderCell(
               colKey: col,
-              label: col,
+              label: _displayColumnName(col),
               height: fullHeaderH,
               bg: navy,
               bold: true),
         for (final col in frozenRight)
           resizableHeaderCell(
               colKey: col,
-              label: col,
+              label: _displayColumnName(col),
               height: fullHeaderH,
               bg: darkNavy,
               bold: true),
@@ -10943,17 +12589,47 @@ class _SheetScreenState extends State<SheetScreen> {
     required String todayStr,
     int? displayRowNumber,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     final row = _data[rowIndex];
+    final productKey = _inventoryProductNameKey();
+    final stockKey = _inventoryStockKey();
+    final totalQtyKey = _inventoryTotalQtyKey();
+    final commentKey = _inventoryCommentKey();
+    final noteTitleKey = _inventoryNoteTitleKey();
+    final noteTypeKey = _inventoryNoteTypeKey();
     final bool isRowSelected = _selectedRow == rowIndex;
-    final Color rowBg =
-        rowIndex.isEven ? Colors.white : const Color(0xFFF8F9FA);
+    final Color rowBg = _isDark
+        ? (rowIndex.isEven
+            ? scheme.surface
+            : scheme.surfaceContainerHighest.withValues(alpha: 0.55))
+        : (rowIndex.isEven ? Colors.white : const Color(0xFFF8F9FA));
+    final noteBody = (row[commentKey] ?? '').trim();
+    final noteTitle = (row[noteTitleKey] ?? '').trim();
+    final noteTypeRaw = (row[noteTypeKey] ?? '').trim();
+    final hasNote = noteBody.isNotEmpty || noteTitle.isNotEmpty;
+    final noteTypeNorm = noteTypeRaw.toLowerCase();
+    final noteType = noteTypeNorm.isNotEmpty
+        ? noteTypeNorm
+        : (hasNote ? _kInventoryNoteTypeDiscrepancy : '');
+    final isCommentNote = noteType == _kInventoryNoteTypeComment;
+
+    final gridBorderColor = _isDark ? scheme.outlineVariant : Colors.grey[300]!;
+    final rowNumberBorderColor =
+        _isDark ? scheme.outlineVariant : Colors.grey[400]!;
+    final discrepancyBorderColor =
+        AppColors.primaryOrange.withValues(alpha: _isDark ? 0.85 : 0.75);
 
     // ── Total Quantity colour logic ──────────────────────────────────────────
     // Critical when Total Quantity <= Critical.
     Color? totalQtyColor() {
-      final deficitPct = _criticalDeficitPctForRow(row);
-      if (deficitPct == null) return AppColors.primaryBlue;
-      return AppColors.primaryOrange;
+      final criticalPct = _criticalDeficitPctForRow(row);
+      if (criticalPct != null) return AppColors.primaryOrange;
+
+      final maintainingPct = _maintainingDeficitPctForRow(row);
+      if (maintainingPct != null) return const Color(0xFFFFB300);
+
+      // In dark mode, the old dark-blue value is unreadable on dark rows.
+      return _isDark ? scheme.onSurface : AppColors.primaryBlue;
     }
 
     final rowHeight = _getRowHeight(rowIndex);
@@ -10975,26 +12651,83 @@ class _SheetScreenState extends State<SheetScreen> {
       if (colIdx < 0 || _isColumnHidden(colIdx)) {
         return const SizedBox.shrink();
       }
+
+      // Skip cells that are covered by merged ranges.
+      if (_shouldSkipCell(rowIndex, colIdx)) {
+        return const SizedBox.shrink();
+      }
+
+      // Merged cell handling (horizontal merges are supported; vertical merges
+      // are rendered by skipping covered cells but do not expand row height).
+      final mergeBounds = _getMergedCellBounds(rowIndex, colIdx);
+      final isMerged = mergeBounds != null;
+      double cellWidth = width;
+      if (isMerged && _isTopLeftOfMergedRange(rowIndex, colIdx)) {
+        cellWidth = 0;
+        for (int c = mergeBounds['minCol']!; c <= mergeBounds['maxCol']!; c++) {
+          if (_isColumnHidden(c)) continue;
+          cellWidth += _getColumnWidth(c);
+        }
+      }
+
       final isEditing = _editingRow == rowIndex && _editingCol == colIdx;
       final isActiveCell = _selectedRow == rowIndex && _selectedCol == colIdx;
       final isInSel = colIdx >= 0 && _isInSelection(rowIndex, colIdx);
       final value = row[colKey] ?? '';
 
+      final ck = _cellKey(rowIndex, colIdx);
+      final customBorders = _cellBorders[ck];
+      final customBg = _cellBackgroundColors[ck];
+      final customTextColor = _cellTextColors[ck];
+      final fmts = _cellFormats[ck] ?? <String>{};
+      final fontSize = _cellFontSizes[ck] ?? 12.0;
+      final align = _cellAlignments[ck];
+      Alignment cellAlign;
+      if (align == TextAlign.center) {
+        cellAlign = Alignment.center;
+      } else if (align == TextAlign.right) {
+        cellAlign = Alignment.centerRight;
+      } else if (align == TextAlign.left) {
+        cellAlign = Alignment.centerLeft;
+      } else {
+        cellAlign = Alignment.center;
+      }
+
       // For the Total Quantity cell, derive background + text colours from
       // the Critical column rule.
-      final bool isTotalQty = colKey == 'Total Quantity';
+      final bool isTotalQty = totalQtyKey != null && colKey == totalQtyKey;
       final Color? totalQtyFgColor = isTotalQty ? totalQtyColor() : null;
-      final Color? totalQtyBgColor = (isTotalQty &&
-              totalQtyFgColor == AppColors.primaryOrange)
-          ? const Color(0xFFFFF3E0) // light orange background for critical rows
+      final bool isTotalQtyCritical =
+          isTotalQty && totalQtyFgColor == AppColors.primaryOrange;
+      final Color? totalQtyBgColor = isTotalQtyCritical
+          ? (_isDark
+              ? AppColors.primaryOrange.withValues(alpha: 0.18)
+              : const Color(0xFFFFF3E0))
           : null;
 
       Color bgColor() {
-        if (isEditing) return Colors.white;
-        if (isActiveCell) return const Color(0xFFBBD3FB);
-        if (isInSel) return const Color(0xFFD2E3FC);
-        if (isRowSelected) return const Color(0xFFE8F0FE);
+        if (customBg != null && customBg != Colors.transparent) {
+          return customBg;
+        }
+        if (isEditing) return _isDark ? scheme.surface : Colors.white;
+        if (_isDark) {
+          if (isActiveCell) return scheme.primary.withValues(alpha: 0.35);
+          if (isInSel) return scheme.primary.withValues(alpha: 0.22);
+          if (isRowSelected) return scheme.primary.withValues(alpha: 0.18);
+        } else {
+          if (isActiveCell) return const Color(0xFFBBD3FB);
+          if (isInSel) return const Color(0xFFD2E3FC);
+          if (isRowSelected) return const Color(0xFFE8F0FE);
+        }
         if (totalQtyBgColor != null) return totalQtyBgColor;
+        if (hasNote) {
+          if (isCommentNote) {
+            // Stronger tint in dark mode so it's unmistakable.
+            return _kGreen.withValues(alpha: _isDark ? 0.32 : 0.10);
+          }
+          return AppColors.primaryOrange
+              .withValues(alpha: _isDark ? 0.22 : 0.08);
+        }
         return rowBg;
       }
 
@@ -11023,13 +12756,22 @@ class _SheetScreenState extends State<SheetScreen> {
       //  • Product/code set, no data→ show '0' for date IN/OUT cells
       //  • Otherwise                → show the stored value
       final bool rowIdentityBlank =
-          (row['Product Name'] ?? '').trim().isEmpty &&
+          (productKey == null ? '' : (row[productKey] ?? '')).trim().isEmpty &&
               _inventoryRowCode(row).trim().isEmpty;
       final String displayValue;
       if (rowIdentityBlank && (isTotalQty || isDateInOut)) {
         displayValue = '';
       } else if (!rowIdentityBlank && isDateInOut && value.isEmpty) {
         displayValue = '0';
+      } else if (!rowIdentityBlank &&
+          stockKey != null &&
+          colKey == stockKey &&
+          value.trim().isEmpty) {
+        // If Stock is blank, show Total Quantity so Stock never looks empty
+        // when the computed total is present.
+        displayValue = (totalQtyKey == null ? '' : (row[totalQtyKey] ?? ''))
+            .toString()
+            .trim();
       } else {
         displayValue = value;
       }
@@ -11064,26 +12806,81 @@ class _SheetScreenState extends State<SheetScreen> {
         child: Stack(
           children: [
             Container(
-              width: width,
+              width: cellWidth,
               height: rowHeight,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: bgColor(),
-                border: Border(
-                  right: BorderSide(color: Colors.grey[300]!, width: 1),
-                  bottom: BorderSide(color: Colors.grey[300]!, width: 1),
-                ),
+                border: customBorders != null
+                    ? Border(
+                        top: customBorders['top'] == true
+                            ? const BorderSide(color: Colors.black, width: 2)
+                            : BorderSide.none,
+                        right: customBorders['right'] == true
+                            ? const BorderSide(color: Colors.black, width: 2)
+                            : BorderSide(
+                                color: hasNote && !isCommentNote
+                                    ? discrepancyBorderColor
+                                    : gridBorderColor,
+                                width: 1,
+                              ),
+                        bottom: customBorders['bottom'] == true
+                            ? const BorderSide(color: Colors.black, width: 2)
+                            : BorderSide(
+                                color: hasNote && !isCommentNote
+                                    ? discrepancyBorderColor
+                                    : gridBorderColor,
+                                width: 1,
+                              ),
+                        left: customBorders['left'] == true
+                            ? const BorderSide(color: Colors.black, width: 2)
+                            : BorderSide.none,
+                      )
+                    : Border(
+                        right: BorderSide(
+                          color: hasNote && !isCommentNote
+                              ? discrepancyBorderColor
+                              : gridBorderColor,
+                          width: 1,
+                        ),
+                        bottom: BorderSide(
+                          color: hasNote && !isCommentNote
+                              ? discrepancyBorderColor
+                              : gridBorderColor,
+                          width: 1,
+                        ),
+                      ),
               ),
               child: isEditing
                   ? TextField(
                       controller: _editController,
                       focusNode: _focusNode,
                       autofocus: true,
-                      textAlign: TextAlign.center,
+                      textAlign: align ?? TextAlign.center,
                       keyboardType: isDateInOut
                           ? const TextInputType.numberWithOptions(signed: false)
                           : TextInputType.text,
-                      style: const TextStyle(fontSize: 12),
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        color: customTextColor ??
+                            (totalQtyFgColor ??
+                                (autoCalc
+                                    ? (_isDark
+                                        ? scheme.primary
+                                        : AppColors.primaryBlue)
+                                    : (_isDark
+                                        ? scheme.onSurface
+                                        : Colors.black87))),
+                        fontWeight: fmts.contains('bold')
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                        fontStyle: fmts.contains('italic')
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                        decoration: fmts.contains('underline')
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                      ),
                       decoration: const InputDecoration(
                         border: InputBorder.none,
                         isDense: true,
@@ -11094,17 +12891,43 @@ class _SheetScreenState extends State<SheetScreen> {
                         _saveEdit();
                       },
                     )
-                  : Text(
-                      displayValue,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: totalQtyFgColor ??
-                            (autoCalc ? AppColors.primaryBlue : Colors.black87),
-                        fontWeight:
-                            autoCalc ? FontWeight.w600 : FontWeight.normal,
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 6),
+                      child: Align(
+                        alignment: cellAlign,
+                        child: Text(
+                          displayValue,
+                          style: TextStyle(
+                            fontSize: fontSize,
+                            color: customTextColor ??
+                                (totalQtyFgColor ??
+                                    (autoCalc
+                                        ? (_isDark
+                                            ? scheme.primary
+                                            : AppColors.primaryBlue)
+                                        : (_isDark
+                                            ? scheme.onSurface
+                                            : Colors.black87))),
+                            fontWeight: fmts.contains('bold')
+                                ? FontWeight.bold
+                                : (autoCalc
+                                    ? FontWeight.w600
+                                    : FontWeight.normal),
+                            fontStyle: fmts.contains('italic')
+                                ? FontStyle.italic
+                                : FontStyle.normal,
+                            decoration: fmts.contains('underline')
+                                ? TextDecoration.underline
+                                : TextDecoration.none,
+                          ),
+                          overflow: isMerged
+                              ? TextOverflow.visible
+                              : TextOverflow.ellipsis,
+                          maxLines: isMerged ? null : 1,
+                          textAlign: align ?? TextAlign.center,
+                        ),
                       ),
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
                     ),
             ),
             if (isActiveCell && !isEditing && colIdx >= 0)
@@ -11113,7 +12936,7 @@ class _SheetScreenState extends State<SheetScreen> {
                   child: Container(
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: AppColors.primaryBlue,
+                        color: _isDark ? scheme.primary : AppColors.primaryBlue,
                         width: 2,
                       ),
                     ),
@@ -11216,18 +13039,26 @@ class _SheetScreenState extends State<SheetScreen> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: isRowSelected
-                      ? const Color(0xFF4472C4)
-                      : const Color(0xFFF5F5F5),
+                      ? (_isDark
+                          ? scheme.primaryContainer
+                          : const Color(0xFF4472C4))
+                      : (_isDark
+                          ? scheme.surfaceContainerHighest
+                          : const Color(0xFFF5F5F5)),
                   border: Border(
-                    right: BorderSide(color: Colors.grey[400]!, width: 1),
-                    bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+                    right: BorderSide(color: rowNumberBorderColor, width: 1),
+                    bottom: BorderSide(color: gridBorderColor, width: 1),
                   ),
                 ),
                 child: Text(
                   '${displayRowNumber ?? (rowIndex + 1)}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isRowSelected ? Colors.white : Colors.grey[600],
+                    color: isRowSelected
+                        ? (_isDark ? scheme.onSurface : Colors.white)
+                        : (_isDark
+                            ? scheme.onSurfaceVariant
+                            : Colors.grey[600]),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -11279,7 +13110,10 @@ class _SheetScreenState extends State<SheetScreen> {
       cells.add(dataCell(
         colKey: col,
         width: colWidthForKey(col),
-        editable: isAdminOrEditor,
+        editable: isAdminOrEditor &&
+            col != _kInventoryCommentCol &&
+            col != _kInventoryNoteTypeCol &&
+            col != _kInventoryNoteTitleCol,
       ));
     }
 
@@ -11332,7 +13166,56 @@ class _SheetScreenState extends State<SheetScreen> {
       ));
     }
 
-    return RepaintBoundary(child: Row(children: cells));
+    final rowWidget = Row(children: cells);
+    if (!hasNote) {
+      return RepaintBoundary(child: rowWidget);
+    }
+
+    final rowLabel = displayRowNumber ?? (rowIndex + 1);
+    final productName =
+        (productKey == null ? '' : (_data[rowIndex][productKey] ?? ''))
+            .toString()
+            .trim();
+    final headerBase = isCommentNote ? 'Comment' : 'Discrepancy Notice';
+    final header =
+        noteTitle.isNotEmpty ? '$headerBase — $noteTitle' : headerBase;
+    final typeLabel = isCommentNote ? 'Comment' : 'Discrepancy';
+    final tooltipMessage = [
+      header,
+      'Type: $typeLabel',
+      if (productName.isNotEmpty) 'Product: $productName',
+      'Row: $rowLabel',
+      '',
+      noteBody.isEmpty ? 'No notes provided.' : noteBody,
+      '',
+      'Tip: Right-click a cell in this row to edit or remove.',
+    ].join('\n');
+
+    return RepaintBoundary(
+      child: Tooltip(
+        message: tooltipMessage,
+        waitDuration: const Duration(milliseconds: 200),
+        child: isCommentNote
+            ? rowWidget
+            : Stack(
+                children: [
+                  rowWidget,
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: AppColors.primaryOrange,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════
@@ -11566,13 +13449,13 @@ class _SheetScreenState extends State<SheetScreen> {
   //  Sheet Tabs at Bottom
   // ═══════════════════════════════════════════════════════
   Widget _buildSheetTabs() {
-    final tabBarBg = _isDark ? const Color(0xFF0F172A) : Colors.grey[100]!;
-    final tabDivider = _isDark ? const Color(0xFF334155) : Colors.grey[300]!;
-    final tabInnerDivider =
-        _isDark ? const Color(0xFF1F2937) : Colors.grey[200]!;
-    final activeTabBg = _isDark ? const Color(0xFF111827) : Colors.white;
-    final inactiveTabText =
-        _isDark ? const Color(0xFF94A3B8) : Colors.grey[600]!;
+    final scheme = Theme.of(context).colorScheme;
+    final tabBarBg = scheme.surfaceContainerHighest;
+    final tabDivider = scheme.outlineVariant;
+    final tabInnerDivider = scheme.outlineVariant.withValues(alpha: 0.7);
+    final activeTabBg = scheme.surface;
+    final inactiveTabText = scheme.onSurfaceVariant;
+    final activeTabText = scheme.onSurface;
     // Build tab list from loaded sheets, highlighting current
     final visibleSheets = _sheets.take(10).toList();
     return Container(
@@ -11596,7 +13479,7 @@ class _SheetScreenState extends State<SheetScreen> {
                 width: 30,
                 height: 34,
                 alignment: Alignment.center,
-                child: Icon(Icons.add, size: 16, color: inactiveTabText),
+                child: Icon(Icons.add, size: 16, color: scheme.onSurface),
               ),
             ),
           Container(width: 1, height: 34, color: tabDivider),
@@ -11631,8 +13514,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         fontSize: 12,
                         fontWeight:
                             isActive ? FontWeight.w600 : FontWeight.w400,
-                        color:
-                            isActive ? AppColors.primaryBlue : inactiveTabText,
+                        color: isActive ? activeTabText : inactiveTabText,
                       ),
                     ),
                   ),
@@ -11950,7 +13832,7 @@ class _SheetScreenState extends State<SheetScreen> {
                         color: isColSelected ? AppColors.lightBlue : headerBg,
                       ),
                       child: Text(
-                        entry.value,
+                        _displayColumnName(entry.value),
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
@@ -13457,6 +15339,10 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final borderColor = widget.isYou
+        ? scheme.primary
+        : (widget.isEditing ? scheme.tertiary : scheme.outlineVariant);
     return MouseRegion(
       onEnter: (event) {
         _hovered = true;
@@ -13480,16 +15366,14 @@ class _ActiveUserBubbleState extends State<_ActiveUserBubble> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: widget.isYou
-                  ? const Color(0xFF2563EB)
-                  : (widget.isEditing ? const Color(0xFF22C55E) : Colors.white),
+              color: borderColor,
               width: widget.isYou ? 2.4 : 1.8,
             ),
             boxShadow: [
               BoxShadow(
                 color: widget.isEditing
-                    ? const Color(0x3322C55E)
-                    : const Color(0x1A000000),
+                    ? scheme.tertiary.withValues(alpha: 0.22)
+                    : Colors.black.withValues(alpha: 0.10),
                 blurRadius: 6,
                 spreadRadius: widget.isEditing ? 0.5 : 0,
                 offset: const Offset(0, 1),

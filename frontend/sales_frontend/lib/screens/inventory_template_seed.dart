@@ -2705,5 +2705,8 @@ final List<Map<String, String>> kInventoryTrackerSeedRows =
   out.remove('Maintaining');
   out['Maintaining Qty'] = qty;
   out['Maintaining Unit'] = unit;
+  out.putIfAbsent('Comment', () => '');
+  out.putIfAbsent('Note Type', () => '');
+  out.putIfAbsent('Note Title', () => '');
   return out;
 }).toList(growable: false);

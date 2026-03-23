@@ -1,6 +1,54 @@
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const path = require('path');
 const fs = require('fs');
+
+const indexToExcelCol = (index) => {
+  let n = index + 1;
+  let col = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    col = String.fromCharCode(65 + rem) + col;
+    n = Math.floor((n - 1) / 26);
+  }
+  return col;
+};
+
+const worksheetToAoa = (worksheet, { defval = '' } = {}) => {
+  if (!worksheet) return [];
+  const maxCols = Math.max(
+    worksheet.columnCount || 0,
+    worksheet.getRow(1)?.cellCount || 0
+  );
+  const rows = [];
+  worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    const rowArr = [];
+    for (let c = 1; c <= maxCols; c++) {
+      const cell = row.getCell(c);
+      const value = cell?.value;
+
+      if (value === null || value === undefined) {
+        rowArr.push(defval);
+        continue;
+      }
+
+      if (typeof value === 'object') {
+        if (value.richText) {
+          rowArr.push(value.richText.map((t) => t.text).join(''));
+        } else if (value.formula !== undefined) {
+          rowArr.push(value.result ?? defval);
+        } else if (value.text !== undefined) {
+          rowArr.push(value.text);
+        } else {
+          rowArr.push(cell.text ?? String(value));
+        }
+      } else {
+        rowArr.push(value);
+      }
+    }
+    rows[rowNumber - 1] = rowArr;
+  });
+  return rows;
+};
 
 /**
  * Excel Service - Handles Excel file parsing and export
@@ -14,18 +62,11 @@ const excelService = {
    */
   async parseExcel(filePath, columnMapping = {}) {
     try {
-      // Read the workbook
-      const workbook = XLSX.readFile(filePath);
-      
-      // Get first sheet
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      
-      // Convert to JSON (array of objects)
-      const rawData = XLSX.utils.sheet_to_json(worksheet, { 
-        header: 1,
-        defval: ''  // Default value for empty cells
-      });
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+
+      const worksheet = workbook.worksheets[0];
+      const rawData = worksheetToAoa(worksheet, { defval: '' });
       
       if (rawData.length === 0) {
         return {
@@ -43,7 +84,7 @@ const excelService = {
       const columnMap = {};
       
       headers.forEach((header, index) => {
-        const excelCol = XLSX.utils.encode_col(index); // A, B, C, etc.
+        const excelCol = indexToExcelCol(index); // A, B, C, etc.
         let fieldName;
         
         if (columnMapping[excelCol]) {
@@ -114,24 +155,15 @@ const excelService = {
    */
   async exportToExcel(filename, columns, data) {
     try {
-      // Create workbook
-      const workbook = XLSX.utils.book_new();
-      
-      // Prepare data without headers
-      const exportData = [];
-      
-      data.forEach(row => {
-        const rowData = columns.length > 0 
-          ? columns.map(col => row[col] ?? '')
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Data');
+
+      data.forEach((row) => {
+        const rowData = Array.isArray(columns) && columns.length > 0
+          ? columns.map((col) => row[col] ?? '')
           : Object.values(row);
-        exportData.push(rowData);
+        worksheet.addRow(rowData);
       });
-      
-      // Create worksheet
-      const worksheet = XLSX.utils.aoa_to_sheet(exportData);
-      
-      // Add to workbook
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
       
       // Generate output path
       const outputDir = path.join(__dirname, '../exports');
@@ -140,9 +172,8 @@ const excelService = {
       }
       
       const outputPath = path.join(outputDir, `${filename}_${Date.now()}.xlsx`);
-      
-      // Write file
-      XLSX.writeFile(workbook, outputPath);
+
+      await workbook.xlsx.writeFile(outputPath);
       
       return outputPath;
       
@@ -160,10 +191,10 @@ const excelService = {
    */
   async validateStructure(filePath, requiredColumns = []) {
     try {
-      const workbook = XLSX.readFile(filePath);
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+      const worksheet = workbook.worksheets[0];
+      const rawData = worksheetToAoa(worksheet, { defval: '' });
       
       if (rawData.length === 0) {
         return { valid: false, error: 'File is empty' };
