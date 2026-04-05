@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:provider/provider.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 import '../providers/auth_provider.dart';
@@ -61,6 +62,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedIndex = 0;
   bool _sidebarExpanded = true;
   int _pendingEditRequestCount = 0;
+  Timer? _pendingEditRequestRefreshDebounce;
+  int _pendingEditRequestRefreshToken = 0;
+  bool _adminEditRequestModalOpen = false;
   final TextEditingController _headerSearchCtrl = TextEditingController();
   final FocusNode _headerSearchFocus = FocusNode();
   final FocusNode _shortcutsFocus =
@@ -121,29 +125,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Works even when the Sheets tab (SheetScreen) is unmounted.
     SocketService.instance.onAdminEditNotification = (data) {
       if (!mounted) return;
+      final wasZero = _pendingEditRequestCount == 0;
       setState(() => _pendingEditRequestCount++);
-      final requester = data['requested_by'] as String? ?? 'Someone';
-      final cellRef = data['cell_ref'] as String? ?? '';
-      AppModal.show(
-        context,
-        title: 'Edit request',
-        content: Text('$requester requests edit access for cell $cellRef'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              if (!mounted) return;
-              setState(() => _selectedIndex = _editRequestsTabIndex);
-            },
-            child: const Text('Review'),
-          ),
-        ],
-      );
+      _schedulePendingEditRequestCountRefresh();
+
+      // Show a single modal for the whole pending batch.
+      // Additional incoming requests only update the badge count.
+      if (!wasZero) return;
+      if (_selectedIndex == _editRequestsTabIndex) return;
+      if (_adminEditRequestModalOpen) return;
+      _adminEditRequestModalOpen = true;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        try {
+          await AppModal.show(
+            context,
+            title: 'Edit requests',
+            content: Text(
+              'You have $_pendingEditRequestCountLabel pending edit request(s).',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  if (!mounted) return;
+                  setState(() => _selectedIndex = _editRequestsTabIndex);
+                },
+                child: const Text('Review'),
+              ),
+            ],
+          );
+        } finally {
+          _adminEditRequestModalOpen = false;
+        }
+      });
     };
+
+    // Keep badge accurate when requests are approved/rejected (by anyone).
+    SocketService.instance.onAdminEditResolved = (_) {
+      if (!mounted) return;
+      _schedulePendingEditRequestCountRefresh();
+    };
+
+    // Initial load: show the existing pending count (not just new notifications).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _schedulePendingEditRequestCountRefresh(delay: Duration.zero);
+    });
+  }
+
+  String get _pendingEditRequestCountLabel {
+    final v = _pendingEditRequestCount;
+    if (v <= 0) return '0';
+    if (v > 99) return '99+';
+    return '$v';
+  }
+
+  void _schedulePendingEditRequestCountRefresh({Duration? delay}) {
+    _pendingEditRequestRefreshDebounce?.cancel();
+    _pendingEditRequestRefreshDebounce =
+        Timer(delay ?? const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _refreshPendingEditRequestCount();
+    });
+  }
+
+  Future<void> _refreshPendingEditRequestCount() async {
+    final token = ++_pendingEditRequestRefreshToken;
+    try {
+      final pending = await ApiService.getAllEditRequests(status: 'pending');
+      if (!mounted || token != _pendingEditRequestRefreshToken) return;
+      setState(() => _pendingEditRequestCount = pending.length);
+    } catch (_) {
+      // Ignore: badge will update on next event/refresh.
+    }
   }
 
   Future<void> _loadSheetFoldersForSearch() async {
@@ -165,6 +225,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     // Remove the persistent callback so it doesn't outlive this widget.
     SocketService.instance.onAdminEditNotification = null;
+    SocketService.instance.onAdminEditResolved = null;
+    _pendingEditRequestRefreshDebounce?.cancel();
     _headerSearchCtrl.dispose();
     _headerSearchFocus.dispose();
     _shortcutsFocus.dispose();
@@ -412,9 +474,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     setState(() {
       _selectedIndex = target.tabIndex;
-      if (target.tabIndex == _editRequestsTabIndex) {
-        _pendingEditRequestCount = 0;
-      }
       if (target.tabIndex == 0 && target.dashboardSectionId != null) {
         _pendingDashboardSectionId = target.dashboardSectionId;
         _dashboardJumpToken++;
@@ -456,14 +515,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onNavigateToEditRequests: () {
           setState(() {
             _selectedIndex = _editRequestsTabIndex;
-            _pendingEditRequestCount = 0;
           });
         },
       ),
       if (!isViewer) const FileListScreen(),
       const AuditHistoryScreen(),
       if (isAdmin) const UserManagementScreen(),
-      if (isAdmin) const EditRequestsScreen(),
+      if (isAdmin)
+        EditRequestsScreen(
+          onRequestsChanged: () {
+            if (!mounted) return;
+            _schedulePendingEditRequestCountRefresh(delay: Duration.zero);
+          },
+        ),
       if (isAdmin) const SettingsScreen(),
     ];
 
@@ -1198,9 +1262,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     item.index == 0 && _selectedIndex != item.index;
                 setState(() {
                   _selectedIndex = item.index;
-                  if (item.label == 'Edit Requests') {
-                    _pendingEditRequestCount = 0;
-                  }
                 });
 
                 if (shouldAutoRefreshDashboard) {
@@ -1246,11 +1307,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ? MainAxisAlignment.start
                             : MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            item.icon,
-                            color:
-                                selected ? _kSidebarActiveBlue : inactiveColor,
-                            size: 20,
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Icon(
+                                item.icon,
+                                color: selected
+                                    ? _kSidebarActiveBlue
+                                    : inactiveColor,
+                                size: 20,
+                              ),
+                              if (!canShowLabel &&
+                                  item.label == 'Edit Requests' &&
+                                  _pendingEditRequestCount > 0)
+                                Positioned(
+                                  right: -6,
+                                  top: -6,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange[400],
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      _pendingEditRequestCountLabel,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                           if (canShowLabel) ...[
                             const SizedBox(width: 12),
@@ -1280,7 +1370,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(
-                                  '$_pendingEditRequestCount',
+                                  _pendingEditRequestCountLabel,
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 10,

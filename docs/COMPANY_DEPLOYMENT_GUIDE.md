@@ -9,6 +9,50 @@ This guide deploys the Sales & Inventory Management System **inside your company
 
 ---
 
+1) Make the Server PC IP static (2 good options)
+
+Option A (recommended): DHCP Reservation on the router
+
+On your router / DHCP server, create a “Reservation” that maps the Server PC’s MAC address → a fixed IP (example 192.168.1.10).
+This keeps the PC on automatic networking, but the IP never changes.
+After saving it, reboot the Server PC or run ipconfig /release then ipconfig /renew.
+Option B: Manually set a static IP on the Server PC (Windows)
+
+On the Server PC: Control Panel → Network and Internet → Network and Sharing Center → Change adapter settings
+Right‑click your network adapter → Properties → select “Internet Protocol Version 4 (TCP/IPv4)” → Properties
+Choose “Use the following IP address” and fill:
+IP address: e.g. 192.168.1.10
+Subnet mask: usually 255.255.255.0
+Default gateway: usually your router, e.g. 192.168.1.1
+DNS: your router (192.168.1.1) or your company DNS
+Click OK, then confirm with ipconfig.
+Tip: Pick an IP outside your DHCP pool (or coordinate with IT) so you don’t accidentally conflict with another device.
+
+2) Open port 3000 on the Server PC (Windows Firewall)
+
+This means allowing inbound connections to the backend service on TCP port 3000.
+
+GUI method
+
+Start Menu → search “Windows Defender Firewall with Advanced Security”
+Inbound Rules → New Rule…
+Rule Type: Port
+TCP → Specific local ports: 3000
+Action: Allow the connection
+Profile: typically Private (and Domain if this is a domain network); avoid Public unless you know you need it
+Name: SGCO Backend 3000
+PowerShell method (run as Administrator)
+
+New-NetFirewallRule -DisplayName "SGCO Backend 3000" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
+3) Quick verification
+
+On the Server PC, start the backend (node server.js).
+From another PC on the same network, open in a browser:
+http://SERVER_IP:3000/api/status
+If that page doesn’t load, the usual causes are: wrong IP, firewall rule not applied to the right profile (Private vs Public), backend not running, or the backend only listening on localhost (yours should be on 0.0.0.0, so it’s typically fine).
+
+If you tell me your current Server PC IP (ipconfig output summary is enough) and whether your network is “Private” or “Public” in Windows, I can give the exact best choice (reservation vs manual) and the right firewall profile.
+
 ## 0) Quick path (most common)
 
 If you just want the simplest way to go live:
@@ -38,8 +82,8 @@ If you just want the simplest way to go live:
     - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 - Frontend (Flutter Windows desktop)
   - API endpoints are compiled in from Dart defines in [frontend/sales_frontend/lib/config/constants.dart](../frontend/sales_frontend/lib/config/constants.dart):
-    - `API_BASE_URL` (example: `http://<SERVER_IP>:3000/api`)
-    - `WS_BASE_URL`  (example: `http://<SERVER_IP>:3000`)
+      - `API_BASE_URL` (example: `http://SERVER_IP:3000/api`)
+      - `WS_BASE_URL`  (example: `http://SERVER_IP:3000`)
 
 ### Admin vs other users
 You do **not** need a separate “admin app” vs “user app”. You can ship **one** Windows app to everyone.
@@ -69,10 +113,13 @@ Fill this in first (it prevents rework later):
 Tip: If you will restore [db/DBSGCO.sql](../db/DBSGCO.sql), use `synergygraphics` as the DB user to avoid owner/grant errors.
 
 ### Placeholders used in this guide
-- `<SERVER_IP>`: your Server PC IP address (example: `192.168.1.10`)
-- `<APP_DB_USER>`: the PostgreSQL user the backend will use (example: `synergygraphics`)
-- `<STRONG_PASSWORD_HERE>` / `<APP_DB_PASSWORD>`: your chosen DB password
-- `<ADMIN_PASSWORD>`: the admin login password you are testing with
+- `SERVER_IP`: your Server PC IP address (example: `192.168.1.10`)
+- `APP_DB_USER`: the PostgreSQL user the backend will use (example: `synergygraphics`)
+- `APP_DB_PASSWORD`: your chosen DB password
+- `ADMIN_PASSWORD`: the admin login password you are testing with
+
+PowerShell note:
+- Don’t copy placeholders with `<` `>` into PowerShell. Replace the placeholder text with your real values.
 
 Security: never paste real passwords into shared docs/chats.
 
@@ -117,14 +164,14 @@ Option A (psql — recommended for repeatability):
 -- Otherwise you can use: sgco_app
 
 -- 1) Create DB user for the backend
-CREATE USER <APP_DB_USER> WITH PASSWORD '<STRONG_PASSWORD_HERE>';
+CREATE USER APP_DB_USER WITH PASSWORD 'APP_DB_PASSWORD';
 
 -- 2) Create database
-CREATE DATABASE sales_system OWNER <APP_DB_USER>;
+CREATE DATABASE sales_system OWNER APP_DB_USER;
 
 -- 3) (Optional) tighten defaults
 REVOKE ALL ON DATABASE sales_system FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE sales_system TO <APP_DB_USER>;
+GRANT CONNECT, TEMPORARY ON DATABASE sales_system TO APP_DB_USER;
 ```
 
 ### 3.4 Choose your database setup method
@@ -173,7 +220,7 @@ Before you run it:
 2. Create the required role:
 
 ```sql
-CREATE USER synergygraphics WITH PASSWORD '<STRONG_PASSWORD_HERE>';
+CREATE USER synergygraphics WITH PASSWORD 'YOUR_STRONG_PASSWORD';
 CREATE DATABASE sales_system OWNER synergygraphics;
 ```
 
@@ -218,7 +265,7 @@ If you want to manage PostgreSQL from your laptop (pgAdmin/psql) instead of only
 3. Edit `pg_hba.conf` and add a rule that only allows your company network:
 
 ```conf
-host    sales_system     <APP_DB_USER>     192.168.1.0/24     scram-sha-256
+host    sales_system     APP_DB_USER     192.168.1.0/24     scram-sha-256
 ```
 
 4. Restart PostgreSQL service.
@@ -249,39 +296,89 @@ Important:
 On the laptop (where the current PostgreSQL DB lives):
 
 1. Stop users from using the app (avoid writes during backup).
-2. Create a compressed dump (custom format):
+2. Create a backup file that includes **schema + data**.
+
+#### Recommended: one portable backup file (`.dump`)
+This is the safest option for transferring to another PC.
 
 ```powershell
-pg_dump -h localhost -p 5432 -U <LAPTOP_DB_USER> -d sales_system -Fc -f sales_system_backup.dump
+pg_dump -h localhost -p 5432 -U YOUR_LAPTOP_DB_USER -d sales_system -Fc -f sales_system_backup.dump
 ```
 
 Recommended (avoids restore errors from owners/privileges when moving between PCs):
 
 ```powershell
-pg_dump -h localhost -p 5432 -U <LAPTOP_DB_USER> -d sales_system -Fc --no-owner --no-privileges -f sales_system_backup.dump
+pg_dump -h localhost -p 5432 -U YOUR_LAPTOP_DB_USER -d sales_system -Fc --no-owner --no-privileges -f sales_system_backup.dump
+```
+
+Step-by-step notes for this method:
+- [OFFICE_DB_MIGRATION_NOTES.md](OFFICE_DB_MIGRATION_NOTES.md)
+
+#### Alternative: a single SQL file (schema + data in SQL)
+If you specifically want “schema queries with data” in one readable file:
+
+You can export this SQL file using **pgAdmin** (GUI):
+1. Right-click `sales_system` → **Backup…**
+2. Format: `Plain`
+3. In **Data Options**:
+   - Sections: `Pre-data` ON, `Data` ON, `Post-data` ON
+   - Type of objects: `Only data` OFF, `Only schemas` OFF
+   - Do not save (recommended when moving to a different PC): `Owner` ON, `Privileges` ON
+
+```powershell
+pg_dump -h localhost -p 5432 -U YOUR_LAPTOP_DB_USER -d sales_system --no-owner --no-privileges -f sales_system_full.sql
+```
+
+Optional flags you may want:
+- Add `--clean --if-exists` to drop objects before recreating them during restore.
+- Add `--create` to include `CREATE DATABASE` in the SQL file.
+
+Example (single SQL that can recreate everything):
+
+```powershell
+pg_dump -h localhost -p 5432 -U YOUR_LAPTOP_DB_USER -d sales_system --no-owner --no-privileges --clean --if-exists --create -f sales_system_full.sql
 ```
 
 If you don’t have `pg_dump` in PATH, run it from:
-- `C:\Program Files\PostgreSQL\<version>\bin\pg_dump.exe`
+- `C:\Program Files\PostgreSQL\YOUR_VERSION\bin\pg_dump.exe`
+
+Step-by-step notes for this method:
+- [OFFICE_DB_MIGRATION_SQL_NOTES.md](OFFICE_DB_MIGRATION_SQL_NOTES.md)
 
 ### 4.3 Transfer the backup file to the server PC
-Copy `sales_system_backup.dump` to the server using one of:
+Copy your export file to the server using one of:
 - USB drive
 - Shared folder on LAN
 - Secure copy method used by your company
+
+File to copy:
+- If you used `.dump`: `sales_system_backup.dump`
+- If you used `.sql`: `sales_system_full.sql`
 
 ### 4.4 On the server PC: restore
 1. Create the DB and user (if not already created):
 
 ```sql
-CREATE USER <APP_DB_USER> WITH PASSWORD '<STRONG_PASSWORD_HERE>';
-CREATE DATABASE sales_system OWNER <APP_DB_USER>;
+CREATE USER APP_DB_USER WITH PASSWORD 'APP_DB_PASSWORD';
+CREATE DATABASE sales_system OWNER APP_DB_USER;
 ```
 
 2. Restore the dump into the server database:
 
 ```powershell
-pg_restore -h localhost -p 5432 -U <APP_DB_USER> -d sales_system --clean --if-exists sales_system_backup.dump
+pg_restore -h localhost -p 5432 -U APP_DB_USER -d sales_system --clean --if-exists sales_system_backup.dump
+```
+
+If you exported a **plain SQL** file instead (`sales_system_full.sql`), restore it with `psql`:
+
+```powershell
+# If the SQL was created WITHOUT --create, restore into an existing DB:
+psql -h localhost -p 5432 -U postgres -d sales_system -v ON_ERROR_STOP=1 -f sales_system_full.sql
+```
+
+```powershell
+# If the SQL was created WITH --create, run it while connected to any DB (commonly postgres):
+psql -h localhost -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 -f sales_system_full.sql
 ```
 
 Notes:
@@ -316,7 +413,7 @@ node server.js
 ```
 
 Confirm from a client PC browser:
-- `http://<SERVER_IP>:3000/api/status`
+- `http://SERVER_IP:3000/api/status`
 
 ### 5.3 Run backend as a Windows service (recommended)
 Two common options:
@@ -366,8 +463,8 @@ cd frontend\sales_frontend
 flutter pub get
 
 flutter build windows --release `
-  --dart-define=API_BASE_URL=http://<SERVER_IP>:3000/api `
-  --dart-define=WS_BASE_URL=http://<SERVER_IP>:3000
+   --dart-define=API_BASE_URL=http://SERVER_IP:3000/api `
+   --dart-define=WS_BASE_URL=http://SERVER_IP:3000
 ```
 
 Resulting build folder (typical):
@@ -417,8 +514,8 @@ Quick validation sequence:
 
 ### 8.1 Backend smoke checks
 From any PC on the network:
-- `GET http://<SERVER_IP>:3000/api/status`
-- `GET http://<SERVER_IP>:3000/api/db-test`
+- `GET http://SERVER_IP:3000/api/status`
+- `GET http://SERVER_IP:3000/api/db-test`
 
 ### 8.2 Backend automated smoke test script
 The backend includes a basic smoke test:
@@ -428,9 +525,9 @@ Run it on the server PC (or any machine with Node 18+):
 
 ```powershell
 cd C:\SGCO\backend
-$env:API_BASE = "http://<SERVER_IP>:3000/api"
+$env:API_BASE = "http://SERVER_IP:3000/api"
 $env:TEST_USERNAME = "admin"
-$env:TEST_PASSWORD = "<ADMIN_PASSWORD>"
+$env:TEST_PASSWORD = "YOUR_ADMIN_PASSWORD"
 
 node tests\folder_creation_smoke.js
 ```
@@ -470,7 +567,7 @@ Minimum backup plan:
 Example:
 
 ```powershell
-pg_dump -h localhost -p 5432 -U <APP_DB_USER> -d sales_system -Fc -f D:\Backups\sales_system_$(Get-Date -Format yyyyMMdd).dump
+pg_dump -h localhost -p 5432 -U APP_DB_USER -d sales_system -Fc -f D:\Backups\sales_system_$(Get-Date -Format yyyyMMdd).dump
 ```
 
 Also do this at least once:
@@ -490,7 +587,7 @@ Also do this at least once:
 ## 10) Troubleshooting quick map
 
 ### Frontend can’t connect
-- Confirm client can open `http://<SERVER_IP>:3000/api/status` in a browser
+- Confirm client can open `http://SERVER_IP:3000/api/status` in a browser
 - Rebuild the Flutter app with correct `API_BASE_URL` / `WS_BASE_URL`
 - Check Windows Firewall on the server allows inbound `3000`
 

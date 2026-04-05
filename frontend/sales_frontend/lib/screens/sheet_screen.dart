@@ -11382,11 +11382,9 @@ class _SheetScreenState extends State<SheetScreen> {
 
     socket.onEditRequestSubmitted = (data) {
       if (!mounted) return;
-      AppModal.showText(
-        context,
-        title: 'Notice',
-        message: 'Edit request submitted. Waiting for admin approval.',
-      );
+      // No modal here. The HTTP submit path already shows confirmation.
+      // Keeping this handler silent prevents duplicate dialogs if any caller
+      // still uses the socket-based submit flow.
     };
 
     // ── Real-time cell sync: apply a remote user’s cell edit instantly ──
@@ -11838,18 +11836,12 @@ class _SheetScreenState extends State<SheetScreen> {
           context,
           title: 'Invalid Amount',
           message:
-              'Request not submitted. Quantity cannot be negative and total quantity cannot be negative.',
+              'Request not submitted. Only whole numbers are allowed. IN/OUT must be 0 or more, and OUT cannot make total quantity negative.',
         );
         proposedCtrl.dispose();
         return;
       }
 
-      // Show immediate feedback so the user knows the request was sent.
-      AppModal.showText(
-        context,
-        title: 'Notice',
-        message: 'Sending edit request…',
-      );
       try {
         // HTTP is the reliable path — saves to DB and notifies admins via
         // socket even if the editor's own socket is momentarily reconnecting.
@@ -11858,15 +11850,6 @@ class _SheetScreenState extends State<SheetScreen> {
           rowNumber: row + 1,
           columnName: colName,
           cellReference: cellRef,
-          currentValue: currentVal,
-          proposedValue: proposedValue,
-        );
-        // Also emit via socket for instant delivery if already connected.
-        SocketService.instance.requestEdit(
-          sheetId: _currentSheet!.id,
-          rowNumber: row + 1,
-          columnName: colName,
-          cellRef: cellRef,
           currentValue: currentVal,
           proposedValue: proposedValue,
         );
@@ -13177,12 +13160,24 @@ class _SheetScreenState extends State<SheetScreen> {
         }
 
         // Base stock should come from the Stock column.
-        // Never use Total Quantity as the base when date entries exist,
+        // Never use Total Quantity as the running base when date entries exist,
         // otherwise totals will compound on every recalculation.
+        // If Stock is blank but Total Quantity exists, seed Stock once from Total
+        // Quantity to establish a stable baseline.
         final stockRaw = readCell(stockKey);
         final totalRaw = readCell(totalKey);
+
+        if (hasAnyDateEntry &&
+          stockKey != null &&
+          row.containsKey(stockKey) &&
+          stockRaw.isEmpty &&
+          totalRaw.isNotEmpty) {
+          row[stockKey] = totalRaw;
+        }
+
+        final seededStockRaw = readCell(stockKey);
         final baseRaw =
-            stockRaw.isNotEmpty ? stockRaw : (!hasAnyDateEntry ? totalRaw : '');
+          seededStockRaw.isNotEmpty ? seededStockRaw : (!hasAnyDateEntry ? totalRaw : '');
         final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
 
         // If there's no base stock and no date entries, treat as "no data".
@@ -13275,11 +13270,26 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final stockRaw = readCell(stockKey);
     final totalRaw = readCell(totalKey);
-    final baseRaw =
-        stockRaw.isNotEmpty ? stockRaw : (!hasAnyDateEntry ? totalRaw : '');
-    final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
-
     final updates = <String, String>{};
+
+    // If date entries exist but Stock is blank and Total Quantity exists, seed Stock
+    // once from Total Quantity to establish a stable baseline.
+    var effectiveStockRaw = stockRaw;
+    if (hasAnyDateEntry &&
+        stockKey != null &&
+        row.containsKey(stockKey) &&
+        effectiveStockRaw.isEmpty &&
+        totalRaw.isNotEmpty) {
+      effectiveStockRaw = totalRaw;
+      if ((row[stockKey] ?? '') != totalRaw) {
+        updates[stockKey] = totalRaw;
+      }
+    }
+
+    final baseRaw = effectiveStockRaw.isNotEmpty
+        ? effectiveStockRaw
+        : (!hasAnyDateEntry ? totalRaw : '');
+    final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
 
     if (baseRaw.isEmpty && !hasAnyDateEntry) {
       if (stockKey != null &&
@@ -13504,21 +13514,12 @@ class _SheetScreenState extends State<SheetScreen> {
     final stockRaw = (stockKey == null ? '' : (row[stockKey] ?? '')).trim();
     final totalRaw = (totalKey == null ? '' : (row[totalKey] ?? '')).trim();
 
-    bool hasAnyDateEntry({required bool useProposedOut}) {
-      for (final c in _columns) {
-        if (!c.startsWith('DATE:')) continue;
-        final v = (c == colName && useProposedOut)
-            ? proposedTrimmed
-            : (row[c] ?? '').toString().trim();
-        if (v.isNotEmpty) return true;
-      }
-      return false;
-    }
-
-    int baseStock({required bool useProposedOut}) {
-      final anyDates = hasAnyDateEntry(useProposedOut: useProposedOut);
-      final baseRaw =
-          stockRaw.isNotEmpty ? stockRaw : (!anyDates ? totalRaw : '');
+    int baseStock() {
+      // If Stock is blank but Total Quantity exists, treat Total Quantity as the
+      // baseline input (common in older sheets that didn't keep Stock updated).
+      final baseRaw = stockRaw.isNotEmpty
+          ? stockRaw
+          : (totalRaw.isNotEmpty ? totalRaw : '');
       return int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
     }
 
@@ -13531,9 +13532,9 @@ class _SheetScreenState extends State<SheetScreen> {
 
     final currentOut = _parseInventoryQtyOrZero(row[colName]);
     final beforeTotal =
-        baseStock(useProposedOut: false) + (totalsBefore['net'] ?? 0);
+      baseStock() + (totalsBefore['net'] ?? 0);
     final afterTotal =
-        baseStock(useProposedOut: true) + (totalsAfter['net'] ?? 0);
+      baseStock() + (totalsAfter['net'] ?? 0);
 
     if (afterTotal >= 0) return false;
 
@@ -13555,7 +13556,7 @@ class _SheetScreenState extends State<SheetScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Invalid Amount'),
           content: const Text(
-            'Invalid amount. Only whole numbers are allowed, and total quantity cannot be negative. Value is set to 0.',
+            'Invalid amount. Only whole numbers are allowed. IN/OUT must be 0 or more, and OUT cannot make total quantity negative. Value is set to 0.',
           ),
           actions: [
             ElevatedButton(

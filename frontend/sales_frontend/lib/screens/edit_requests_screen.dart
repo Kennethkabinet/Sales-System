@@ -13,7 +13,9 @@ const Color _kBorder = AppColors.border;
 const Color _kGray = AppColors.grayText;
 
 class EditRequestsScreen extends StatefulWidget {
-  const EditRequestsScreen({super.key});
+  final VoidCallback? onRequestsChanged;
+
+  const EditRequestsScreen({super.key, this.onRequestsChanged});
 
   @override
   State<EditRequestsScreen> createState() => _EditRequestsScreenState();
@@ -92,25 +94,38 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
     final sheetId = req['sheet_id'] as int;
     try {
       // Uses HTTP route which now also emits socket events via collab handler
-      await ApiService.respondToEditRequest(
+      final resp = await ApiService.respondToEditRequest(
         sheetId: sheetId,
         requestId: id,
         approved: approved,
         rejectReason: approved ? null : 'Rejected by admin',
       );
-      // Also fire via socket so grant_temp_access reaches the editor immediately
-      // if the admin's socket is connected (singleton persists across pages).
-      SocketService.instance.resolveEditRequest(
-        requestId: id,
-        approved: approved,
-        rejectReason: approved ? null : 'Rejected by admin',
-      );
+
+      final updatedReq = resp['request'];
+      final updatedStatus = updatedReq is Map
+          ? (updatedReq['status']?.toString().toLowerCase())
+          : null;
+      final updatedRejectReason = updatedReq is Map
+          ? (updatedReq['reject_reason']?.toString())
+          : null;
+
+      // Server may force-reject an approval attempt if it would violate
+      // inventory rules (e.g. total quantity would become negative).
+      final effectiveApproved = updatedStatus == 'approved'
+          ? true
+          : (updatedStatus == 'rejected' ? false : approved);
+
       if (mounted) {
         await AppModal.showText(
           context,
-          title: approved ? 'Request approved' : 'Request rejected',
-          message: approved ? 'Request approved.' : 'Request rejected.',
+          title: effectiveApproved ? 'Request approved' : 'Request rejected',
+          message: effectiveApproved
+              ? 'Request approved.'
+              : (updatedRejectReason?.isNotEmpty == true
+                  ? updatedRejectReason!
+                  : 'Request rejected.'),
         );
+        widget.onRequestsChanged?.call();
         _load();
       }
     } catch (e) {
@@ -153,6 +168,7 @@ class _EditRequestsScreenState extends State<EditRequestsScreen> {
           title: 'Request deleted',
           message: 'Request deleted.',
         );
+        widget.onRequestsChanged?.call();
         _load();
       }
     } catch (e) {

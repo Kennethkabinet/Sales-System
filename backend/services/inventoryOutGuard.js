@@ -148,8 +148,8 @@ function _baseStock(columns, rowData, { overrideOutCol, overrideOutRaw }) {
   const stockRaw = stockKey ? String(rowData[stockKey] ?? '').trim() : '';
   const totalRaw = totalKey ? String(rowData[totalKey] ?? '').trim() : '';
 
-  const anyDates = _hasAnyDateEntry(columns, rowData, { overrideOutCol, overrideOutRaw });
-  const baseRaw = stockRaw !== '' ? stockRaw : anyDates ? '' : totalRaw;
+  // If Stock is blank but Total Quantity exists, treat Total Quantity as the baseline.
+  const baseRaw = stockRaw !== '' ? stockRaw : totalRaw;
 
   return _parseQtyOrZero(baseRaw);
 }

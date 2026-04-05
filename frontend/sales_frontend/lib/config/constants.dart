@@ -37,11 +37,11 @@ class AppConfig {
 
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.254.131:3000/api',
+    defaultValue: 'http://192.168.1.3:3000/api',
   );
   static const String wsBaseUrl = String.fromEnvironment(
     'WS_BASE_URL',
-    defaultValue: 'http://192.168.254.131:3000',
+    defaultValue: 'http://192.168.1.3:3000',
   );
 
   // Timeouts

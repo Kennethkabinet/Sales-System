@@ -58,6 +58,10 @@ class SocketService {
   /// Requester/everyone gets the resolution (approved/rejected)
   Function(Map<String, dynamic>)? onEditRequestResolved;
 
+  /// Secondary persistent listener (DashboardScreen) for edit-request resolution
+  /// so the pending badge can refresh without interfering with per-screen handlers.
+  Function(Map<String, dynamic>)? onAdminEditResolved;
+
   /// Requester gets temporary cell access: { request_id, sheet_id, row_number, column_name, cell_ref, expires_at }
   Function(Map<String, dynamic>)? onGrantTempAccess;
 
@@ -186,8 +190,11 @@ class SocketService {
       onEditRequestNotification?.call(m);
       onAdminEditNotification?.call(m);
     });
-    _socket?.on('edit_request_resolved',
-        (data) => onEditRequestResolved?.call(_unwrap(data)));
+    _socket?.on('edit_request_resolved', (data) {
+      final m = _unwrap(data);
+      onEditRequestResolved?.call(m);
+      onAdminEditResolved?.call(m);
+    });
     _socket?.on(
         'grant_temp_access', (data) => onGrantTempAccess?.call(_unwrap(data)));
     _socket?.on('edit_request_submitted',
@@ -330,6 +337,7 @@ class SocketService {
     onEditRequestNotification = null;
     onAdminEditNotification = null;
     onEditRequestResolved = null;
+    onAdminEditResolved = null;
     onGrantTempAccess = null;
     onEditRequestSubmitted = null;
     onAuthRevoked = null;

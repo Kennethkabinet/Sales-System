@@ -2338,7 +2338,17 @@ router.put('/:id/edit-requests/:reqId', authenticate, async (req, res) => {
     // resolves via the REST API instead of through the WebSocket flow.
     const collab = req.app.get('collab');
     if (collab) {
-      collab.emitResolveEvents(result.rows[0], finalApproved, finalRejectReason, req.user.username);
+      try {
+        await collab.emitResolveEvents(
+          result.rows[0],
+          finalApproved,
+          finalRejectReason,
+          req.user.username,
+        );
+      } catch (emitErr) {
+        console.error('emitResolveEvents failed:', emitErr);
+        // Non-fatal: the DB status update succeeded. Don't fail the HTTP request.
+      }
     }
 
     res.json({ success: true, request: result.rows[0] });

@@ -45,25 +45,27 @@ class AuthProvider extends ChangeNotifier {
     return msg;
   }
 
-  /// Initialize auth state from stored token
+  /// Initialize auth state.
+  ///
+  /// Security/UX requirement: do NOT persist auth across app restarts.
+  /// The app must start logged-out when it is closed and opened again.
   Future<void> initialize() async {
     _isLoading = true;
 
     _setupAuthRevocationHandlers();
 
     try {
+      // Ensure any previously persisted token (from older versions) is removed.
       final prefs = await SharedPreferences.getInstance();
-      _token = prefs.getString('auth_token');
+      await prefs.remove('auth_token');
 
-      if (_token != null) {
-        ApiService.setAuthToken(_token);
-        _user = await ApiService.getCurrentUser();
-
-        // Connect to WebSocket
-        SocketService.instance.connect(_token!);
-      }
+      // Always start logged out.
+      _token = null;
+      _user = null;
+      ApiService.setAuthToken(null);
+      SocketService.instance.disconnect();
     } catch (e) {
-      // Token might be expired
+      // If storage isn't available, still ensure we're logged out.
       await _clearAuth();
     } finally {
       _isLoading = false;
@@ -86,10 +88,6 @@ class AuthProvider extends ChangeNotifier {
         _token = result.token;
         _user = result.user;
         _error = null;
-
-        // Store token
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth_token', _token!);
 
         // Set token for API calls
         ApiService.setAuthToken(_token);
@@ -134,8 +132,12 @@ class AuthProvider extends ChangeNotifier {
     ApiService.setAuthToken(null);
     SocketService.instance.disconnect();
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_token');
+    } catch (_) {
+      // Ignore storage errors; auth is in-memory only.
+    }
   }
 
   /// Clear error
@@ -217,9 +219,6 @@ class AuthProvider extends ChangeNotifier {
         _token = result.token;
         _user = result.user;
         _error = null;
-
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth_token', _token!);
 
         ApiService.setAuthToken(_token);
         SocketService.instance.connect(_token!);
