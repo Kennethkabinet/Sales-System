@@ -32,16 +32,16 @@ class AppColors {
 
 /// App configuration constants
 class AppConfig {
-  static const String appName = 'Synergy Graphics';
+  static const String appName = 'SGCO System';
   static const String appVersion = '1.0.0';
 
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.3.224:3000/api',
+    defaultValue: 'http://192.168.254.131:3000/api',
   );
   static const String wsBaseUrl = String.fromEnvironment(
     'WS_BASE_URL',
-    defaultValue: 'http://192.168.3.224:3000',
+    defaultValue: 'http://192.168.254.131:3000',
   );
 
   // Timeouts
@@ -87,6 +87,7 @@ class ApiEndpoints {
   // Audit
   static const String audit = '/audit';
   static const String auditSummary = '/audit/summary';
+  static const String auditClear = '/audit/clear';
 
   // Dashboard
   static const String dashboardStats = '/dashboard/stats';

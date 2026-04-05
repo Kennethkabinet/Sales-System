@@ -102,6 +102,11 @@ class _FileListScreenState extends State<FileListScreen> {
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).brightness == Brightness.dark
+                  ? const Color(0xFFD1D5DB)
+                  : null,
+            ),
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),

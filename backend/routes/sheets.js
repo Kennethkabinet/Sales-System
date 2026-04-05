@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+
+const { inventoryDateQtyEditWouldBeInvalid } = require('../services/inventoryOutGuard');
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { 
@@ -433,7 +435,7 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
 
     const looksLikeInventoryExport = (() => {
       if (rawData.length < 2) return false;
-      const hasProduct = header1.includes('Product Name');
+      const hasProduct = header1.includes('Material Name') || header1.includes('Product Name');
       const hasCode = header1.includes('QC Code') || header1.includes('QB Code');
       const hasMaintaining =
         header1.includes('Maintaining') ||
@@ -522,9 +524,10 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
     let dataRows;
 
     if (looksLikeInventoryExport) {
-      const codeCol = header1.includes('QC Code') ? 'QC Code' : 'QB Code';
-      const productIdx = header1.indexOf('Product Name');
-      const codeIdx = header1.indexOf(codeCol);
+      const productColInFile = header1.includes('Material Name') ? 'Material Name' : 'Product Name';
+      const codeColInFile = header1.includes('QB Code') ? 'QB Code' : 'QC Code';
+      const productIdx = header1.indexOf(productColInFile);
+      const codeIdx = header1.indexOf(codeColInFile);
       const stockIdx = header1.indexOf('Stock');
       const maintainingLegacyIdx = header1.indexOf('Maintaining');
       const maintainingQtyIdx = header1.indexOf('Maintaining Qty');
@@ -557,7 +560,7 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
       }
 
       // Build internal Inventory Tracker column schema.
-      columns = ['Product Name', codeCol, 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Critical'];
+      columns = ['Material Name', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Critical'];
       for (const p of datePairs) {
         columns.push(`DATE:${p.iso}:IN`, `DATE:${p.iso}:OUT`);
       }
@@ -597,10 +600,10 @@ router.post('/import-file', authenticate, requireSheetEditAccess, uploadMemory.s
           mUnit = parsed.unit;
         }
 
-        rowObj['Product Name'] = (productIdx >= 0 && row[productIdx] !== undefined)
+        rowObj['Material Name'] = (productIdx >= 0 && row[productIdx] !== undefined)
             ? String(row[productIdx])
             : '';
-        rowObj[codeCol] = (codeIdx >= 0 && row[codeIdx] !== undefined)
+        rowObj['QB Code'] = (codeIdx >= 0 && row[codeIdx] !== undefined)
             ? String(row[codeIdx])
             : '';
         rowObj['Maintaining Qty'] = mQty;
@@ -1109,28 +1112,52 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
       `, [id, JSON.stringify(oldColumns), JSON.stringify(newColumns), req.user.id]);
     }
 
-    // Delete existing data and insert new data
-    await pool.query('DELETE FROM sheet_data WHERE sheet_id = $1', [id]);
+    // Merge-only update to avoid overwriting other users' recent edits.
+    // Instead of deleting all rows, patch only changed cells into JSONB.
+    const oldByRowNumber = new Map();
+    for (const r of oldData) {
+      oldByRowNumber.set(Number(r.row_number), r.data || {});
+    }
 
     if (rows && rows.length > 0) {
       for (let i = 0; i < rows.length; i++) {
-        const newRow = rows[i];
-        const oldRow = oldData[i]?.data || {};
-        
-        // Track cell changes
+        const rowNumber = i + 1;
+        const newRow = rows[i] || {};
+        const oldRow = oldByRowNumber.get(rowNumber) || {};
+
+        // Build a patch of only changed keys
+        const patch = {};
         for (const col in newRow) {
-          if (newRow[col] !== oldRow[col] && (newRow[col] || oldRow[col])) {
+          const newVal = newRow[col];
+          const oldVal = oldRow[col];
+          if (newVal !== oldVal) {
+            patch[col] = newVal;
+          }
+        }
+
+        const changedCols = Object.keys(patch);
+        if (changedCols.length === 0) continue;
+
+        // Track cell changes
+        for (const col of changedCols) {
+          const oldVal = oldRow[col];
+          const newVal = patch[col];
+          if (newVal !== oldVal && (newVal || oldVal)) {
             await pool.query(`
               INSERT INTO sheet_edit_history (sheet_id, row_number, column_name, old_value, new_value, edited_by, action)
               VALUES ($1, $2, $3, $4, $5, $6, 'UPDATE')
-            `, [id, i + 1, col, oldRow[col] || null, newRow[col] || null, req.user.id]);
+            `, [id, rowNumber, col, oldVal || null, newVal || null, req.user.id]);
           }
         }
 
         await pool.query(`
           INSERT INTO sheet_data (sheet_id, row_number, data)
-          VALUES ($1, $2, $3)
-        `, [id, i + 1, JSON.stringify(newRow)]);
+          VALUES ($1, $2, $3::jsonb)
+          ON CONFLICT (sheet_id, row_number)
+          DO UPDATE SET
+            data       = sheet_data.data || EXCLUDED.data,
+            updated_at = CURRENT_TIMESTAMP
+        `, [id, rowNumber, JSON.stringify(patch)]);
       }
     }
 
@@ -1532,7 +1559,7 @@ router.get('/:id/export', authenticate, async (req, res) => {
       let wsData;
 
       if (isInventoryTracker) {
-        const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
+        const frozenLeft = columns.filter(col => ['Material Name', 'Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
         const frozenRight = columns.filter(col => col === 'Total Quantity');
         const dates = [...new Set(
           columns
@@ -1620,7 +1647,7 @@ router.get('/:id/export', authenticate, async (req, res) => {
     };
 
     if (isInventoryTracker) {
-      const frozenLeft = columns.filter(col => ['Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
+      const frozenLeft = columns.filter(col => ['Material Name', 'Product Name', 'QC Code', 'QB Code', 'Stock', 'Maintaining Qty', 'Maintaining Unit', 'Maintaining', 'Critical'].includes(col));
       const frozenRight = columns.filter(col => col === 'Total Quantity');
       const dates = [...new Set(
         columns
@@ -2182,6 +2209,26 @@ router.post('/:id/edit-requests', authenticate, async (req, res) => {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Viewers cannot submit edit requests' } });
     }
 
+    // Inventory Tracker guard: do not accept OUT values that would make totals negative.
+    // (Defense-in-depth; clients should validate too.)
+    if (String(proposed_value ?? '').trim() !== '') {
+      const validation = await inventoryDateQtyEditWouldBeInvalid({
+        sheetId: id,
+        rowNumber: row_number,
+        columnName: column_name,
+        proposedValue: proposed_value,
+      });
+      if (validation.invalid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_VALUE',
+            message: validation.reason || 'Invalid value',
+          },
+        });
+      }
+    }
+
     // Cancel duplicate pending request for same cell by same user
     await pool.query(`
       DELETE FROM edit_requests
@@ -2239,8 +2286,38 @@ router.put('/:id/edit-requests/:reqId', authenticate, async (req, res) => {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Admin only' } });
     }
 
-    const status     = approved ? 'approved' : 'rejected';
-    const expiresAt  = approved ? new Date(Date.now() + 10 * 60 * 1000) : null;
+    // Load pending request so we can validate before writing an approval.
+    const pendingRes = await pool.query(
+      'SELECT * FROM edit_requests WHERE id = $1 AND sheet_id = $2 AND status = \'pending\'',
+      [reqId, id]
+    );
+    if (pendingRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Request not found or already resolved' } });
+    }
+
+    let finalApproved = Boolean(approved);
+    let finalRejectReason = reject_reason || null;
+
+    const pendingReq = pendingRes.rows[0];
+    if (
+      finalApproved &&
+      pendingReq.proposed_value !== null &&
+      pendingReq.proposed_value !== undefined
+    ) {
+      const validation = await inventoryDateQtyEditWouldBeInvalid({
+        sheetId: pendingReq.sheet_id,
+        rowNumber: pendingReq.row_number,
+        columnName: pendingReq.column_name,
+        proposedValue: pendingReq.proposed_value,
+      });
+      if (validation.invalid) {
+        finalApproved = false;
+        finalRejectReason = validation.reason || 'Invalid value';
+      }
+    }
+
+    const status     = finalApproved ? 'approved' : 'rejected';
+    const expiresAt  = finalApproved ? new Date(Date.now() + 10 * 60 * 1000) : null;
 
     const result = await pool.query(`
       UPDATE edit_requests
@@ -2251,7 +2328,7 @@ router.put('/:id/edit-requests/:reqId', authenticate, async (req, res) => {
           expires_at    = $5
       WHERE id = $1 AND sheet_id = $6 AND status = 'pending'
       RETURNING *
-    `, [reqId, status, req.user.id, reject_reason || null, expiresAt, id]);
+    `, [reqId, status, req.user.id, finalRejectReason, expiresAt, id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Request not found or already resolved' } });
@@ -2261,7 +2338,7 @@ router.put('/:id/edit-requests/:reqId', authenticate, async (req, res) => {
     // resolves via the REST API instead of through the WebSocket flow.
     const collab = req.app.get('collab');
     if (collab) {
-      collab.emitResolveEvents(result.rows[0], approved, reject_reason, req.user.username);
+      collab.emitResolveEvents(result.rows[0], finalApproved, finalRejectReason, req.user.username);
     }
 
     res.json({ success: true, request: result.rows[0] });

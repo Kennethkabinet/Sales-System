@@ -5,7 +5,6 @@ import '../providers/auth_provider.dart';
 import '../providers/theme_provider.dart';
 import '../config/constants.dart';
 import '../services/api_service.dart';
-import 'login_screen.dart';
 import 'sheet_screen.dart';
 import 'settings_screen.dart';
 
@@ -737,6 +736,10 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
                 content: const Text('Are you sure you want to logout?'),
                 actions: [
                   TextButton(
+                      style: TextButton.styleFrom(
+                        foregroundColor:
+                            isDark ? const Color(0xFFD1D5DB) : null,
+                      ),
                       onPressed: () => Navigator.pop(ctx, false),
                       child: const Text('Cancel')),
                   ElevatedButton(
@@ -751,10 +754,6 @@ class _ViewerDashboardState extends State<ViewerDashboard> {
             );
             if (confirmed == true) {
               await auth.logout();
-              if (mounted) {
-                Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const LoginScreen()));
-              }
             }
           },
           child: Padding(

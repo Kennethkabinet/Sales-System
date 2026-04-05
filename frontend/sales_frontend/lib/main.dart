@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'providers/auth_provider.dart';
@@ -10,6 +11,7 @@ import 'screens/dashboard_screen.dart';
 import 'screens/editor_dashboard.dart';
 import 'screens/viewer_dashboard.dart';
 import 'config/constants.dart';
+import 'widgets/blocking_loader_overlay.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -295,7 +297,12 @@ class MyApp extends StatelessWidget {
 
 /// Wrapper that checks authentication state and shows appropriate screen
 class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
+  final bool initializeOnMount;
+
+  const AuthWrapper({
+    super.key,
+    this.initializeOnMount = true,
+  });
 
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
@@ -303,13 +310,59 @@ class AuthWrapper extends StatefulWidget {
 
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _initialized = false;
+  bool _authTransitioning = false;
+  String _authTransitionMessage = 'Loading...';
+  bool _lastAuthenticated = false;
+  Timer? _authTransitionTimer;
+  AuthProvider? _auth;
 
   @override
   void initState() {
     super.initState();
-    // Use addPostFrameCallback to avoid calling setState during build
+    _initialized = !widget.initializeOnMount;
+    if (widget.initializeOnMount) {
+      // Use addPostFrameCallback to avoid calling setState during build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initAuth();
+      });
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initAuth();
+      if (!mounted) return;
+      _auth = context.read<AuthProvider>();
+      _lastAuthenticated = _auth!.isAuthenticated;
+      _auth!.addListener(_onAuthChanged);
+    });
+  }
+
+  @override
+  void dispose() {
+    _authTransitionTimer?.cancel();
+    _auth?.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (!mounted) return;
+    if (!_initialized) return;
+
+    final auth = _auth;
+    if (auth == null) return;
+
+    final nowAuthenticated = auth.isAuthenticated;
+    if (nowAuthenticated == _lastAuthenticated) return;
+    _lastAuthenticated = nowAuthenticated;
+
+    _authTransitionTimer?.cancel();
+    setState(() {
+      _authTransitioning = true;
+      _authTransitionMessage =
+          nowAuthenticated ? 'Logging in…' : 'Logging out…';
+    });
+
+    _authTransitionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _authTransitioning = false);
     });
   }
 
@@ -324,39 +377,47 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Widget build(BuildContext context) {
     if (!_initialized) {
       return const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text('Loading...'),
-            ],
-          ),
-        ),
+        backgroundColor: Color(0xFFFEFEFE),
+        body: BlockingLoader(message: 'Loading...'),
+      );
+    }
+
+    if (_authTransitioning) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFFEFEFE),
+        body: BlockingLoader(message: _authTransitionMessage),
       );
     }
 
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
+        Widget screen;
+
         if (auth.isAuthenticated) {
           // Role-based dashboard routing
           final userRole = auth.user?.role ?? '';
-
           switch (userRole) {
             case 'admin':
-              return const DashboardScreen(); // Full admin dashboard
+              screen = const DashboardScreen();
+              break;
             case 'editor':
-              return const EditorDashboard(); // Editor module - can edit sheets
+              screen = const EditorDashboard();
+              break;
             case 'viewer':
-              return const ViewerDashboard(); // Viewer module - read-only
+              screen = const ViewerDashboard();
+              break;
             case 'user':
-              return const EditorDashboard(); // User also gets editor access
+              screen = const EditorDashboard();
+              break;
             default:
-              return const LoginScreen(); // Unknown role, logout
+              // Unknown role, treat as logged out.
+              screen = const LoginScreen();
           }
+        } else {
+          screen = const LoginScreen();
         }
-        return const LoginScreen();
+
+        return screen;
       },
     );
   }

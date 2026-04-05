@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../main.dart';
+import '../widgets/blocking_loader_overlay.dart';
 
 // cspell:ignore SGCO
 
@@ -55,16 +55,10 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = context.read<AuthProvider>();
-    final success = await authProvider.login(
+    await authProvider.login(
       _usernameController.text.trim(),
       _passwordController.text,
     );
-
-    if (success && mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AuthWrapper()),
-      );
-    }
   }
 
   bool _isDesktop(double width) => width >= 900;
@@ -189,7 +183,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     fit: BoxFit.contain,
                     alignment: Alignment.centerLeft,
                     errorBuilder: (_, __, ___) => Text(
-                      'SGCO.',
+                      'SGCO System',
                       style: GoogleFonts.inter(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
@@ -383,27 +377,37 @@ class _LoginScreenState extends State<LoginScreen> {
                 height: frameHeight,
                 child: Consumer<AuthProvider>(
                   builder: (context, auth, _) {
+                    final showLoader = auth.isLoading;
+
                     if (!desktop) {
-                      return Container(
-                        color: Colors.white,
-                        child: _buildLoginForm(auth, desktop: false),
+                      return BlockingLoaderOverlay(
+                        show: showLoader,
+                        message: 'Logging in…',
+                        child: Container(
+                          color: Colors.white,
+                          child: _buildLoginForm(auth, desktop: false),
+                        ),
                       );
                     }
 
-                    return Row(
-                      children: [
-                        const Expanded(
-                          flex: 11,
-                          child: RepaintBoundary(child: _DesktopLoginImage()),
-                        ),
-                        Expanded(
-                          flex: 10,
-                          child: Container(
-                            color: Colors.white,
-                            child: _buildLoginForm(auth, desktop: true),
+                    return BlockingLoaderOverlay(
+                      show: showLoader,
+                      message: 'Logging in…',
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            flex: 11,
+                            child: RepaintBoundary(child: _DesktopLoginImage()),
                           ),
-                        ),
-                      ],
+                          Expanded(
+                            flex: 10,
+                            child: Container(
+                              color: Colors.white,
+                              child: _buildLoginForm(auth, desktop: true),
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   },
                 ),
@@ -424,10 +428,19 @@ class _DesktopLoginImage extends StatelessWidget {
     return Container(
       color: Colors.white,
       alignment: Alignment.centerLeft,
-      child: const Image(
-        image: AssetImage('assets/images/background_login.png'),
+      child: Image.asset(
+        'assets/images/background_login.png',
         fit: BoxFit.contain,
         alignment: Alignment.centerLeft,
+        errorBuilder: (context, error, stackTrace) {
+          return const Center(
+            child: Icon(
+              Icons.image_not_supported_outlined,
+              size: 42,
+              color: Color(0xFF9CA3AF),
+            ),
+          );
+        },
       ),
     );
   }

@@ -1,11 +1,11 @@
 {
-    "name": "SGCO.",
-    "short_name": "SGCO.",
+    "name": "SGCO System",
+    "short_name": "SGCO System",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "SGCO.",
+    "description": "SGCO System",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:convert';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../config/constants.dart';
 
@@ -32,6 +33,14 @@ class SocketService {
 
   /// Another user saved a cell edit: { user_id, username, sheet_id, row_index, column_name, value }
   Function(Map<String, dynamic>)? onCellUpdated;
+
+  /// Another user is typing in a cell (live preview):
+  /// { user_id, username, sheet_id, row_index, column_name, value }
+  Function(Map<String, dynamic>)? onCellTyping;
+
+  /// Another user canceled an edit (revert preview):
+  /// { user_id, username, sheet_id, row_index, column_name, value }
+  Function(Map<String, dynamic>)? onCellCanceled;
 
   /// A user performed a full HTTP save of the sheet:
   /// { sheet_id, saved_by, saved_by_id, columns, timestamp }
@@ -107,6 +116,16 @@ class SocketService {
   /// of Map directly. This unwraps either format into a plain
   /// `Map<String, dynamic>`.
   static Map<String, dynamic> _unwrap(dynamic data) {
+    if (data is String) {
+      final trimmed = data.trim();
+      if (trimmed.isEmpty) return {};
+      try {
+        final decoded = jsonDecode(trimmed);
+        return _unwrap(decoded);
+      } catch (_) {
+        return {};
+      }
+    }
     if (data is Map) return Map<String, dynamic>.from(data);
     if (data is List && data.isNotEmpty && data[0] is Map) {
       return Map<String, dynamic>.from(data[0] as Map);
@@ -154,6 +173,10 @@ class SocketService {
     _socket?.on('cell_blurred', (d) => onCellBlurred?.call(_unwrap(d)));
     // Real-time cell edits from other users
     _socket?.on('cell_updated', (d) => onCellUpdated?.call(_unwrap(d)));
+    // Live typing preview while another user edits
+    _socket?.on('cell_typing', (d) => onCellTyping?.call(_unwrap(d)));
+    // Revert preview when an edit is canceled
+    _socket?.on('cell_canceled', (d) => onCellCanceled?.call(_unwrap(d)));
     // Full-sheet HTTP save notification
     _socket?.on('sheet_saved', (d) => onSheetSaved?.call(_unwrap(d)));
 
@@ -224,6 +247,25 @@ class SocketService {
         'value': value,
       });
 
+  /// Call while the user is typing in a cell — broadcasts to others (no DB write).
+  void cellTyping(int sheetId, int rowIndex, String columnName, String value) =>
+      _socket?.emit('cell_typing', {
+        'sheet_id': sheetId,
+        'row_index': rowIndex,
+        'column_name': columnName,
+        'value': value,
+      });
+
+  /// Call when the user cancels a cell edit — broadcasts the original value (no DB write).
+  void cellCancel(
+          int sheetId, int rowIndex, String columnName, String originalValue) =>
+      _socket?.emit('cell_cancel', {
+        'sheet_id': sheetId,
+        'row_index': rowIndex,
+        'column_name': columnName,
+        'value': originalValue,
+      });
+
   // ── V2 edit-request emitters ──
 
   /// Editor requests permission to edit a locked cell.
@@ -282,11 +324,14 @@ class SocketService {
     onCellFocused = null;
     onCellBlurred = null;
     onCellUpdated = null;
+    onCellTyping = null;
+    onCellCanceled = null;
     onSheetSaved = null;
     onEditRequestNotification = null;
     onAdminEditNotification = null;
     onEditRequestResolved = null;
     onGrantTempAccess = null;
     onEditRequestSubmitted = null;
+    onAuthRevoked = null;
   }
 }

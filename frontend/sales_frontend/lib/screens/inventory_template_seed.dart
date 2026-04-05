@@ -2683,28 +2683,75 @@ const List<Map<String, String>> _kInventoryTrackerLegacySeedRows = [
 
 final List<Map<String, String>> kInventoryTrackerSeedRows =
     _kInventoryTrackerLegacySeedRows.map((row) {
-  final legacy = (row['Maintaining'] ?? '').trim();
-  String qty = '';
-  String unit = '';
-  if (legacy.isNotEmpty) {
-    final lower = legacy.toLowerCase();
-    if (lower == 'pr' || lower == 'per request' || lower == 'per-request') {
-      qty = '-';
-      unit = 'PR';
-    } else {
-      final cleaned = legacy.replaceAll(',', '');
-      final m = RegExp(r'^(-?\d+(?:\.\d+)?)(?:\s+(.+))?$').firstMatch(cleaned);
-      if (m != null) {
-        qty = (m.group(1) ?? '').trim();
-        unit = (m.group(2) ?? '').trim();
-      }
-    }
-  }
-
   final out = <String, String>{...row};
+
+  // Rename identifiers to match the updated template headers.
+  final materialName = (out['Product Name'] ?? '').trim();
+  final qbCode = (out['QC Code'] ?? '').trim();
+  out.remove('Product Name');
+  out.remove('QC Code');
+  out['Material Name'] = materialName;
+  out['QB Code'] = qbCode;
+
+  // Drop legacy combined field and ensure thresholds start blank.
   out.remove('Maintaining');
-  out['Maintaining Qty'] = qty;
-  out['Maintaining Unit'] = unit;
+  out['Maintaining Qty'] = '';
+  out['Maintaining Unit'] = '';
+  out['Critical'] = '';
+
+  out.putIfAbsent('Comment', () => '');
+  out.putIfAbsent('Note Type', () => '');
+  out.putIfAbsent('Note Title', () => '');
+  return out;
+}).toList(growable: false);
+
+({String qty, String unit}) _parseMaintainingLegacyForSeed(String raw) {
+  final t = raw.trim();
+  if (t.isEmpty) return (qty: '', unit: '');
+  final lower = t.toLowerCase();
+  if (lower == 'pr' || lower == 'per request' || lower == 'per-request') {
+    return (qty: '-', unit: 'PR');
+  }
+  final cleaned = t.replaceAll(',', '');
+  final m = RegExp(r'^(-?\d+(?:\.\d+)?)(?:\s+(.+))?$').firstMatch(cleaned);
+  if (m == null) return (qty: '', unit: '');
+  return (
+    qty: (m.group(1) ?? '').trim(),
+    unit: (m.group(2) ?? '').trim(),
+  );
+}
+
+/// Inventory Tracker seed rows that KEEP default Maintaining/Critical values.
+///
+/// Source of defaults is the legacy seed list:
+/// - `Maintaining` (combined text like "20 pcs" or "pr")
+/// - `Critical` (numeric text)
+///
+/// This list converts `Maintaining` into split columns:
+/// - `Maintaining Qty`
+/// - `Maintaining Unit`
+final List<Map<String, String>> kInventoryTrackerSeedRowsWithDefaults =
+    _kInventoryTrackerLegacySeedRows.map((row) {
+  final out = <String, String>{...row};
+
+  // Rename identifiers to match the updated template headers.
+  final materialName = (out['Product Name'] ?? '').trim();
+  final qbCode = (out['QC Code'] ?? '').trim();
+  out.remove('Product Name');
+  out.remove('QC Code');
+  out['Material Name'] = materialName;
+  out['QB Code'] = qbCode;
+
+  // Convert legacy combined Maintaining field into split columns.
+  final maintainingRaw = (out['Maintaining'] ?? '').trim();
+  final parsed = _parseMaintainingLegacyForSeed(maintainingRaw);
+  out.remove('Maintaining');
+  out['Maintaining Qty'] = parsed.qty;
+  out['Maintaining Unit'] = parsed.unit;
+
+  // Keep Critical as-is (default content).
+  out['Critical'] = (out['Critical'] ?? '').trim();
+
   out.putIfAbsent('Comment', () => '');
   out.putIfAbsent('Note Type', () => '');
   out.putIfAbsent('Note Title', () => '');

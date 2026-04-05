@@ -21,6 +21,12 @@ class AppModal {
         actions: actions ??
             [
               TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor:
+                      Theme.of(dialogContext).brightness == Brightness.dark
+                          ? const Color(0xFFD1D5DB)
+                          : null,
+                ),
                 onPressed: () => Navigator.of(dialogContext).pop(),
                 child: Text(buttonText),
               ),

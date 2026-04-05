@@ -1765,8 +1765,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ),
               child: TextField(
                 controller: _searchController,
+                textAlignVertical: TextAlignVertical.center,
                 style: TextStyle(fontSize: 13, color: _textPrimary),
                 decoration: InputDecoration(
+                  isDense: true,
                   hintText: 'Search by name, username or email...',
                   hintStyle: TextStyle(fontSize: 13, color: _textSecondary),
                   prefixIcon: Icon(Icons.search_rounded,
@@ -1783,7 +1785,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         )
                       : null,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 ),
                 onChanged: (v) {
                   _searchQuery = v;

@@ -1,6 +1,7 @@
 const pool = require('../db');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../middleware/auth');
+const { inventoryDateQtyEditWouldBeInvalid } = require('../services/inventoryOutGuard');
 
 /**
  * WebSocket Collaboration Handler V2
@@ -140,6 +141,10 @@ class CollaborationHandler {
 
       // ── V2 real-time cell sync ──
       socket.on('cell_update',     async (d) => this.handleCellUpdate(socket, d));
+      // Live typing preview (broadcast only; no DB write)
+      socket.on('cell_typing',           (d) => this.handleCellTyping(socket, d));
+      // Edit canceled (broadcast only; no DB write)
+      socket.on('cell_cancel',           (d) => this.handleCellCancel(socket, d));
 
       // ── V2 get_presence: client explicitly requests current presence list ──
       socket.on('get_presence', (d) => {
@@ -635,6 +640,48 @@ class CollaborationHandler {
   }
 
   /**
+   * Broadcast live typing text to other users in the sheet (no DB write).
+   * Payload from client: { sheet_id, row_index, column_name, value }
+   * Payload to others:  { user_id, username, sheet_id, row_index, column_name, value }
+   */
+  handleCellTyping(socket, { sheet_id, row_index, column_name, value }) {
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid || row_index === undefined || !column_name) return;
+
+    const payload = {
+      user_id: socket.user.id,
+      username: socket.user.username,
+      sheet_id: sid,
+      row_index,
+      column_name,
+      value: value ?? ''
+    };
+
+    socket.to(`sheet-${sid}`).emit('cell_typing', payload);
+  }
+
+  /**
+   * Broadcast that an edit was canceled so others can revert (no DB write).
+   * Payload from client: { sheet_id, row_index, column_name, value }
+   * The `value` should be the original (pre-edit) value.
+   */
+  handleCellCancel(socket, { sheet_id, row_index, column_name, value }) {
+    const sid = this._normalizeSheetId(sheet_id);
+    if (!sid || row_index === undefined || !column_name) return;
+
+    const payload = {
+      user_id: socket.user.id,
+      username: socket.user.username,
+      sheet_id: sid,
+      row_index,
+      column_name,
+      value: value ?? ''
+    };
+
+    socket.to(`sheet-${sid}`).emit('cell_canceled', payload);
+  }
+
+  /**
    * Build a presence payload object for a sheet.
    */
   _buildPresencePayload(sheet_id) {
@@ -689,6 +736,24 @@ class CollaborationHandler {
         // Admin doesn't need to request
         socket.emit('error', { code: 'PERMISSION_DENIED', message: 'Only editors can request edit access' });
         return;
+      }
+
+      // Inventory Tracker guard: do not accept OUT values that would make totals negative.
+      // (This is defense-in-depth; the HTTP route and frontend also validate.)
+      if (String(proposed_value ?? '').trim() !== '') {
+        const validation = await inventoryDateQtyEditWouldBeInvalid({
+          sheetId: sheet_id,
+          rowNumber: row_number,
+          columnName: column_name,
+          proposedValue: proposed_value,
+        });
+        if (validation.invalid) {
+          socket.emit('error', {
+            code: 'INVALID_VALUE',
+            message: validation.reason || 'Invalid value',
+          });
+          return;
+        }
       }
 
       // Upsert: cancel if a pending request already exists for this cell+user
@@ -754,8 +819,40 @@ class CollaborationHandler {
         return;
       }
 
-      const status = approved ? 'approved' : 'rejected';
-      const expiresAt = approved
+      // Load the pending request first so we can validate before updating status.
+      const pendingRes = await pool.query(
+        'SELECT * FROM edit_requests WHERE id = $1 AND status = \'pending\'',
+        [request_id]
+      );
+      if (pendingRes.rows.length === 0) {
+        socket.emit('error', { code: 'NOT_FOUND', message: 'Request not found or already resolved' });
+        return;
+      }
+
+      let finalApproved = Boolean(approved);
+      let finalRejectReason = reject_reason || null;
+
+      // If approving a proposed Inventory OUT edit would make totals negative, force reject.
+      const pendingReq = pendingRes.rows[0];
+      if (
+        finalApproved &&
+        pendingReq.proposed_value !== null &&
+        pendingReq.proposed_value !== undefined
+      ) {
+        const validation = await inventoryDateQtyEditWouldBeInvalid({
+          sheetId: pendingReq.sheet_id,
+          rowNumber: pendingReq.row_number,
+          columnName: pendingReq.column_name,
+          proposedValue: pendingReq.proposed_value,
+        });
+        if (validation.invalid) {
+          finalApproved = false;
+          finalRejectReason = validation.reason || 'Invalid value';
+        }
+      }
+
+      const status = finalApproved ? 'approved' : 'rejected';
+      const expiresAt = finalApproved
         ? new Date(Date.now() + 10 * 60 * 1000) // 10-minute window
         : null;
 
@@ -768,7 +865,7 @@ class CollaborationHandler {
             expires_at   = $5
         WHERE id = $1 AND status = 'pending'
         RETURNING *
-      `, [request_id, status, socket.user.id, reject_reason || null, expiresAt]);
+      `, [request_id, status, socket.user.id, finalRejectReason, expiresAt]);
 
       if (result.rows.length === 0) {
         socket.emit('error', { code: 'NOT_FOUND', message: 'Request not found or already resolved' });
@@ -781,7 +878,7 @@ class CollaborationHandler {
       // This writes the value to the DB and broadcasts cell_updated so the
       // editor and all other viewers see the change right away — no manual
       // re-edit required after approval.
-      if (approved && req.proposed_value !== null && req.proposed_value !== undefined) {
+      if (finalApproved && req.proposed_value !== null && req.proposed_value !== undefined) {
         try {
           await pool.query(`
             INSERT INTO sheet_data (sheet_id, row_number, data)
@@ -813,14 +910,14 @@ class CollaborationHandler {
         row_number:  req.row_number,
         column_name: req.column_name,
         cell_ref:    req.cell_reference,
-        approved,
-        reject_reason,
+        approved: finalApproved,
+        reject_reason: finalRejectReason,
         resolved_by: socket.user.username,
         expires_at:  expiresAt
       });
 
       // If approved, also send the specific grant to the requester's socket
-      if (approved) {
+      if (finalApproved) {
         // Find the requester's socket(s) in the sheet room
         const sheetMembers = this.sheetPresence.get(req.sheet_id);
         if (sheetMembers) {

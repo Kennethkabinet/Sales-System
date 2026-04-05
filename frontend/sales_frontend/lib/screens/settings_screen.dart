@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../config/constants.dart';
 
 const Color _kPrimaryBlue = Color(0xFF4285F4);
 const Color _kNavy = Color(0xFF1F2937);
@@ -945,11 +946,12 @@ class _SystemTabState extends State<_SystemTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Check backend and database connectivity',
+            'Check SGCO system backend and database connectivity',
             style: TextStyle(fontSize: 13, color: textSecondary),
           ),
           const SizedBox(height: 24),
-          _StatusRow(label: 'API Server', status: _apiStatus, ok: _apiOk),
+          _StatusRow(
+              label: 'SGCO system backend', status: _apiStatus, ok: _apiOk),
           const SizedBox(height: 12),
           _StatusRow(label: 'Database', status: _dbStatus, ok: _dbOk),
           const SizedBox(height: 24),
@@ -1038,9 +1040,9 @@ class _AboutTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _infoRow('Application', 'Sales Management System', textPrimary,
-              textSecondary),
-          _infoRow('Version', '1.0.0', textPrimary, textSecondary),
+          _infoRow(
+              'Application', AppConfig.appName, textPrimary, textSecondary),
+          _infoRow('Version', AppConfig.appVersion, textPrimary, textSecondary),
           _infoRow('Platform', 'Flutter Desktop (Windows)', textPrimary,
               textSecondary),
           _infoRow('Backend', 'Node.js + Express', textPrimary, textSecondary),
@@ -1054,7 +1056,7 @@ class _AboutTab extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              '© 2026 Sales Management System. All rights reserved.\n'
+              '© 2026 ${AppConfig.appName}. All rights reserved.\n'
               'This software is intended for internal use only.',
               style: TextStyle(fontSize: 12, color: textSecondary, height: 1.6),
             ),

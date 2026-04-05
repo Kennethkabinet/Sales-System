@@ -8,6 +8,7 @@ import 'package:excel/excel.dart' as xls;
 import 'dart:io';
 import '../providers/data_provider.dart';
 import '../models/audit_log.dart';
+import '../services/api_service.dart';
 import '../widgets/app_modal.dart';
 
 // ── HireGround-style color palette ──
@@ -165,6 +166,95 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
       await _exportPdf();
     } else if (choice == 'excel') {
       await _exportExcel();
+    }
+  }
+
+  Future<void> _confirmAndClearLogs() async {
+    final passwordCtrl = TextEditingController();
+    try {
+      final password = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Delete Audit Logs'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Enter your admin password to delete all audit logs.',
+                  style: TextStyle(color: _textSecondary),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: passwordCtrl,
+                  autofocus: true,
+                  obscureText: true,
+                  style: TextStyle(color: _textPrimary),
+                  cursorColor: _kBlue,
+                  decoration: InputDecoration(
+                    labelText: 'Admin Password',
+                    labelStyle: TextStyle(color: _textSecondary),
+                    floatingLabelStyle: const TextStyle(color: _kBlue),
+                    border: const OutlineInputBorder(),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: _borderColor),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: _kBlue, width: 1.5),
+                    ),
+                    filled: true,
+                    fillColor: _surfaceAltColor,
+                  ),
+                  onSubmitted: (v) => Navigator.pop(ctx, v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: _isDark ? const Color(0xFFD1D5DB) : null,
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, passwordCtrl.text),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kRed,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Delete All'),
+            ),
+          ],
+        ),
+      );
+
+      final trimmed = (password ?? '').trim();
+      if (trimmed.isEmpty || !mounted) return;
+
+      await ApiService.clearAuditLogs(password: trimmed);
+      if (!mounted) return;
+
+      await context.read<DataProvider>().loadAuditLogs();
+      if (!mounted) return;
+
+      await AppModal.showText(
+        context,
+        title: 'Deleted',
+        message: 'Audit logs deleted successfully.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await AppModal.showText(
+        context,
+        title: 'Delete failed',
+        message: e.toString(),
+      );
+    } finally {
+      passwordCtrl.dispose();
     }
   }
 
@@ -727,18 +817,17 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
               child: TextField(
                 controller: _searchCtrl,
                 onChanged: (_) => setState(() {}),
+                textAlignVertical: TextAlignVertical.center,
                 style: TextStyle(fontSize: 14, color: _textPrimary),
                 decoration: InputDecoration(
+                  isDense: true,
                   hintText: 'Search logs...',
                   hintStyle: TextStyle(
-                      fontSize: 14,
-                      color: _textSecondary.withValues(alpha: 0.8)),
-                  prefixIcon: Container(
-                    padding: const EdgeInsets.only(left: 14, right: 10),
-                    child: Icon(Icons.search_rounded,
-                        size: 20, color: _textSecondary),
+                    fontSize: 14,
+                    color: _textSecondary.withValues(alpha: 0.8),
                   ),
-                  prefixIconConstraints: const BoxConstraints(minWidth: 44),
+                  prefixIcon: Icon(Icons.search_rounded,
+                      color: _textSecondary, size: 20),
                   suffixIcon: _searchCtrl.text.isNotEmpty
                       ? IconButton(
                           icon: Icon(Icons.close_rounded,
@@ -750,7 +839,7 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
                         )
                       : null,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 ),
               ),
             ),
@@ -794,6 +883,22 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
           // Date range dropdown
           _buildDateRangeDropdown(),
           const SizedBox(width: 16),
+
+          // Delete logs button
+          ElevatedButton.icon(
+            onPressed: _confirmAndClearLogs,
+            icon: const Icon(Icons.delete_forever_rounded, size: 18),
+            label: const Text('Delete Logs'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kRed,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              elevation: 0,
+            ),
+          ),
+          const SizedBox(width: 10),
 
           // Export button
           ElevatedButton.icon(

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const bcrypt = require('bcrypt');
 const { authenticate } = require('../middleware/auth');
 const { requireAdminAccess } = require('../middleware/rbac');
 
@@ -301,6 +302,62 @@ router.get('/user/:userId', authenticate, requireAdminAccess, async (req, res) =
     res.status(500).json({
       success: false,
       error: { code: 'SERVER_ERROR', message: 'Failed to get user audit logs' }
+    });
+  }
+});
+
+// POST /audit/clear - Clear all audit logs (Admin only, requires password)
+router.post('/clear', authenticate, requireAdminAccess, async (req, res) => {
+  try {
+    const password = (req.body?.password || '').toString();
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Password is required' }
+      });
+    }
+
+    const userResult = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_INVALID', message: 'User not found' }
+      });
+    }
+
+    const passwordHash = userResult.rows[0]?.password_hash;
+    const ok = await bcrypt.compare(password, passwordHash || '');
+    if (!ok) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_INVALID', message: 'Invalid password' }
+      });
+    }
+
+    await pool.query('BEGIN');
+    const countResult = await pool.query('SELECT COUNT(*) as total FROM audit_logs');
+    const total = parseInt(countResult.rows[0]?.total || 0);
+
+    // Fast and resets identity.
+    await pool.query('TRUNCATE audit_logs RESTART IDENTITY');
+    await pool.query('COMMIT');
+
+    return res.json({
+      success: true,
+      cleared: total,
+      message: 'Audit logs cleared'
+    });
+  } catch (error) {
+    try {
+      await pool.query('ROLLBACK');
+    } catch (_) {}
+    console.error('Clear audit logs error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: 'Failed to clear audit logs' }
     });
   }
 });

@@ -9,7 +9,6 @@ import '../config/constants.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 import '../widgets/app_modal.dart';
-import 'login_screen.dart';
 import 'file_list_screen.dart';
 import 'audit_history_screen.dart';
 import 'edit_requests_screen.dart';
@@ -408,6 +407,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _shortcutsFocus.requestFocus();
       }
     });
+    final shouldAutoRefreshDashboard =
+        target.tabIndex == 0 && _selectedIndex != target.tabIndex;
+
     setState(() {
       _selectedIndex = target.tabIndex;
       if (target.tabIndex == _editRequestsTabIndex) {
@@ -418,6 +420,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _dashboardJumpToken++;
       }
     });
+
+    if (shouldAutoRefreshDashboard) {
+      Future.microtask(() async {
+        if (!mounted) return;
+        try {
+          await _refreshDashboard();
+        } catch (_) {
+          // Keep UI resilient; provider already holds error state.
+        }
+      });
+    }
   }
 
   @override
@@ -1181,12 +1194,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 isDark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
             onTap: () {
               if (item.index >= 0) {
+                final shouldAutoRefreshDashboard =
+                    item.index == 0 && _selectedIndex != item.index;
                 setState(() {
                   _selectedIndex = item.index;
                   if (item.label == 'Edit Requests') {
                     _pendingEditRequestCount = 0;
                   }
                 });
+
+                if (shouldAutoRefreshDashboard) {
+                  Future.microtask(() async {
+                    if (!mounted) return;
+                    try {
+                      await _refreshDashboard();
+                    } catch (_) {
+                      // Keep UI resilient; provider already holds error state.
+                    }
+                  });
+                }
               }
             },
             child: LayoutBuilder(
@@ -1301,6 +1327,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 content: const Text('Are you sure you want to logout?'),
                 actions: [
                   TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: isDark ? const Color(0xFFD1D5DB) : null,
+                    ),
                     onPressed: () => Navigator.pop(ctx, false),
                     child: const Text('Cancel'),
                   ),
@@ -1317,11 +1346,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             );
             if (confirmed == true) {
               await auth.logout();
-              if (mounted) {
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                );
-              }
             }
           },
           child: Padding(
@@ -1474,7 +1498,6 @@ class _DashboardContentState extends State<_DashboardContent> {
   int _alertPage = 0;
   static const int _alertPageSize = 8;
   String _selectedProductStockKey = '__all__';
-  int _statPageIndex = 0;
   int? _selectedStatCardIndex;
 
   _TrendGroupBy _trendGroupBy = _TrendGroupBy.day;
@@ -1495,6 +1518,50 @@ class _DashboardContentState extends State<_DashboardContent> {
   static const String _kInventoryNoteTypeCol = 'Note Type';
   static const String _kInventoryNoteTitleCol = 'Note Title';
   static const String _kInventoryNoteTypeDiscrepancy = 'discrepancy';
+
+  DateTime? _latestDailyTrendDate(List<Map<String, dynamic>> dailyTrendRaw) {
+    DateTime? latest;
+    for (final row in dailyTrendRaw) {
+      final raw = row['date']?.toString();
+      if (raw == null || raw.isEmpty) continue;
+      final dt = DateTime.tryParse(raw);
+      if (dt == null) continue;
+      if (latest == null || dt.isAfter(latest)) latest = dt;
+    }
+    if (latest == null) return null;
+    return DateTime(latest.year, latest.month, latest.day);
+  }
+
+  List<double> _dailySeries(
+    List<Map<String, dynamic>> dailyTrendRaw, {
+    required DateTime endDate,
+    required int days,
+    required double Function(Map<String, dynamic> row) selector,
+  }) {
+    final byDate = <String, double>{};
+    for (final row in dailyTrendRaw) {
+      final date = row['date']?.toString();
+      if (date == null || date.isEmpty) continue;
+      final v = selector(row);
+      if (v.isNaN || v.isInfinite) continue;
+      byDate[date] = (byDate[date] ?? 0) + v;
+    }
+
+    final result = <double>[];
+    for (var i = days - 1; i >= 0; i--) {
+      final d = endDate.subtract(Duration(days: i));
+      final key =
+          '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      result.add(byDate[key] ?? 0);
+    }
+    return result;
+  }
+
+  double? _pctChange({required double current, required double previous}) {
+    if (previous == 0) return null;
+    if (!previous.isFinite || !current.isFinite) return null;
+    return ((current - previous) / previous) * 100;
+  }
 
   List<int> _effectiveInventorySheetIds(List<Map<String, dynamic>> sheets) {
     if (_selectedSheetIds.isNotEmpty) return _selectedSheetIds.toList();
@@ -1772,6 +1839,23 @@ class _DashboardContentState extends State<_DashboardContent> {
       final current = (item['current_stock'] as num?)?.toInt() ?? 0;
       final critical = (item['critical_qty'] as num?)?.toInt() ?? 0;
       return status == 'critical' || current <= critical;
+    }).length;
+  }
+
+  int _lowStockOnlyCount(List<Map<String, dynamic>> lowStockItems) {
+    return lowStockItems.where((item) {
+      final status = (item['stock_status'] ?? '').toString().toLowerCase();
+      if (status == 'warning') return true;
+      if (status == 'critical') return false;
+
+      final current = (item['current_stock'] as num?)?.toInt() ?? 0;
+      final maintaining = (item['maintaining_qty'] as num?)?.toInt() ?? 0;
+      final critical = (item['critical_qty'] as num?)?.toInt() ?? 0;
+
+      if (maintaining <= 0) return false;
+      if (current <= 0) return false;
+      if (critical > 0 && current <= critical) return false;
+      return current <= maintaining;
     }).length;
   }
 
@@ -2057,7 +2141,7 @@ class _DashboardContentState extends State<_DashboardContent> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         inputField(
-          hintText: 'Filter Product Name',
+          hintText: 'Filter Material Name',
           icon: Icons.inventory_2_outlined,
           ctrl: _productNameFilterCtrl,
         ),
@@ -2319,8 +2403,8 @@ class _DashboardContentState extends State<_DashboardContent> {
         final totalProducts = filteredProductStocks.isNotEmpty
             ? filteredProductStocks.length
             : productStocksRaw.length;
-        final lowCount = filteredAlertsBase.length;
         final criticalCount = _criticalCount(filteredAlertsBase);
+        final lowCount = _lowStockOnlyCount(filteredAlertsBase);
         final healthScore = _healthScore(
           totalProducts: totalProducts,
           lowCount: lowCount,
@@ -2689,7 +2773,68 @@ class _DashboardContentState extends State<_DashboardContent> {
     required List<Map<String, dynamic>> trendData,
   }) {
     final totalStockQty = _selectedStockQty(inv);
-    final monthlyUsage = _monthlyUsage(trendData);
+
+    final dailyTrendRaw = inv?.dailyTrend ?? const [];
+    final anchor = _latestDailyTrendDate(dailyTrendRaw);
+
+    double? qtyTrendPct;
+    bool qtyTrendUp = true;
+    List<double> qtySparkline = const [2, 3, 4, 5, 6, 7, 8];
+
+    double? usageTrendPct;
+    bool usageTrendUp = true;
+    List<double> usageSparkline = const [6, 5, 5, 4, 4, 3, 3];
+    var weeklyUsage = _monthlyUsage(trendData);
+
+    if (anchor != null && dailyTrendRaw.isNotEmpty) {
+      final last14Net = _dailySeries(
+        List<Map<String, dynamic>>.from(dailyTrendRaw),
+        endDate: anchor,
+        days: 14,
+        selector: (row) {
+          final inV = (row['stock_in'] as num?)?.toDouble() ?? 0;
+          final outV = (row['stock_out'] as num?)?.toDouble() ?? 0;
+          return inV - outV;
+        },
+      );
+
+      final last7Net = last14Net.length >= 7
+          ? last14Net.sublist(last14Net.length - 7)
+          : last14Net;
+      final netThisWeek = last7Net.fold<double>(0, (s, v) => s + v);
+
+      final qtyPrev = (totalStockQty.toDouble() - netThisWeek);
+      final pct =
+          _pctChange(current: totalStockQty.toDouble(), previous: qtyPrev);
+      qtyTrendPct = pct?.abs();
+      qtyTrendUp = pct == null ? true : pct >= 0;
+
+      // Reconstruct a simple 7-day stock-qty sparkline by walking backwards.
+      final qtySeries = <double>[];
+      var running = totalStockQty.toDouble();
+      qtySeries.add(running);
+      for (var i = last7Net.length - 1; i >= 0; i--) {
+        running -= last7Net[i];
+        qtySeries.add(running);
+      }
+      qtySparkline = qtySeries.reversed.take(7).toList();
+
+      final last14Out = _dailySeries(
+        List<Map<String, dynamic>>.from(dailyTrendRaw),
+        endDate: anchor,
+        days: 14,
+        selector: (row) => (row['stock_out'] as num?)?.toDouble() ?? 0,
+      );
+      final outPrevWeek = last14Out.take(7).fold<double>(0, (s, v) => s + v);
+      final outThisWeek = last14Out.skip(7).fold<double>(0, (s, v) => s + v);
+
+      weeklyUsage = outThisWeek.round();
+      final usagePct = _pctChange(current: outThisWeek, previous: outPrevWeek);
+      usageTrendPct = usagePct?.abs();
+      usageTrendUp = usagePct == null ? true : usagePct >= 0;
+      usageSparkline = last14Out.skip(7).toList();
+    }
+
     final cards = [
       _StatCardData(
         title: 'Total Products',
@@ -2697,9 +2842,8 @@ class _DashboardContentState extends State<_DashboardContent> {
         icon: Icons.inventory_2_outlined,
         color: const Color(0xFF0EA5E9),
         bgColor: const Color(0xFFE0F2FE),
-        trendPct: 8.3,
-        trendUp: true,
-        sparkline: const [2, 3, 4, 5, 6, 7, 8],
+        trendPct: null,
+        sparkline: const [],
       ),
       _StatCardData(
         title: 'Total Quantity',
@@ -2707,9 +2851,9 @@ class _DashboardContentState extends State<_DashboardContent> {
         icon: Icons.stacked_bar_chart_rounded,
         color: const Color(0xFF2563EB),
         bgColor: const Color(0xFFDBEAFE),
-        trendPct: 11.2,
-        trendUp: true,
-        sparkline: const [3, 4, 4, 5, 6, 6, 7],
+        trendPct: qtyTrendPct,
+        trendUp: qtyTrendUp,
+        sparkline: qtySparkline,
         compactControl: inv != null && inv.productStocks.isNotEmpty
             ? _StockQtyFilterDropdown(
                 selectedKey: _selectedProductStockKey,
@@ -2728,9 +2872,8 @@ class _DashboardContentState extends State<_DashboardContent> {
         color: const Color(0xFFD97706),
         bgColor: const Color(0xFFFEF3C7),
         highlight: lowCount > 0,
-        trendPct: 4.4,
-        trendUp: false,
-        sparkline: const [3, 4, 3, 4, 4, 5, 6],
+        trendPct: null,
+        sparkline: const [],
       ),
       _StatCardData(
         title: 'Critical Stock Items',
@@ -2739,9 +2882,8 @@ class _DashboardContentState extends State<_DashboardContent> {
         color: const Color(0xFFC62828),
         bgColor: AppColors.lightRed,
         highlight: criticalCount > 0,
-        trendPct: 17.8,
-        trendUp: false,
-        sparkline: const [6, 5, 4, 4, 3, 3, 2],
+        trendPct: null,
+        sparkline: const [],
       ),
       _StatCardData(
         title: 'Discrepancies',
@@ -2749,19 +2891,18 @@ class _DashboardContentState extends State<_DashboardContent> {
         icon: Icons.report_problem_outlined,
         color: const Color(0xFF2E7D32),
         bgColor: const Color(0xFFE8F5E9),
-        trendPct: 0,
-        trendUp: false,
-        sparkline: const [2, 2, 3, 4, 4, 6, 7],
+        trendPct: null,
+        sparkline: const [],
       ),
       _StatCardData(
-        title: 'Monthly Usage',
-        value: _fmt(monthlyUsage),
+        title: 'Weekly Usage',
+        value: _fmt(weeklyUsage),
         icon: Icons.output_rounded,
         color: const Color(0xFF7C3AED),
         bgColor: const Color(0xFFEDE9FE),
-        trendPct: 6.2,
-        trendUp: false,
-        sparkline: const [6, 5, 5, 4, 4, 3, 3],
+        trendPct: usageTrendPct,
+        trendUp: usageTrendUp,
+        sparkline: usageSparkline,
       ),
     ];
 
@@ -2772,79 +2913,119 @@ class _DashboardContentState extends State<_DashboardContent> {
       final availableW = constraints.maxWidth - arrowW - gap;
       final cardW = (availableW - 2 * gap) / 3;
 
-      return Row(
-        children: [
-          Expanded(
-            child: SizedBox(
-              height: 232,
-              child: PageView.builder(
-                controller: _statPageController,
-                itemCount: pageCount,
-                onPageChanged: (index) =>
-                    setState(() => _statPageIndex = index),
-                itemBuilder: (context, pageIndex) {
-                  final start = pageIndex * 3;
-                  final slice = cards.skip(start).take(3).toList();
-                  return Row(
-                    children: slice.asMap().entries.map((e) {
-                      final cardIndex = start + e.key;
-                      return Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (e.key > 0) const SizedBox(width: gap),
-                          _StatCard(
-                            data: e.value,
-                            width: cardW,
-                            isSelected: _selectedStatCardIndex == cardIndex,
-                            onTap: () {
-                              setState(() {
-                                _selectedStatCardIndex =
-                                    _selectedStatCardIndex == cardIndex
-                                        ? null
-                                        : cardIndex;
-                              });
-                            },
-                          ),
-                        ],
-                      );
-                    }).toList(),
-                  );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+      return AnimatedBuilder(
+        animation: _statPageController,
+        builder: (context, _) {
+          var currentIndex = _statPageController.initialPage;
+          if (_statPageController.hasClients) {
+            final page = _statPageController.page;
+            if (page != null) currentIndex = page.round();
+          }
+
+          final safeIndex =
+              pageCount <= 0 ? 0 : currentIndex.clamp(0, pageCount - 1);
+
+          final dotInactiveColor =
+              Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.25);
+          final dotActiveColor = Theme.of(context).colorScheme.primary;
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              _StatArrowButton(
-                icon: Icons.chevron_left,
-                enabled: _statPageIndex > 0,
-                onTap: () {
-                  if (_statPageIndex > 0) {
-                    _statPageController.previousPage(
-                      duration: const Duration(milliseconds: 220),
-                      curve: Curves.easeOut,
-                    );
-                  }
-                },
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 232,
+                      child: PageView.builder(
+                        controller: _statPageController,
+                        itemCount: pageCount,
+                        itemBuilder: (context, pageIndex) {
+                          final start = pageIndex * 3;
+                          final slice = cards.skip(start).take(3).toList();
+                          return Row(
+                            children: slice.asMap().entries.map((e) {
+                              final cardIndex = start + e.key;
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (e.key > 0) const SizedBox(width: gap),
+                                  _StatCard(
+                                    data: e.value,
+                                    width: cardW,
+                                    isSelected:
+                                        _selectedStatCardIndex == cardIndex,
+                                    onTap: () {
+                                      setState(() {
+                                        _selectedStatCardIndex =
+                                            _selectedStatCardIndex == cardIndex
+                                                ? null
+                                                : cardIndex;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              );
+                            }).toList(),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _StatArrowButton(
+                        icon: Icons.chevron_left,
+                        enabled: safeIndex > 0,
+                        onTap: () {
+                          if (safeIndex > 0) {
+                            _statPageController.previousPage(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _StatArrowButton(
+                        icon: Icons.chevron_right,
+                        enabled: safeIndex < pageCount - 1,
+                        onTap: () {
+                          if (safeIndex < pageCount - 1) {
+                            _statPageController.nextPage(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              _StatArrowButton(
-                icon: Icons.chevron_right,
-                enabled: _statPageIndex < pageCount - 1,
-                onTap: () {
-                  if (_statPageIndex < pageCount - 1) {
-                    _statPageController.nextPage(
-                      duration: const Duration(milliseconds: 220),
-                      curve: Curves.easeOut,
+              if (pageCount > 1) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(pageCount, (i) {
+                    final isActive = i == safeIndex;
+                    return Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      decoration: BoxDecoration(
+                        color: isActive ? dotActiveColor : dotInactiveColor,
+                        shape: BoxShape.circle,
+                      ),
                     );
-                  }
-                },
-              ),
+                  }),
+                ),
+              ],
             ],
-          ),
-        ],
+          );
+        },
       );
     });
   }
@@ -3046,7 +3227,7 @@ class _StatCardState extends State<_StatCard> {
                             const SizedBox(width: 8),
                             Flexible(
                               child: Text(
-                                'last month',
+                                'last week',
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontSize: 11,
@@ -3065,14 +3246,16 @@ class _StatCardState extends State<_StatCard> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Align(
-                  alignment: Alignment.topRight,
-                  child: _MiniSparkline(
-                    bars: d.sparkline,
-                    color: d.trendUp ? const Color(0xFF22C55E) : d.color,
+                if (d.sparkline.isNotEmpty) ...[
+                  const SizedBox(width: 12),
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: _MiniSparkline(
+                      bars: d.sparkline,
+                      color: d.trendUp ? const Color(0xFF22C55E) : d.color,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -3143,7 +3326,10 @@ class _MiniSparkline extends StatelessWidget {
   Widget build(BuildContext context) {
     final maxVal = bars.isEmpty
         ? 1.0
-        : bars.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
+        : bars
+            .reduce((a, b) => a > b ? a : b)
+            .clamp(1.0, double.infinity)
+            .toDouble();
 
     return SizedBox(
       width: 62,
@@ -3156,7 +3342,11 @@ class _MiniSparkline extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 1),
                   child: Container(
-                    height: 8 + (v / maxVal) * 24,
+                    height: () {
+                      final safeV = v.isFinite ? v : 0.0;
+                      final ratio = (safeV / maxVal).clamp(0.0, 1.0);
+                      return (8.0 + ratio * 24.0).clamp(0.0, 40.0);
+                    }(),
                     decoration: BoxDecoration(
                       color: color.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(3),
@@ -4947,19 +5137,17 @@ class _LowStockTable extends StatelessWidget {
             1: FlexColumnWidth(1.3),
             2: FlexColumnWidth(1.1),
             3: FlexColumnWidth(1.2),
-            4: FlexColumnWidth(1.1),
+            4: FlexColumnWidth(1.5),
             5: FlexColumnWidth(1.5),
-            6: FlexColumnWidth(1.5),
           },
           children: [
             TableRow(
               decoration: BoxDecoration(color: tableHeader),
               children: const [
-                _TH('Product Name'),
+                _TH('Material Name'),
                 _TH('QB Code'),
                 _TH('Curr. Stock'),
                 _TH('Maintaining'),
-                _TH('Critical'),
                 _TH('Risk Meter'),
                 _TH('Status'),
               ],
@@ -5034,16 +5222,6 @@ class _LowStockTable extends StatelessWidget {
                   _TD(
                     child: Text(
                       '${maintaining.toInt()}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: isDark ? Color(0xFF9CA3AF) : Color(0xFF5F6368),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  _TD(
-                    child: Text(
-                      '${critical.toInt()}',
                       style: TextStyle(
                         fontSize: 13,
                         color: isDark ? Color(0xFF9CA3AF) : Color(0xFF5F6368),

@@ -19,7 +19,10 @@ function _findInvColById(columns, id) {
 function _looksLikeInventoryTrackerColumns(columns) {
   if (!Array.isArray(columns)) return false;
 
-  const hasProduct = columns.includes('Product Name') || _findInvColById(columns, 'product_name');
+  const hasProduct =
+    columns.includes('Material Name') ||
+    columns.includes('Product Name') ||
+    _findInvColById(columns, 'product_name');
   const hasTotal = columns.includes('Total Quantity') || _findInvColById(columns, 'total_qty');
   const hasStock = columns.includes('Stock') || _findInvColById(columns, 'stock');
   const hasMaint =
@@ -331,7 +334,11 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
       const cols = meta?.columns;
       const columns = Array.isArray(cols) ? cols : [];
 
-      const productKey = _findInvColById(columns, 'product_name') || (columns.includes('Product Name') ? 'Product Name' : null);
+      const productKey =
+        _findInvColById(columns, 'product_name') ||
+        (columns.includes('Material Name')
+          ? 'Material Name'
+          : (columns.includes('Product Name') ? 'Product Name' : null));
       const codeKey = _findInvColById(columns, 'code') || (columns.includes('QB Code') ? 'QB Code' : (columns.includes('QC Code') ? 'QC Code' : null));
       const stockKey = _findInvColById(columns, 'stock') || (columns.includes('Stock') ? 'Stock' : null);
       const totalKey = _findInvColById(columns, 'total_qty') || (columns.includes('Total Quantity') ? 'Total Quantity' : null);
@@ -377,7 +384,7 @@ router.get('/inventory-overview', authenticate, requireAdminAccess, async (req, 
     for (const row of rowsRes.rows) {
       const d = row.data;
       const keys = keysBySheetId.get(row.sheet_id) || {};
-      const name = ((keys.productKey ? d[keys.productKey] : d['Product Name']) || '').toString().trim();
+      const name = ((keys.productKey ? d[keys.productKey] : (d['Material Name'] || d['Product Name'])) || '').toString().trim();
       const code = ((keys.codeKey ? d[keys.codeKey] : (d['QB Code'] || d['QC Code'])) || '').toString().trim();
       if (!name && !code) continue;
       const productKey = `${name.toLowerCase()}|${code.toLowerCase()}`;

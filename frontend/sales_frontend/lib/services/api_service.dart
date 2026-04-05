@@ -31,6 +31,30 @@ class ApiService {
 
   // ============== Helper Methods ==============
 
+  static dynamic _decodeJsonBodyOrThrow({
+    required String rawBody,
+    required int statusCode,
+  }) {
+    final trimmed = rawBody.trim();
+    if (trimmed.isEmpty) {
+      throw ApiException(
+        code: 'EMPTY_RESPONSE',
+        message:
+            'Server returned an empty response (status $statusCode). The backend may be down or restarting.',
+        statusCode: statusCode,
+      );
+    }
+    try {
+      return jsonDecode(trimmed);
+    } catch (_) {
+      throw ApiException(
+        code: 'INVALID_JSON',
+        message: 'Server returned invalid JSON (status $statusCode).',
+        statusCode: statusCode,
+      );
+    }
+  }
+
   static Future<Map<String, dynamic>> _get(String endpoint) async {
     final response = await http
         .get(Uri.parse('${AppConfig.apiBaseUrl}$endpoint'), headers: _headers)
@@ -85,11 +109,14 @@ class ApiService {
   static Map<String, dynamic> _handleResponse(http.Response response) {
     final rawBody = response.body.trim();
     if (rawBody.isEmpty) {
+      // Many REST endpoints legitimately return empty bodies (e.g. 204 No Content).
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return <String, dynamic>{};
+      }
       throw ApiException(
         code: 'EMPTY_RESPONSE',
         message:
-            'Server returned an empty response (status ${response.statusCode}). '
-            'The backend may be down or restarting.',
+            'Server returned an empty response (status ${response.statusCode}). The backend may be down or restarting.',
         statusCode: response.statusCode,
       );
     }
@@ -421,7 +448,10 @@ class ApiService {
     if (response.statusCode == 200) {
       return response.bodyBytes;
     } else {
-      final data = jsonDecode(response.body);
+      final data = _decodeJsonBodyOrThrow(
+        rawBody: response.body,
+        statusCode: response.statusCode,
+      );
       throw ApiException(
         code: data['error']?['code'] ?? 'ERROR',
         message: data['error']?['message'] ?? 'Download failed',
@@ -502,6 +532,13 @@ class ApiService {
   static Future<AuditSummary> getAuditSummary() async {
     final response = await _get(ApiEndpoints.auditSummary);
     return AuditSummary.fromJson(response);
+  }
+
+  static Future<Map<String, dynamic>> clearAuditLogs(
+      {required String password}) async {
+    return await _post(ApiEndpoints.auditClear, {
+      'password': password,
+    });
   }
 
   // ============== Dashboard ==============
@@ -631,7 +668,10 @@ class ApiService {
     if (response.statusCode == 200) {
       return response.bodyBytes;
     } else {
-      final data = jsonDecode(response.body);
+      final data = _decodeJsonBodyOrThrow(
+        rawBody: response.body,
+        statusCode: response.statusCode,
+      );
       throw ApiException(
         code: data['error']?['code'] ?? 'ERROR',
         message: data['error']?['message'] ?? 'Export failed',
@@ -657,7 +697,13 @@ class ApiService {
           filename: fileName));
     final streamed = await request.send().timeout(const Duration(seconds: 60));
     final response = await http.Response.fromStream(streamed);
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final bodyRaw = _decodeJsonBodyOrThrow(
+      rawBody: response.body,
+      statusCode: response.statusCode,
+    );
+    final body = bodyRaw is Map
+        ? Map<String, dynamic>.from(bodyRaw)
+        : <String, dynamic>{'data': bodyRaw};
     if (response.statusCode == 200 || response.statusCode == 201) {
       return body;
     } else {
@@ -686,7 +732,13 @@ class ApiService {
           .add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
     final streamed = await request.send().timeout(const Duration(seconds: 60));
     final response = await http.Response.fromStream(streamed);
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final bodyRaw = _decodeJsonBodyOrThrow(
+      rawBody: response.body,
+      statusCode: response.statusCode,
+    );
+    final body = bodyRaw is Map
+        ? Map<String, dynamic>.from(bodyRaw)
+        : <String, dynamic>{'data': bodyRaw};
     if (response.statusCode == 200 || response.statusCode == 201) {
       return body;
     } else {
