@@ -325,7 +325,7 @@ router.post('/transactions', authenticate, async (req, res) => {
 });
 
 // PUT /inventory/transactions/:id  – Update a transaction
-// Editors/users can edit today & yesterday; admin can edit any
+// Editors/users can edit within the last 3 days; admin can edit any
 router.put('/transactions/:id', authenticate, async (req, res) => {
   const isViewer = req.user.role === 'viewer';
   if (isViewer) {
@@ -342,9 +342,7 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
     const prev = await client.query(
       `SELECT
           t.*,
-          (t.transaction_date = CURRENT_DATE) AS is_today,
-          (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
-          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+          (t.transaction_date >= CURRENT_DATE - 2) AS is_within_edit_window
        FROM inventory_transactions t
        WHERE t.id = $1`,
       [id]
@@ -357,14 +355,14 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const role = req.user.role;
-    const isTodayOrYesterday = !!old.is_today || !!old.is_yesterday;
+    const isWithinWindow = !!old.is_within_edit_window;
 
-    if (!isAdmin && !(['editor', 'user'].includes(role) && isTodayOrYesterday)) {
+    if (!isAdmin && !(['editor', 'user'].includes(role) && isWithinWindow)) {
       await client.query('ROLLBACK');
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',
-          message: 'Editors can only edit transactions from today or yesterday. For older dates, submit an edit request.',
+          message: 'Editors can only edit transactions from the last 3 days. For older dates, submit an edit request.',
         }
       });
     }
@@ -408,7 +406,7 @@ router.put('/transactions/:id', authenticate, async (req, res) => {
 });
 
 // DELETE /inventory/transactions/:id
-// Editors/users: today & yesterday; Admin: any
+// Editors/users: last 3 days; Admin: any
 router.delete('/transactions/:id', authenticate, async (req, res) => {
   const isViewer = req.user.role === 'viewer';
   if (isViewer) {
@@ -423,9 +421,7 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
     const prev = await client.query(
       `SELECT
           t.*,
-          (t.transaction_date = CURRENT_DATE) AS is_today,
-          (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
-          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+          (t.transaction_date >= CURRENT_DATE - 2) AS is_within_edit_window
        FROM inventory_transactions t
        WHERE t.id = $1`,
       [id]
@@ -438,14 +434,14 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const role = req.user.role;
-    const isTodayOrYesterday = !!old.is_today || !!old.is_yesterday;
+    const isWithinWindow = !!old.is_within_edit_window;
 
-    if (!isAdmin && !(['editor', 'user'].includes(role) && isTodayOrYesterday)) {
+    if (!isAdmin && !(['editor', 'user'].includes(role) && isWithinWindow)) {
       await client.query('ROLLBACK');
       return res.status(403).json({
         error: {
           code: 'FORBIDDEN',
-          message: 'Editors can only delete transactions from today or yesterday. For older dates, submit an edit request.',
+          message: 'Editors can only delete transactions from the last 3 days. For older dates, submit an edit request.',
         }
       });
     }
@@ -468,7 +464,7 @@ router.delete('/transactions/:id', authenticate, async (req, res) => {
 });
 
 // POST /inventory/transactions/:id/edit-request
-// Editors/users: request an admin-reviewed edit for transactions older than yesterday
+// Editors/users: request an admin-reviewed edit for transactions older than the last 3 days
 router.post('/transactions/:id/edit-request', authenticate, async (req, res) => {
   const isViewer = req.user.role === 'viewer';
   if (isViewer) {
@@ -491,7 +487,8 @@ router.post('/transactions/:id/edit-request', authenticate, async (req, res) => 
           p.product_name,
           (t.transaction_date = CURRENT_DATE) AS is_today,
           (t.transaction_date = CURRENT_DATE - 1) AS is_yesterday,
-          (t.transaction_date < CURRENT_DATE - 1) AS is_older
+          (t.transaction_date = CURRENT_DATE - 2) AS is_2_days_ago,
+          (t.transaction_date < CURRENT_DATE - 2) AS is_older
        FROM inventory_transactions t
        JOIN product_master p ON p.id = t.product_id
        WHERE t.id = $1`,
@@ -509,7 +506,7 @@ router.post('/transactions/:id/edit-request', authenticate, async (req, res) => 
       return res.status(400).json({
         error: {
           code: 'BAD_REQUEST',
-          message: 'No request needed for today or yesterday transactions.',
+          message: 'No request needed for transactions within the last 3 days.',
         }
       });
     }

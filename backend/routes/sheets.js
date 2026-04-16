@@ -1050,6 +1050,22 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
     const { id } = req.params;
     const { name, columns, rows, grid_meta } = req.body;
 
+    // Inventory Tracker: allow direct edits only within the last 3 days.
+    // Older DATE:* cells require an approved, unexpired edit request.
+    const invDateRegex = /^DATE:(\d{4}-\d{2}-\d{2}):(IN|OUT)$/;
+    const isInventoryTracker = Array.isArray(columns)
+      ? columns.some((c) => typeof c === 'string' && invDateRegex.test(c))
+      : false;
+    const inventoryEditWindowDaysRaw = Number.parseInt(
+      String(process.env.INVENTORY_EDIT_WINDOW_DAYS ?? '3'),
+      10,
+    );
+    const inventoryEditWindowDays =
+      Number.isFinite(inventoryEditWindowDaysRaw) && inventoryEditWindowDaysRaw > 0
+        ? inventoryEditWindowDaysRaw
+        : 3;
+    const isAdmin = req.user.role === 'admin';
+
     // Check if sheet is locked by another user
     const lockCheck = await pool.query(`
       SELECT sl.locked_by, u.username 
@@ -1140,6 +1156,48 @@ router.put('/:id', authenticate, requireSheetEditAccess, async (req, res) => {
 
         // Track cell changes
         for (const col of changedCols) {
+          // Enforce Inventory Tracker historical locks on the server.
+          if (!isAdmin && isInventoryTracker && invDateRegex.test(col)) {
+            const dateStr = col.split(':')[1];
+            const parts = (dateStr || '').split('-').map((x) => Number.parseInt(x, 10));
+            if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
+              const [yy, mm, dd] = parts;
+              const cellDate = new Date(yy, mm - 1, dd);
+              const now = new Date();
+              const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              const earliestEditable = new Date(todayMidnight);
+              earliestEditable.setDate(earliestEditable.getDate() - (inventoryEditWindowDays - 1));
+
+              const isLockedByAge = cellDate.getTime() < earliestEditable.getTime();
+              if (isLockedByAge) {
+                const approval = await pool.query(
+                  `SELECT 1
+                   FROM edit_requests
+                   WHERE sheet_id = $1
+                     AND row_number = $2
+                     AND column_name = $3
+                     AND requested_by = $4
+                     AND status = 'approved'
+                     AND expires_at IS NOT NULL
+                     AND expires_at > CURRENT_TIMESTAMP
+                   ORDER BY reviewed_at DESC
+                   LIMIT 1`,
+                  [id, rowNumber, col, req.user.id]
+                );
+
+                if (approval.rows.length === 0) {
+                  return res.status(403).json({
+                    success: false,
+                    error: {
+                      code: 'FORBIDDEN',
+                      message: `Cell ${col} (row ${rowNumber}) is older than ${inventoryEditWindowDays} days. Submit an edit request for admin approval.`,
+                    },
+                  });
+                }
+              }
+            }
+          }
+
           const oldVal = oldRow[col];
           const newVal = patch[col];
           if (newVal !== oldVal && (newVal || oldVal)) {

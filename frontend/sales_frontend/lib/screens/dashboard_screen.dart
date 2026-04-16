@@ -1609,6 +1609,22 @@ class _DashboardContentState extends State<_DashboardContent> {
   static const String _kInventoryNoteTitleCol = 'Note Title';
   static const String _kInventoryNoteTypeDiscrepancy = 'discrepancy';
 
+  String? _invColumnId(String col) {
+    final m = RegExp(r'^INV:([^|]+)\|').firstMatch(col);
+    return m?.group(1);
+  }
+
+  bool _isInvEncodedColumnKey(String col) => _invColumnId(col) != null;
+
+  String _invEncodeColKey(String id, String label) => 'INV:$id|$label';
+
+  String? _findInvColById(List<String> columns, String id) {
+    for (final c in columns) {
+      if (_invColumnId(c) == id) return c;
+    }
+    return null;
+  }
+
   DateTime? _latestDailyTrendDate(List<Map<String, dynamic>> dailyTrendRaw) {
     DateTime? latest;
     for (final row in dailyTrendRaw) {
@@ -1663,25 +1679,56 @@ class _DashboardContentState extends State<_DashboardContent> {
     return sorted.join(',');
   }
 
-  bool _rowHasDiscrepancy(Map<dynamic, dynamic> row) {
-    final body =
-        (row[_kInventoryCommentCol] ?? row[_kInventoryLegacyRemarksCol] ?? '')
-            .toString()
-            .trim();
-    final title = (row[_kInventoryNoteTitleCol] ?? '').toString().trim();
-    if (body.isEmpty && title.isEmpty) return false;
-
-    final type =
-        (row[_kInventoryNoteTypeCol] ?? '').toString().trim().toLowerCase();
-    return type.isEmpty || type == _kInventoryNoteTypeDiscrepancy;
-  }
-
   int _countDiscrepanciesInSheetPayload(Map<String, dynamic> sheet) {
+    final cols = ((sheet['columns'] as List?) ?? const [])
+        .map((c) => c.toString())
+        .toList(growable: false);
+    final bool hasEncodedInventoryCols = cols.any(_isInvEncodedColumnKey);
+
+    String commentKey;
+    String typeKey;
+    String titleKey;
+    String? remarksKey;
+
+    if (hasEncodedInventoryCols) {
+      commentKey = _findInvColById(cols, 'comment') ??
+          _invEncodeColKey('comment', _kInventoryCommentCol);
+      typeKey = _findInvColById(cols, 'note_type') ??
+          _invEncodeColKey('note_type', _kInventoryNoteTypeCol);
+      titleKey = _findInvColById(cols, 'note_title') ??
+          _invEncodeColKey('note_title', _kInventoryNoteTitleCol);
+
+      // Legacy sheets may have a Remarks column; support both plain and encoded.
+      final legacy = cols.contains(_kInventoryLegacyRemarksCol)
+          ? _kInventoryLegacyRemarksCol
+          : null;
+      final encodedLegacy = _findInvColById(cols, 'remarks') ??
+          _invEncodeColKey('remarks', _kInventoryLegacyRemarksCol);
+      remarksKey = legacy ?? encodedLegacy;
+    } else {
+      commentKey = _kInventoryCommentCol;
+      typeKey = _kInventoryNoteTypeCol;
+      titleKey = _kInventoryNoteTitleCol;
+      remarksKey = _kInventoryLegacyRemarksCol;
+    }
+
     final rows = (sheet['rows'] as List?) ?? const [];
     var count = 0;
     for (final r in rows) {
       if (r is Map) {
-        if (_rowHasDiscrepancy(r)) count++;
+        String readStr(String key) => (r[key] ?? '').toString().trim();
+
+        final body = readStr(commentKey).isNotEmpty
+            ? readStr(commentKey)
+            : (remarksKey == null ? '' : readStr(remarksKey));
+        final title = readStr(titleKey);
+        if (body.isEmpty && title.isEmpty) continue;
+
+        final type = readStr(typeKey).toLowerCase();
+        // Legacy notes (no type saved) are treated as discrepancy.
+        if (type.isEmpty || type == _kInventoryNoteTypeDiscrepancy) {
+          count++;
+        }
       }
     }
     return count;

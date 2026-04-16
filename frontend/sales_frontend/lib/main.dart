@@ -11,10 +11,14 @@ import 'screens/dashboard_screen.dart';
 import 'screens/editor_dashboard.dart';
 import 'screens/viewer_dashboard.dart';
 import 'config/constants.dart';
+import 'config/network_config.dart';
 import 'widgets/blocking_loader_overlay.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Resolve backend URLs before the app starts.
+  await NetworkConfig.initialize();
 
   // Suppress the known Flutter Windows bug where Alt/modifier key events fire
   // with incorrect modifier flags, causing a harmless but noisy assertion:

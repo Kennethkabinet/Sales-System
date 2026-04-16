@@ -9,6 +9,97 @@ This guide deploys the Sales & Inventory Management System **inside your company
 
 ---
 
+## Quick pre-check (before changing anything)
+
+Do these checks on the **Server PC** to confirm whether you already have:
+- a “static” IP (manual static OR DHCP reservation)
+- port `3000` already working (listening + reachable)
+
+### A) Check if the Server PC IP is already static
+
+1) Run:
+
+```powershell
+ipconfig /all
+```
+
+2) Find your active network adapter (Ethernet/Wi-Fi) and look for:
+- **IPv4 Address** (example: `192.168.1.10`)
+- **DHCP Enabled**
+   - `No` → the PC is using a **manual static IP**
+   - `Yes` → the PC is using **DHCP** (it may still be “fixed” if your router has a DHCP Reservation)
+
+3) If DHCP is enabled but you want to confirm it’s “fixed”, check your router/DHCP server:
+- Look for **DHCP Reservations / Address Reservations**
+- Confirm the Server PC’s **MAC address** is reserved to the chosen IP
+
+### B) Check if port 3000 is already in use / listening (Server PC)
+
+Run:
+
+```powershell
+netstat -ano | findstr :3000
+```
+
+If you see `LISTENING`, something is listening on port 3000.
+
+To identify the process (PID), copy the number in the last column.
+
+Example output:
+
+```text
+TCP    0.0.0.0:3000     0.0.0.0:0     LISTENING     1234
+```
+
+Then run (replace `1234` with your real PID number):
+
+```powershell
+tasklist /FI "PID eq 1234"
+```
+
+Alternative (PowerShell):
+
+```powershell
+Get-Process -Id 1234
+```
+
+If `netstat` shows nothing, then port `3000` is **not** listening.
+
+Alternative (PowerShell, no error when nothing is listening):
+
+```powershell
+Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+```
+
+### C) Check if Windows Firewall already allows inbound port 3000 (Server PC)
+
+Run PowerShell **as Administrator**:
+
+```powershell
+Get-NetFirewallPortFilter | Where-Object LocalPort -eq 3000
+```
+
+Also check whether the rule is enabled and applies to the correct profile (Private/Domain):
+
+```powershell
+Get-NetFirewallRule | Where-Object DisplayName -Match "3000|SGCO"
+```
+
+### D) Check if port 3000 is reachable from another PC (best real test)
+
+From a different PC on the same network:
+
+```powershell
+Test-NetConnection SERVER_IP -Port 3000
+```
+
+And/or open in a browser:
+- `http://SERVER_IP:3000/api/status`
+
+If it fails:
+- If port `3000` is **not LISTENING** on the Server PC → backend is not running (or not bound to the right interface/port)
+- If port `3000` is **LISTENING** but not reachable → usually firewall profile/rule or network routing
+
 1) Make the Server PC IP static (2 good options)
 
 Option A (recommended): DHCP Reservation on the router
@@ -449,11 +540,15 @@ Option B: NSSM (Windows Service wrapper)
 ## 6) Frontend deployment (Admin and other users)
 
 ### 6.1 How the frontend finds the backend
-The Flutter app uses compile-time defines:
-- `API_BASE_URL` default is currently `http://192.168.1.3:3000/api`
-- `WS_BASE_URL` default is currently `http://192.168.1.3:3000`
+The Flutter app can resolve backend URLs in this order (highest → lowest priority):
+1. Runtime OS env vars: `SGCO_API_BASE_URL` / `SGCO_WS_BASE_URL` (or `API_BASE_URL` / `WS_BASE_URL`)
+2. A JSON file named `sgco_config.json` placed next to the app EXE (or in the working folder)
+3. Compile-time defines: `--dart-define=API_BASE_URL=...` / `--dart-define=WS_BASE_URL=...`
+4. Fallback defaults: `http://localhost:3000/api` and `http://localhost:3000`
 
-For company deployment, you should build with your server IP/hostname.
+For company deployment, you typically either:
+- Build with your server IP/hostname (recommended), or
+- Ship one build and drop a `sgco_config.json` next to the EXE on each PC.
 
 ### 6.2 Build Windows release with the correct server address
 On a build machine (your laptop is fine):
@@ -465,6 +560,15 @@ flutter pub get
 flutter build windows --release `
    --dart-define=API_BASE_URL=http://SERVER_IP:3000/api `
    --dart-define=WS_BASE_URL=http://SERVER_IP:3000
+```
+
+If you prefer **no rebuild**, create `sgco_config.json` next to the EXE:
+
+```json
+{
+   "apiBaseUrl": "http://SERVER_IP:3000/api",
+   "wsBaseUrl": "http://SERVER_IP:3000"
+}
 ```
 
 Resulting build folder (typical):
@@ -507,6 +611,20 @@ Quick validation sequence:
   - `GET http://localhost:3000/api/db-test` returns “Database connected”
 - Client:
   - Flutter app Settings screen shows backend reachable and DB OK (if available in UI)
+
+### Common error: `no pg_hba.conf entry ... no encryption`
+If the backend logs show something like:
+- `no pg_hba.conf entry for host "X", user "Y", database "sales_system", no encryption`
+
+That means PostgreSQL rejected the connection because its `pg_hba.conf` does not allow that client/network **for a non-SSL connection**.
+
+Fix (pick the case that matches your setup):
+- **Backend + PostgreSQL are on the same PC:** set `DB_HOST=127.0.0.1` (or `localhost`) in `backend/.env`.
+   - This avoids a LAN-IP TCP connection that often isn’t covered by default `pg_hba.conf` rules.
+- **PostgreSQL is on a different PC:** edit the DB server’s `pg_hba.conf` to allow the backend PC’s IP (or subnet), then restart PostgreSQL.
+   - Example (allow the whole office subnet for one DB user):
+      `host    sales_system     APP_DB_USER     192.168.1.0/24     scram-sha-256`
+   - If your `pg_hba.conf` uses `hostssl` rules only, either add a non-SSL `host` rule **or** enable SSL from the backend (`DB_SSL=true`).
 
 ---
 

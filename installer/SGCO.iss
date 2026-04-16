@@ -1,4 +1,4 @@
-; Inno Setup Script for SGCO
+  ; Inno Setup Script for SGCO
 ; Build with Inno Setup 6+
 
 #define AppName "SGCO"

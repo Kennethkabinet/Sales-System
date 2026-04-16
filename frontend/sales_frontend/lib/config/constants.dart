@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'network_config.dart';
+
 /// App brand colours – Orange & Blue theme
 ///
 /// Primary Orange: 0xFFE44408  (Brand Orange)
@@ -35,14 +37,8 @@ class AppConfig {
   static const String appName = 'SGCO System';
   static const String appVersion = '1.0.0';
 
-  static const String apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://192.168.1.3:3000/api',
-  );
-  static const String wsBaseUrl = String.fromEnvironment(
-    'WS_BASE_URL',
-    defaultValue: 'http://192.168.1.3:3000',
-  );
+  static String get apiBaseUrl => NetworkConfig.apiBaseUrl;
+  static String get wsBaseUrl => NetworkConfig.wsBaseUrl;
 
   // Timeouts
   static const Duration apiTimeout = Duration(seconds: 30);

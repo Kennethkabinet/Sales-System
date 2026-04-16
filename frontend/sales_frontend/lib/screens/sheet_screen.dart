@@ -2497,7 +2497,6 @@ class _SheetScreenState extends State<SheetScreen> {
       final isInventoryTrackerTemplate = templateId == 'inventory_tracker' ||
           templateId == 'inventory_tracker_empty' ||
           templateId == 'inventory_tracker_defaults';
-      final seedThresholdDefaults = templateId == 'inventory_tracker_defaults';
 
       final cols = List<String>.from(template['columns'] as List);
 
@@ -2785,13 +2784,13 @@ class _SheetScreenState extends State<SheetScreen> {
                 row['Stock'] = stock0;
               }
               if (cols.contains('Maintaining Qty')) {
-                row['Maintaining Qty'] = seedThresholdDefaults ? qty : '';
+                row['Maintaining Qty'] = qty;
               }
               if (cols.contains('Maintaining Unit')) {
-                row['Maintaining Unit'] = seedThresholdDefaults ? unit : '';
+                row['Maintaining Unit'] = unit;
               }
               if (cols.contains('Critical')) {
-                row['Critical'] = seedThresholdDefaults ? critical0 : '';
+                row['Critical'] = critical0;
               }
               if (cols.contains('Total Quantity')) {
                 row['Total Quantity'] = stock0;
@@ -4465,7 +4464,8 @@ class _SheetScreenState extends State<SheetScreen> {
     final role = authProvider.user?.role ?? '';
     if (role == 'viewer') return;
 
-    // Inventory Tracker: block editing of historical past-date columns for non-admins
+    // Inventory Tracker: only allow editing within the last 3 days for non-admins.
+    // Older DATE:* cells require an admin-approved edit request (temp access).
     if (role != 'admin' && _isInventoryHistoricalCell(row, col)) {
       final cellRef = _getCellReference(row, col);
       if (!_grantedCells.contains(cellRef)) {
@@ -11637,15 +11637,21 @@ class _SheetScreenState extends State<SheetScreen> {
   bool _isInventoryHistoricalCell(int row, int col) {
     if (!_isInventoryTrackerSheet()) return false;
     if (col < 0 || col >= _columns.length) return false;
+
     final colName = _columns[col];
     if (!colName.startsWith('DATE:')) return false;
     final parts = colName.split(':');
     if (parts.length < 3) return false;
+
     final cellDate = DateTime.tryParse(parts[1]); // 'YYYY-MM-DD'
     if (cellDate == null) return false;
+
+    // Editable window: today + previous 2 days (3 days total).
     final now = DateTime.now();
     final todayMidnight = DateTime(now.year, now.month, now.day);
-    return cellDate.isBefore(todayMidnight);
+    final earliestEditable = todayMidnight.subtract(const Duration(days: 2));
+
+    return cellDate.isBefore(earliestEditable);
   }
 
   /// Presence avatar row shown above the spreadsheet grid.
@@ -13168,16 +13174,17 @@ class _SheetScreenState extends State<SheetScreen> {
         final totalRaw = readCell(totalKey);
 
         if (hasAnyDateEntry &&
-          stockKey != null &&
-          row.containsKey(stockKey) &&
-          stockRaw.isEmpty &&
-          totalRaw.isNotEmpty) {
+            stockKey != null &&
+            row.containsKey(stockKey) &&
+            stockRaw.isEmpty &&
+            totalRaw.isNotEmpty) {
           row[stockKey] = totalRaw;
         }
 
         final seededStockRaw = readCell(stockKey);
-        final baseRaw =
-          seededStockRaw.isNotEmpty ? seededStockRaw : (!hasAnyDateEntry ? totalRaw : '');
+        final baseRaw = seededStockRaw.isNotEmpty
+            ? seededStockRaw
+            : (!hasAnyDateEntry ? totalRaw : '');
         final base = int.tryParse(baseRaw.isEmpty ? '0' : baseRaw) ?? 0;
 
         // If there's no base stock and no date entries, treat as "no data".
@@ -13531,10 +13538,8 @@ class _SheetScreenState extends State<SheetScreen> {
     );
 
     final currentOut = _parseInventoryQtyOrZero(row[colName]);
-    final beforeTotal =
-      baseStock() + (totalsBefore['net'] ?? 0);
-    final afterTotal =
-      baseStock() + (totalsAfter['net'] ?? 0);
+    final beforeTotal = baseStock() + (totalsBefore['net'] ?? 0);
+    final afterTotal = baseStock() + (totalsAfter['net'] ?? 0);
 
     if (afterTotal >= 0) return false;
 
